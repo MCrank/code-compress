@@ -74,6 +74,26 @@ public static class Migrations
         "CREATE INDEX IF NOT EXISTS ix_snapshots_repo_id ON index_snapshots(repo_id)",
         "CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, signature, doc_comment, content=symbols, content_rowid=id)",
         "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(relative_path, content)",
+        """
+        CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+            INSERT INTO symbols_fts(rowid, name, signature, doc_comment)
+            VALUES (new.id, new.name, new.signature, new.doc_comment);
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment)
+            VALUES ('delete', old.id, old.name, old.signature, old.doc_comment);
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment)
+            VALUES ('delete', old.id, old.name, old.signature, old.doc_comment);
+            INSERT INTO symbols_fts(rowid, name, signature, doc_comment)
+            VALUES (new.id, new.name, new.signature, new.doc_comment);
+        END
+        """,
     ];
 
     public static async Task ApplyAsync(SqliteConnection connection)
