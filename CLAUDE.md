@@ -13,8 +13,8 @@ CodeCompress is an MCP (Model Context Protocol) server that indexes codebases an
 
 ```bash
 # Restore, build, and run all tests
-dotnet build CodeCompress.sln
-dotnet test CodeCompress.sln
+dotnet build CodeCompress.slnx
+dotnet test CodeCompress.slnx
 
 # Run a specific test project
 dotnet test tests/CodeCompress.Core.Tests
