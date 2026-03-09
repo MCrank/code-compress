@@ -2,10 +2,24 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>codecompress</ToolCommandName>
+    <PackageId>CodeCompress</PackageId>
+    <Description>CLI tool for indexing codebases and querying code symbols with compressed, token-efficient output</Description>
+    <Authors>MCrank</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MCrank/code-compress</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MCrank/code-compress</RepositoryUrl>
+    <PackageTags>code-index;mcp;ai;codebase;symbols</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CodeCompress.Core\CodeCompress.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

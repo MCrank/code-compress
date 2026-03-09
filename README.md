@@ -1,5 +1,7 @@
 # CodeCompress
 
+![CI](https://github.com/MCrank/code-compress/actions/workflows/ci.yml/badge.svg)
+
 **Intelligent Code Index MCP Server for AI Agents**
 
 CodeCompress is a lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that indexes your codebase and gives AI agents instant, surgical access to code symbols — no more scanning every file at the start of each conversation.
