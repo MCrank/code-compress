@@ -2,11 +2,27 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>codecompress-server</ToolCommandName>
+    <PackageId>CodeCompress.Server</PackageId>
+    <PackageType>McpServer</PackageType>
+    <Description>MCP server that indexes codebases and provides AI agents with compressed, surgical access to code symbols via SQLite-backed persistent indexes. Reduces AI agent token consumption by 80-90% when loading codebase context.</Description>
+    <Authors>MCrank</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MCrank/code-compress</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MCrank/code-compress</RepositoryUrl>
+    <PackageTags>mcp;mcp-server;code-index;ai;codebase;symbols</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodeCompress.Server.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include=".mcp\server.json" Pack="true" PackagePath=".mcp\" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
