@@ -13,6 +13,8 @@
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="NSubstitute" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
 </Project>
