@@ -680,4 +680,550 @@ internal sealed class CSharpParserTests
         await Assert.That(cls.Kind).IsEqualTo(SymbolKind.Class);
         await Assert.That(cls.Visibility).IsEqualTo(Visibility.Private);
     }
+
+    // ── Methods ──────────────────────────────────────────────────
+
+    [Test]
+    public async Task PublicMethodExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public void DoSomething()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("DoSomething");
+        await Assert.That(method.Kind).IsEqualTo(SymbolKind.Method);
+        await Assert.That(method.Visibility).IsEqualTo(Visibility.Public);
+        await Assert.That(method.ParentSymbol).IsEqualTo("MyClass");
+        await Assert.That(method.Signature).IsEqualTo("public void DoSomething()");
+    }
+
+    [Test]
+    public async Task PrivateMethodVisibilityPrivate()
+    {
+        var source = """
+            public class MyClass
+            {
+                private int Calculate()
+                {
+                    return 42;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Visibility).IsEqualTo(Visibility.Private);
+    }
+
+    [Test]
+    public async Task ProtectedMethodExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                protected virtual void OnEvent()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Signature).IsEqualTo("protected virtual void OnEvent()");
+    }
+
+    [Test]
+    public async Task AsyncMethodTaskReturn()
+    {
+        var source = """
+            public class MyClass
+            {
+                public async Task<int> GetAsync()
+                {
+                    return 42;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Signature).IsEqualTo("public async Task<int> GetAsync()");
+    }
+
+    [Test]
+    public async Task GenericMethodWithConstraints()
+    {
+        var source = """
+            public class MyClass
+            {
+                public T Find<T>(int id) where T : class
+                {
+                    return default;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Find");
+        await Assert.That(method.Signature).IsEqualTo("public T Find<T>(int id) where T : class");
+    }
+
+    [Test]
+    public async Task ConstructorExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public MyClass(int x, string y)
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var ctor = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(ctor.Name).IsEqualTo("MyClass");
+        await Assert.That(ctor.ParentSymbol).IsEqualTo("MyClass");
+    }
+
+    [Test]
+    public async Task StaticConstructorExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                static MyClass()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var ctor = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(ctor.Name).IsEqualTo("MyClass");
+        await Assert.That(ctor.Signature).IsEqualTo("static MyClass()");
+    }
+
+    [Test]
+    public async Task FinalizerExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                ~MyClass()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var finalizer = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(finalizer.Name).IsEqualTo("~MyClass");
+    }
+
+    [Test]
+    public async Task OperatorOverloadExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public static MyClass operator +(MyClass a, MyClass b)
+                {
+                    return a;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var op = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(op.Name).IsEqualTo("operator +");
+        await Assert.That(op.Signature).IsEqualTo("public static MyClass operator +(MyClass a, MyClass b)");
+    }
+
+    [Test]
+    public async Task IndexerExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public int this[int i]
+                {
+                    get { return 0; }
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var indexer = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(indexer.Name).IsEqualTo("this[]");
+        await Assert.That(indexer.Signature).IsEqualTo("public int this[int i]");
+    }
+
+    [Test]
+    public async Task ExpressionBodiedMethodExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public int Sum() => X + Y;
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Sum");
+        await Assert.That(method.Signature).IsEqualTo("public int Sum()");
+    }
+
+    [Test]
+    public async Task ExtensionMethodThisParameter()
+    {
+        var source = """
+            public static class Extensions
+            {
+                public static int Count(this IEnumerable<int> source)
+                {
+                    return 0;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Count");
+        await Assert.That(method.Signature).IsEqualTo("public static int Count(this IEnumerable<int> source)");
+    }
+
+    [Test]
+    public async Task VoidMethodExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public void Execute()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Execute");
+    }
+
+    // ── Properties ───────────────────────────────────────────────
+
+    [Test]
+    public async Task AutoPropertyExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public string Name { get; set; }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var prop = result.Symbols.First(s => s.Kind == SymbolKind.Constant);
+        await Assert.That(prop.Name).IsEqualTo("Name");
+        await Assert.That(prop.Kind).IsEqualTo(SymbolKind.Constant);
+        await Assert.That(prop.Signature).IsEqualTo("public string Name { get; set; }");
+        await Assert.That(prop.ParentSymbol).IsEqualTo("MyClass");
+    }
+
+    [Test]
+    public async Task InitOnlyPropertyExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public string Name { get; init; }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var prop = result.Symbols.First(s => s.Kind == SymbolKind.Constant);
+        await Assert.That(prop.Signature).IsEqualTo("public string Name { get; init; }");
+    }
+
+    [Test]
+    public async Task ExpressionBodiedPropertyExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public int Total => Items.Count;
+            }
+            """;
+
+        var result = Parse(source);
+
+        var prop = result.Symbols.First(s => s.Kind == SymbolKind.Constant);
+        await Assert.That(prop.Name).IsEqualTo("Total");
+        await Assert.That(prop.Signature).IsEqualTo("public int Total => Items.Count;");
+    }
+
+    [Test]
+    public async Task RequiredPropertyExtracted()
+    {
+        var source = """
+            public class MyClass
+            {
+                public required string Name { get; set; }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var prop = result.Symbols.First(s => s.Kind == SymbolKind.Constant);
+        await Assert.That(prop.Signature).IsEqualTo("public required string Name { get; set; }");
+    }
+
+    // ── Using statements ─────────────────────────────────────────
+
+    [Test]
+    public async Task UsingStatementAsDependency()
+    {
+        var source = """
+            using System.Collections.Generic;
+
+            public class Foo { }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Dependencies).Count().IsEqualTo(1);
+        await Assert.That(result.Dependencies[0].RequirePath).IsEqualTo("System.Collections.Generic");
+        await Assert.That(result.Dependencies[0].Alias).IsNull();
+    }
+
+    [Test]
+    public async Task GlobalUsingAsDependency()
+    {
+        var source = """
+            global using System.Linq;
+
+            public class Foo { }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Dependencies).Count().IsEqualTo(1);
+        await Assert.That(result.Dependencies[0].RequirePath).IsEqualTo("System.Linq");
+    }
+
+    [Test]
+    public async Task UsingAliasAsDependency()
+    {
+        var source = """
+            using Dict = System.Collections.Generic.Dictionary<string, int>;
+
+            public class Foo { }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Dependencies).Count().IsEqualTo(1);
+        await Assert.That(result.Dependencies[0].RequirePath).IsEqualTo("System.Collections.Generic.Dictionary<string, int>");
+        await Assert.That(result.Dependencies[0].Alias).IsEqualTo("Dict");
+    }
+
+    [Test]
+    public async Task UsingStaticAsDependency()
+    {
+        var source = """
+            using static System.Math;
+
+            public class Foo { }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Dependencies).Count().IsEqualTo(1);
+        await Assert.That(result.Dependencies[0].RequirePath).IsEqualTo("System.Math");
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────
+
+    [Test]
+    public async Task MethodWithAttributesAttributeSkipped()
+    {
+        var source = """
+            public class MyController
+            {
+                [HttpGet]
+                public IActionResult Get()
+                {
+                    return Ok();
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Signature).IsEqualTo("public IActionResult Get()");
+    }
+
+    [Test]
+    public async Task NullableReturnTypeCaptured()
+    {
+        var source = """
+            public class MyClass
+            {
+                public string? GetName()
+                {
+                    return null;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Signature).IsEqualTo("public string? GetName()");
+    }
+
+    [Test]
+    public async Task TupleReturnTypeCaptured()
+    {
+        var source = """
+            public class MyClass
+            {
+                public (int X, string Y) GetPair()
+                {
+                    return (1, "a");
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Signature).IsEqualTo("public (int X, string Y) GetPair()");
+    }
+
+    [Test]
+    public async Task ExplicitInterfaceImplCaptured()
+    {
+        var source = """
+            public class MyClass : IDisposable
+            {
+                void IDisposable.Dispose()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("IDisposable.Dispose");
+    }
+
+    [Test]
+    public async Task DefaultVisibilityForMethodIsPrivate()
+    {
+        var source = """
+            public class MyClass
+            {
+                void InternalMethod()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Visibility).IsEqualTo(Visibility.Private);
+    }
+
+    [Test]
+    public async Task ComplexRealWorldFileAllSymbolsExtracted()
+    {
+        var source = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace MyApp.Services;
+
+            /// <summary>
+            /// Service for managing users.
+            /// </summary>
+            public class UserService : IUserService
+            {
+                private readonly ILogger _logger;
+
+                public UserService(ILogger logger)
+                {
+                    _logger = logger;
+                }
+
+                public string Name { get; set; }
+
+                public int Count => _users.Count;
+
+                public async Task<User?> GetByIdAsync(int id)
+                {
+                    return null;
+                }
+
+                private void Validate(User user)
+                {
+                    if (user == null) throw new ArgumentNullException(nameof(user));
+                }
+
+                public enum Status
+                {
+                    Active,
+                    Inactive
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        // Should find: namespace, class, constructor, 2 properties, 2 methods, nested enum
+        var ns = result.Symbols.Where(s => s.Kind == SymbolKind.Module).ToList();
+        await Assert.That(ns).Count().IsEqualTo(1);
+
+        var classes = result.Symbols.Where(s => s.Kind == SymbolKind.Class).ToList();
+        await Assert.That(classes).Count().IsEqualTo(1);
+
+        var methods = result.Symbols.Where(s => s.Kind == SymbolKind.Method).ToList();
+        await Assert.That(methods.Count).IsGreaterThanOrEqualTo(3);
+
+        var properties = result.Symbols.Where(s => s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(properties.Count).IsGreaterThanOrEqualTo(2);
+
+        var enums = result.Symbols.Where(s => s.Kind == SymbolKind.Type).ToList();
+        await Assert.That(enums).Count().IsEqualTo(1);
+
+        // Dependencies from using statements
+        await Assert.That(result.Dependencies.Count).IsGreaterThanOrEqualTo(2);
+    }
 }

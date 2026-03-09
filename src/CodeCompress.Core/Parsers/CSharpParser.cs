@@ -6,6 +6,13 @@ namespace CodeCompress.Core.Parsers;
 
 public sealed partial class CSharpParser : ILanguageParser
 {
+    private static readonly string[] KnownModifiers =
+    [
+        "public", "internal", "private", "protected", "static", "abstract",
+        "sealed", "partial", "readonly", "file", "required", "new",
+        "virtual", "override", "async", "extern", "unsafe", "volatile"
+    ];
+
     public string LanguageId => "csharp";
 
     public IReadOnlyList<string> FileExtensions { get; } = [".cs"];
@@ -25,6 +32,9 @@ public sealed partial class CSharpParser : ILanguageParser
     [GeneratedRegex(@"^\s*///")]
     private static partial Regex XmlDocCommentPattern();
 
+    [GeneratedRegex(@"^\s*(global\s+)?using\s+(static\s+)?(?:(\w[\w.]*)\s*=\s*)?(.+?)\s*;\s*$")]
+    private static partial Regex UsingStatementPattern();
+
     public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
     {
         if (content.IsEmpty)
@@ -35,6 +45,7 @@ public sealed partial class CSharpParser : ILanguageParser
         var text = Encoding.UTF8.GetString(content);
         var lines = text.Split('\n');
         var symbols = new List<SymbolInfo>();
+        var dependencies = new List<DependencyInfo>();
         var lineByteOffsets = ComputeLineByteOffsets(content);
         var parentStack = new List<PendingType>();
         var docCommentLines = new List<string>();
@@ -92,10 +103,20 @@ public sealed partial class CSharpParser : ILanguageParser
                 continue;
             }
 
-            var matched = TryMatchFileScopedNamespace(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
+            // Skip attribute lines — preserve doc comments
+            if (IsAttributeLine(trimmed))
+            {
+                UpdateBraceDepth(trimmed, lineNumber, byteOffset, parentStack, symbols);
+                continue;
+            }
+
+            var matched = TryMatchUsingStatement(trimmed, parentStack, dependencies)
+                          || TryMatchFileScopedNamespace(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
                           || TryMatchBlockScopedNamespace(trimmed, lineNumber, byteOffset, docCommentLines, parentStack)
                           || TryMatchEnum(trimmed, lineNumber, byteOffset, docCommentLines, parentStack)
-                          || TryMatchTypeDeclaration(trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols);
+                          || TryMatchTypeDeclaration(trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols)
+                          || TryMatchProperty(trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols)
+                          || TryMatchMethod(trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols);
 
             if (!matched && !XmlDocCommentPattern().IsMatch(trimmed))
             {
@@ -110,7 +131,618 @@ public sealed partial class CSharpParser : ILanguageParser
             UpdateBraceDepth(trimmed, lineNumber, byteOffset, parentStack, symbols);
         }
 
-        return new ParseResult(symbols, []);
+        return new ParseResult(symbols, dependencies);
+    }
+
+    private static bool IsAttributeLine(string trimmed)
+    {
+        return trimmed.StartsWith('[') && !trimmed.StartsWith("[]", StringComparison.Ordinal);
+    }
+
+    private static bool TryMatchUsingStatement(
+        string trimmed, List<PendingType> parentStack, List<DependencyInfo> dependencies)
+    {
+        // Only match at file level (not inside type bodies)
+        if (IsInsideTypeBody(parentStack))
+        {
+            return false;
+        }
+
+        var match = UsingStatementPattern().Match(trimmed);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var path = match.Groups[4].Value.Trim();
+
+        // Skip `using var` (local variable declaration in top-level statements)
+        if (path.StartsWith("var ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Skip `using (` (using statement with disposable)
+        if (path.StartsWith('('))
+        {
+            return false;
+        }
+
+        var alias = match.Groups[3].Success && match.Groups[3].Value.Length > 0
+            ? match.Groups[3].Value
+            : null;
+
+        dependencies.Add(new DependencyInfo(RequirePath: path, Alias: alias));
+
+        return true;
+    }
+
+    private static bool TryMatchProperty(
+        string trimmed, int lineNumber, int byteOffset,
+        List<string> docCommentLines, List<PendingType> parentStack, List<SymbolInfo> symbols)
+    {
+        if (!IsInsideTypeBody(parentStack))
+        {
+            return false;
+        }
+
+        // Check for accessor property: has `{ get`/`{ set`/`{ init` without `)` before `{`
+        var bracePos = FindOpenBraceInCode(trimmed);
+        if (bracePos >= 0)
+        {
+            var afterBrace = trimmed[(bracePos + 1)..].TrimStart();
+            var isAccessorProperty = afterBrace.StartsWith("get", StringComparison.Ordinal)
+                                     || afterBrace.StartsWith("set", StringComparison.Ordinal)
+                                     || afterBrace.StartsWith("init", StringComparison.Ordinal);
+
+            if (isAccessorProperty)
+            {
+                var beforeBrace = trimmed[..bracePos].TrimEnd();
+                // If `)` appears right before `{` (with spaces), it's a method body
+                if (beforeBrace.EndsWith(')'))
+                {
+                    return false;
+                }
+
+                return ExtractProperty(trimmed, trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols);
+            }
+        }
+
+        // Check for expression-bodied property: has `=>` without `)` before `=>`
+        var arrowPos = trimmed.IndexOf("=>", StringComparison.Ordinal);
+        if (arrowPos > 0)
+        {
+            var beforeArrow = trimmed[..arrowPos].TrimEnd();
+            // If `)` or `]` right before `=>`, it's a method or indexer body
+            if (beforeArrow.EndsWith(')') || beforeArrow.EndsWith(']'))
+            {
+                return false;
+            }
+
+            return ExtractProperty(trimmed, trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols);
+        }
+
+        return false;
+    }
+
+    private static bool ExtractProperty(
+        string trimmed, string signatureText, int lineNumber, int byteOffset,
+        List<string> docCommentLines, List<PendingType> parentStack, List<SymbolInfo> symbols)
+    {
+        // Parse: [modifiers] Type Name { ... } or [modifiers] Type Name => ...
+        // Find the property name: last word before `{` or `=>`
+        var signatureEnd = trimmed.IndexOf('{', StringComparison.Ordinal);
+        if (signatureEnd < 0)
+        {
+            signatureEnd = trimmed.IndexOf("=>", StringComparison.Ordinal);
+        }
+
+        if (signatureEnd < 0)
+        {
+            return false;
+        }
+
+        var prefix = trimmed[..signatureEnd].TrimEnd();
+        var parts = prefix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+        {
+            return false;
+        }
+
+        var name = parts[^1];
+
+        // Extract modifiers
+        var modifiers = ExtractModifiers(parts);
+
+        var docComment = BuildDocComment(docCommentLines);
+        var parentName = GetCurrentParentName(parentStack);
+        var visibility = DeriveVisibility(modifiers, isNested: true);
+
+        symbols.Add(new SymbolInfo(
+            Name: name,
+            Kind: SymbolKind.Constant,
+            Signature: signatureText,
+            ParentSymbol: parentName,
+            ByteOffset: byteOffset,
+            ByteLength: Encoding.UTF8.GetByteCount(trimmed),
+            LineStart: lineNumber,
+            LineEnd: lineNumber,
+            Visibility: visibility,
+            DocComment: docComment));
+
+        return true;
+    }
+
+    private static bool TryMatchMethod(
+        string trimmed, int lineNumber, int byteOffset,
+        List<string> docCommentLines, List<PendingType> parentStack, List<SymbolInfo> symbols)
+    {
+        if (!IsInsideTypeBody(parentStack))
+        {
+            return false;
+        }
+
+        // Try indexer: `this[`
+        if (TryMatchIndexer(trimmed, lineNumber, byteOffset, docCommentLines, parentStack))
+        {
+            return true;
+        }
+
+        // Try finalizer: `~Name(`
+        if (TryMatchFinalizer(trimmed, lineNumber, byteOffset, docCommentLines, parentStack))
+        {
+            return true;
+        }
+
+        // Find first `(` at angle-bracket depth 0
+        var parenPos = FindMethodParenOpen(trimmed);
+        if (parenPos < 0)
+        {
+            return false;
+        }
+
+        // Find matching `)`
+        var closeParenPos = FindMatchingCloseParen(trimmed, parenPos);
+        if (closeParenPos < 0)
+        {
+            return false;
+        }
+
+        var prefix = trimmed[..parenPos].TrimEnd();
+        var paramsText = trimmed[parenPos..(closeParenPos + 1)];
+        var afterParams = trimmed[(closeParenPos + 1)..].TrimStart();
+
+        // Build signature: prefix + params + optional where constraints
+        var signatureBuilder = new StringBuilder();
+        signatureBuilder.Append(prefix).Append(paramsText);
+
+        if (afterParams.StartsWith("where ", StringComparison.Ordinal))
+        {
+            var constraintEnd = afterParams.IndexOfAny(['{', '=']);
+            var constraint = constraintEnd >= 0
+                ? afterParams[..constraintEnd].TrimEnd()
+                : afterParams.TrimEnd(';', ' ');
+            signatureBuilder.Append(' ').Append(constraint);
+        }
+
+        var signature = signatureBuilder.ToString().TrimEnd();
+
+        // Extract name and modifiers from prefix
+        var (name, modifiers) = ExtractMethodNameAndModifiers(prefix);
+
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        var docComment = BuildDocComment(docCommentLines);
+        var parentName = GetCurrentParentName(parentStack);
+        var visibility = DeriveVisibility(modifiers, isNested: true);
+
+        // Determine if single-line (expression-bodied or semicolon)
+        var isSingleLine = trimmed.EndsWith(';')
+                           || (afterParams.Contains("=>", StringComparison.Ordinal) && trimmed.EndsWith(';'));
+
+        if (isSingleLine)
+        {
+            symbols.Add(new SymbolInfo(
+                Name: name,
+                Kind: SymbolKind.Method,
+                Signature: signature,
+                ParentSymbol: parentName,
+                ByteOffset: byteOffset,
+                ByteLength: Encoding.UTF8.GetByteCount(trimmed),
+                LineStart: lineNumber,
+                LineEnd: lineNumber,
+                Visibility: visibility,
+                DocComment: docComment));
+        }
+        else
+        {
+            var currentDepth = GetCurrentBraceDepth(parentStack);
+            parentStack.Add(new PendingType(
+                Name: name,
+                Kind: SymbolKind.Method,
+                Signature: signature,
+                ParentName: parentName,
+                ByteOffset: byteOffset,
+                LineStart: lineNumber,
+                Visibility: visibility,
+                DocComment: docComment,
+                BraceDepthAtDeclaration: currentDepth,
+                IsNamespace: false,
+                IsContainer: false));
+        }
+
+        return true;
+    }
+
+    private static bool TryMatchIndexer(
+        string trimmed, int lineNumber, int byteOffset,
+        List<string> docCommentLines, List<PendingType> parentStack)
+    {
+        var thisIdx = trimmed.IndexOf("this[", StringComparison.Ordinal);
+        if (thisIdx < 0)
+        {
+            return false;
+        }
+
+        // Ensure `this[` is a member declaration, not inside code
+        var beforeThis = trimmed[..thisIdx].TrimEnd();
+        var parts = beforeThis.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            return false;
+        }
+
+        // Build signature up to `]`
+        var closeBracket = trimmed.IndexOf(']', thisIdx);
+        if (closeBracket < 0)
+        {
+            return false;
+        }
+
+        var signature = trimmed[..(closeBracket + 1)];
+        var modifiers = ExtractModifiers(parts);
+
+        var docComment = BuildDocComment(docCommentLines);
+        var parentName = GetCurrentParentName(parentStack);
+        var visibility = DeriveVisibility(modifiers, isNested: true);
+
+        var currentDepth = GetCurrentBraceDepth(parentStack);
+        parentStack.Add(new PendingType(
+            Name: "this[]",
+            Kind: SymbolKind.Method,
+            Signature: signature,
+            ParentName: parentName,
+            ByteOffset: byteOffset,
+            LineStart: lineNumber,
+            Visibility: visibility,
+            DocComment: docComment,
+            BraceDepthAtDeclaration: currentDepth,
+            IsNamespace: false,
+            IsContainer: false));
+
+        return true;
+    }
+
+    private static bool TryMatchFinalizer(
+        string trimmed, int lineNumber, int byteOffset,
+        List<string> docCommentLines, List<PendingType> parentStack)
+    {
+        if (!trimmed.StartsWith('~'))
+        {
+            return false;
+        }
+
+        var parenPos = trimmed.IndexOf('(', StringComparison.Ordinal);
+        if (parenPos < 0)
+        {
+            return false;
+        }
+
+        var name = trimmed[..parenPos].Trim();
+        var closeParenPos = trimmed.IndexOf(')', parenPos);
+        if (closeParenPos < 0)
+        {
+            return false;
+        }
+
+        var signature = trimmed[..(closeParenPos + 1)];
+
+        var docComment = BuildDocComment(docCommentLines);
+        var parentName = GetCurrentParentName(parentStack);
+
+        var currentDepth = GetCurrentBraceDepth(parentStack);
+        parentStack.Add(new PendingType(
+            Name: name,
+            Kind: SymbolKind.Method,
+            Signature: signature,
+            ParentName: parentName,
+            ByteOffset: byteOffset,
+            LineStart: lineNumber,
+            Visibility: Visibility.Private,
+            DocComment: docComment,
+            BraceDepthAtDeclaration: currentDepth,
+            IsNamespace: false,
+            IsContainer: false));
+
+        return true;
+    }
+
+    private static (string Name, string Modifiers) ExtractMethodNameAndModifiers(
+        string prefix)
+    {
+        var parts = prefix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var modifiers = ExtractModifiers(parts);
+
+        // Find the non-modifier tokens
+        var nonModifierStart = 0;
+        foreach (var part in parts)
+        {
+            if (IsModifier(part))
+            {
+                nonModifierStart++;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var remaining = parts[nonModifierStart..];
+
+        if (remaining.Length == 0)
+        {
+            return (string.Empty, modifiers);
+        }
+
+        // Check for operator: `ReturnType operator +`
+        var operatorIdx = Array.IndexOf(remaining, "operator");
+        if (operatorIdx >= 0 && operatorIdx + 1 < remaining.Length)
+        {
+            var operatorSymbol = remaining[operatorIdx + 1];
+            return ($"operator {operatorSymbol}", modifiers);
+        }
+
+        // Last token is the name (may have generic params)
+        var lastToken = remaining[^1];
+
+        // Strip generic params from name for display
+        var genericIdx = lastToken.IndexOf('<', StringComparison.Ordinal);
+        var name = genericIdx >= 0 ? lastToken[..genericIdx] : lastToken;
+
+        // If name contains '.', it's explicit interface implementation
+        // Name stays as-is (e.g., "IDisposable.Dispose")
+
+        return (name, modifiers);
+    }
+
+    private static string ExtractModifiers(string[] parts)
+    {
+        var modifierList = new List<string>();
+        foreach (var part in parts)
+        {
+            if (IsModifier(part))
+            {
+                modifierList.Add(part);
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return string.Join(" ", modifierList);
+    }
+
+    private static bool IsModifier(string word)
+    {
+        return Array.Exists(KnownModifiers, m => string.Equals(m, word, StringComparison.Ordinal));
+    }
+
+    private static int FindMethodParenOpen(string line)
+    {
+        // Find the `(` that represents the method parameter list, not tuple type parens.
+        // Strategy: find `(` that follows a word char, `>` (generic), or `]` (indexer)
+        // and is at angle-bracket depth 0 and paren depth 0.
+        var angleBracketDepth = 0;
+        var parenDepth = 0;
+        var pos = 0;
+        var state = CharScanState.Normal;
+
+        while (pos < line.Length)
+        {
+            var ch = line[pos];
+
+            if (state != CharScanState.Normal)
+            {
+                pos = AdvanceNonNormalState(line, pos, ch, ref state);
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '/' when pos + 1 < line.Length && line[pos + 1] == '/':
+                    return -1;
+                case '"':
+                    state = CharScanState.InString;
+                    pos++;
+                    break;
+                case '@' when pos + 1 < line.Length && line[pos + 1] == '"':
+                    state = CharScanState.InVerbatimString;
+                    pos += 2;
+                    break;
+                case '\'':
+                    state = CharScanState.InCharLiteral;
+                    pos++;
+                    break;
+                case '<':
+                    angleBracketDepth++;
+                    pos++;
+                    break;
+                case '>':
+                    if (angleBracketDepth > 0)
+                    {
+                        angleBracketDepth--;
+                    }
+
+                    pos++;
+                    break;
+                case '(' when angleBracketDepth == 0 && parenDepth == 0:
+                    // Check if this is a method parameter `(` vs a tuple type `(`
+                    // Method params follow: word char, `>`, `~`, or operator symbol
+                    // Tuple type `(` follows a space after a modifier keyword
+                    if (pos > 0 && IsMethodParenPreceder(line[pos - 1]))
+                    {
+                        return pos;
+                    }
+
+                    // Check if preceded by operator symbol (with possible space)
+                    var beforeParen = line[..pos].TrimEnd();
+                    if (beforeParen.Length > 0 && IsOperatorChar(beforeParen[^1]))
+                    {
+                        return pos;
+                    }
+
+                    // This is likely a tuple type paren — skip the balanced group
+                    parenDepth++;
+                    pos++;
+                    break;
+                case '(' when parenDepth > 0:
+                    parenDepth++;
+                    pos++;
+                    break;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    pos++;
+                    break;
+                default:
+                    pos++;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsMethodParenPreceder(char ch)
+    {
+        return char.IsLetterOrDigit(ch) || ch == '>' || ch == '~' || ch == ']';
+    }
+
+    private static bool IsOperatorChar(char ch)
+    {
+        return ch is '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^'
+            or '!' or '<' or '>' or '=' or '~';
+    }
+
+    private static int AdvanceNonNormalState(string line, int pos, char ch, ref CharScanState state)
+    {
+        switch (state)
+        {
+            case CharScanState.InString:
+                if (ch == '\\')
+                {
+                    return pos + 2;
+                }
+
+                if (ch == '"')
+                {
+                    state = CharScanState.Normal;
+                }
+
+                return pos + 1;
+
+            case CharScanState.InVerbatimString:
+                if (ch == '"')
+                {
+                    if (pos + 1 < line.Length && line[pos + 1] == '"')
+                    {
+                        return pos + 2;
+                    }
+
+                    state = CharScanState.Normal;
+                }
+
+                return pos + 1;
+
+            case CharScanState.InCharLiteral:
+                if (ch == '\\')
+                {
+                    return pos + 2;
+                }
+
+                if (ch == '\'')
+                {
+                    state = CharScanState.Normal;
+                }
+
+                return pos + 1;
+
+            default:
+                return pos + 1;
+        }
+    }
+
+    private static int FindMatchingCloseParen(string text, int openPos)
+    {
+        var depth = 0;
+        for (var i = openPos; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch == '(')
+            {
+                depth++;
+            }
+            else if (ch == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsInsideTypeBody(List<PendingType> parentStack)
+    {
+        // Check if we're directly inside a type body (not nested inside a method body)
+        // The current depth should be exactly one more than the type's declaration depth
+        var currentDepth = GetCurrentBraceDepth(parentStack);
+
+        for (var i = parentStack.Count - 1; i >= 0; i--)
+        {
+            var entry = parentStack[i];
+
+            // If we encounter a non-container (method/property), we're inside its body
+            if (!entry.IsContainer && !entry.IsNamespace)
+            {
+                return false;
+            }
+
+            if (entry.IsContainer)
+            {
+                // Don't match methods/properties inside enums
+                if (entry.Kind == SymbolKind.Type)
+                {
+                    return false;
+                }
+
+                // We're directly inside this type if depth is exactly type's depth + 1
+                return currentDepth == entry.BraceDepthAtDeclaration + 1;
+            }
+        }
+
+        return false;
     }
 
     private static int[] ComputeLineByteOffsets(ReadOnlySpan<byte> content)
@@ -177,7 +809,8 @@ public sealed partial class CSharpParser : ILanguageParser
             Visibility: Visibility.Public,
             DocComment: docComment,
             BraceDepthAtDeclaration: currentDepth,
-            IsNamespace: true));
+            IsNamespace: true,
+            IsContainer: false));
 
         return true;
     }
@@ -230,7 +863,8 @@ public sealed partial class CSharpParser : ILanguageParser
             Visibility: visibility,
             DocComment: docComment,
             BraceDepthAtDeclaration: currentDepth,
-            IsNamespace: false));
+            IsNamespace: false,
+            IsContainer: true));
 
         return true;
     }
@@ -306,7 +940,6 @@ public sealed partial class CSharpParser : ILanguageParser
 
             if (!string.IsNullOrEmpty(signatureRest))
             {
-                // Don't add space before opening paren (record primary constructors)
                 if (signatureRest[0] == '(')
                 {
                     signatureBuilder.Append(signatureRest);
@@ -353,7 +986,8 @@ public sealed partial class CSharpParser : ILanguageParser
                 Visibility: visibility,
                 DocComment: docComment,
                 BraceDepthAtDeclaration: currentDepth,
-                IsNamespace: false));
+                IsNamespace: false,
+                IsContainer: true));
         }
 
         return true;
@@ -428,57 +1062,9 @@ public sealed partial class CSharpParser : ILanguageParser
                     break;
 
                 case CharScanState.InString:
-                    if (ch == '\\')
-                    {
-                        pos += 2;
-                    }
-                    else if (ch == '"')
-                    {
-                        state = CharScanState.Normal;
-                        pos++;
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-
-                    break;
-
                 case CharScanState.InVerbatimString:
-                    if (ch == '"')
-                    {
-                        if (pos + 1 < line.Length && line[pos + 1] == '"')
-                        {
-                            pos += 2;
-                        }
-                        else
-                        {
-                            state = CharScanState.Normal;
-                            pos++;
-                        }
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-
-                    break;
-
                 case CharScanState.InCharLiteral:
-                    if (ch == '\\')
-                    {
-                        pos += 2;
-                    }
-                    else if (ch == '\'')
-                    {
-                        state = CharScanState.Normal;
-                        pos++;
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-
+                    pos = AdvanceNonNormalState(line, pos, ch, ref state);
                     break;
 
                 default:
@@ -545,37 +1131,8 @@ public sealed partial class CSharpParser : ILanguageParser
             switch (state)
             {
                 case CharScanState.InString:
-                    if (ch == '\\')
-                    {
-                        pos += 2;
-                    }
-                    else if (ch == '"')
-                    {
-                        state = CharScanState.Normal;
-                        pos++;
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-
-                    break;
-
                 case CharScanState.InCharLiteral:
-                    if (ch == '\\')
-                    {
-                        pos += 2;
-                    }
-                    else if (ch == '\'')
-                    {
-                        state = CharScanState.Normal;
-                        pos++;
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-
+                    pos = AdvanceNonNormalState(text, pos, ch, ref state);
                     break;
 
                 default:
@@ -696,7 +1253,7 @@ public sealed partial class CSharpParser : ILanguageParser
     {
         for (var i = parentStack.Count - 1; i >= 0; i--)
         {
-            if (!parentStack[i].IsNamespace)
+            if (parentStack[i].IsContainer)
             {
                 return parentStack[i].Name;
             }
@@ -735,7 +1292,8 @@ public sealed partial class CSharpParser : ILanguageParser
         Visibility Visibility,
         string? DocComment,
         int BraceDepthAtDeclaration,
-        bool IsNamespace)
+        bool IsNamespace,
+        bool IsContainer)
     {
         public string Name { get; } = Name;
         public SymbolKind Kind { get; } = Kind;
@@ -747,6 +1305,7 @@ public sealed partial class CSharpParser : ILanguageParser
         public string? DocComment { get; } = DocComment;
         public int BraceDepthAtDeclaration { get; } = BraceDepthAtDeclaration;
         public bool IsNamespace { get; } = IsNamespace;
+        public bool IsContainer { get; } = IsContainer;
         public int CurrentBraceDepth { get; set; } = BraceDepthAtDeclaration;
     }
 }
