@@ -26,8 +26,15 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100 // SQL is a static literal, not user input
         command.CommandText =
             """
-            INSERT OR REPLACE INTO repositories (id, root_path, name, language, last_indexed, file_count, symbol_count)
+            INSERT INTO repositories (id, root_path, name, language, last_indexed, file_count, symbol_count)
             VALUES (@id, @rootPath, @name, @language, @lastIndexed, @fileCount, @symbolCount)
+            ON CONFLICT(id) DO UPDATE SET
+                root_path = excluded.root_path,
+                name = excluded.name,
+                language = excluded.language,
+                last_indexed = excluded.last_indexed,
+                file_count = excluded.file_count,
+                symbol_count = excluded.symbol_count
             """;
 #pragma warning restore CA2100
 

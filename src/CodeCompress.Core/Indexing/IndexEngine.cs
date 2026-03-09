@@ -217,8 +217,20 @@ public sealed partial class IndexEngine : IIndexEngine
             }
         }
 
-        // Insert new files
+        // 8b. Ensure repository record exists before inserting files (FK constraint)
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var repo = new Repository(
+            repoId,
+            canonicalRoot,
+            Path.GetFileName(canonicalRoot),
+            language ?? "mixed",
+            now,
+            currentHashes.Count,
+            0);
+
+        await _symbolStore.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        // Insert new files
         var newFileRecords = new List<FileRecord>();
 
         foreach (var newPath in changeSet.NewFiles)
@@ -258,16 +270,8 @@ public sealed partial class IndexEngine : IIndexEngine
             }
         }
 
-        // 9. Update repository metadata
-        var repo = new Repository(
-            repoId,
-            canonicalRoot,
-            Path.GetFileName(canonicalRoot),
-            language ?? "mixed",
-            now,
-            currentHashes.Count,
-            totalSymbols);
-
+        // 9. Update repository metadata with final symbol count
+        repo = repo with { SymbolCount = totalSymbols };
         await _symbolStore.UpsertRepositoryAsync(repo).ConfigureAwait(false);
 
         return new IndexResult(
