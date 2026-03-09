@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using CodeCompress.Core.Models;
 using Microsoft.Data.Sqlite;
 
@@ -551,5 +553,572 @@ public sealed class SqliteSymbolStore : ISymbolStore
         }
 
         return results;
+    }
+
+    // ── Search ──────────────────────────────────────────────────────────
+
+    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(query);
+
+        var sanitized = Fts5Sanitizer.Sanitize(query);
+        if (sanitized.Length == 0)
+        {
+            return [];
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 100);
+
+        using var command = _connection.CreateCommand();
+
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   f.relative_path, bm25(symbols_fts) AS rank
+            FROM symbols_fts
+            JOIN symbols s ON s.id = symbols_fts.rowid
+            JOIN files f ON f.id = s.file_id
+            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+            """);
+
+        if (kind is not null)
+        {
+            sql.Append(" AND s.kind = @kind");
+        }
+
+        sql.Append(" ORDER BY rank LIMIT @limit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@query", sanitized);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        if (kind is not null)
+        {
+            command.Parameters.AddWithValue("@kind", kind);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<SymbolSearchResult>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var symbol = new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+
+            results.Add(new SymbolSearchResult(symbol, reader.GetString(12), reader.GetDouble(13)));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(query);
+
+        var sanitized = Fts5Sanitizer.Sanitize(query);
+        if (sanitized.Length == 0)
+        {
+            return [];
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 100);
+
+        using var command = _connection.CreateCommand();
+
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT fts.relative_path, snippet(file_content_fts, 1, '<b>', '</b>', '...', 32) AS snippet,
+                   bm25(file_content_fts) AS rank
+            FROM file_content_fts AS fts
+            WHERE file_content_fts MATCH @query
+              AND fts.relative_path IN (SELECT relative_path FROM files WHERE repo_id = @repoId)
+            """);
+
+        if (glob is not null)
+        {
+            sql.Append(" AND fts.relative_path GLOB @glob");
+        }
+
+        sql.Append(" ORDER BY rank LIMIT @limit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@query", sanitized);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        if (glob is not null)
+        {
+            command.Parameters.AddWithValue("@glob", glob);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<TextSearchResult>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new TextSearchResult(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetDouble(2)));
+        }
+
+        return results;
+    }
+
+    // ── Lookups ─────────────────────────────────────────────────────────
+
+    public async Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(symbolName);
+
+        using var command = _connection.CreateCommand();
+
+        // Check for qualified name (e.g. "Module.Func" or "Module:Method")
+        var separatorIndex = symbolName.IndexOfAny(['.', ':']);
+
+        if (separatorIndex > 0 && separatorIndex < symbolName.Length - 1)
+        {
+            var parent = symbolName[..separatorIndex];
+            var child = symbolName[(separatorIndex + 1)..];
+
+#pragma warning disable CA2100
+            command.CommandText =
+                """
+                SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE s.parent_symbol = @parent AND s.name = @child AND f.repo_id = @repoId
+                LIMIT 1
+                """;
+#pragma warning restore CA2100
+
+            command.Parameters.AddWithValue("@parent", parent);
+            command.Parameters.AddWithValue("@child", child);
+        }
+        else
+        {
+#pragma warning disable CA2100
+            command.CommandText =
+                """
+                SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE s.name = @name AND f.repo_id = @repoId
+                LIMIT 1
+                """;
+#pragma warning restore CA2100
+
+            command.Parameters.AddWithValue("@name", symbolName);
+        }
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+        if (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            return new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+        }
+
+        return null;
+    }
+
+    public async Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(symbolNames);
+
+        if (symbolNames.Count == 0)
+        {
+            return [];
+        }
+
+        using var command = _connection.CreateCommand();
+
+        var placeholders = new StringBuilder();
+        for (int i = 0; i < symbolNames.Count; i++)
+        {
+            if (i > 0)
+            {
+                placeholders.Append(", ");
+            }
+
+            var paramName = $"@p{i}";
+            placeholders.Append(paramName);
+            command.Parameters.AddWithValue(paramName, symbolNames[i]);
+        }
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholder names only
+        command.CommandText =
+            $"""
+             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+             FROM symbols s
+             JOIN files f ON f.id = s.file_id
+             WHERE s.name IN ({placeholders}) AND f.repo_id = @repoId
+             """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<Symbol>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+        }
+
+        return results;
+    }
+
+    // ── Aggregation ─────────────────────────────────────────────────────
+
+    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(groupBy);
+
+        var clampedDepth = Math.Min(Math.Max(maxDepth, 1), 10);
+
+        using var command = _connection.CreateCommand();
+
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   f.relative_path
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.repo_id = @repoId
+            """);
+
+        if (!includePrivate)
+        {
+            sql.Append(" AND s.visibility != 'Private'");
+        }
+
+        sql.Append(" ORDER BY f.relative_path, s.line_start");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+        var symbolsByKey = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var symbol = new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+
+            var key = string.Equals(groupBy, "kind", StringComparison.OrdinalIgnoreCase)
+                ? symbol.Kind
+                : reader.GetString(12);
+
+            if (!symbolsByKey.TryGetValue(key, out var list))
+            {
+                list = [];
+                symbolsByKey[key] = list;
+            }
+
+            list.Add(symbol);
+        }
+
+        var groups = new List<OutlineGroup>();
+
+        foreach (var (key, symbols) in symbolsByKey.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
+        {
+            if (clampedDepth >= 2)
+            {
+                // Build nested groups: top-level symbols and children grouped by parent
+                var topLevel = new List<Symbol>();
+                var childrenByParent = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+
+                foreach (var sym in symbols)
+                {
+                    if (sym.ParentSymbol is null)
+                    {
+                        topLevel.Add(sym);
+                    }
+                    else
+                    {
+                        if (!childrenByParent.TryGetValue(sym.ParentSymbol, out var children))
+                        {
+                            children = [];
+                            childrenByParent[sym.ParentSymbol] = children;
+                        }
+
+                        children.Add(sym);
+                    }
+                }
+
+                var childGroups = new List<OutlineGroup>();
+                foreach (var (parentName, children) in childrenByParent.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
+                {
+                    childGroups.Add(new OutlineGroup(parentName, children, []));
+                }
+
+                groups.Add(new OutlineGroup(key, topLevel, childGroups));
+            }
+            else
+            {
+                groups.Add(new OutlineGroup(key, symbols, []));
+            }
+        }
+
+        return new ProjectOutline(repoId, groups);
+    }
+
+    public async Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(filePath);
+
+        var file = await GetFileByPathAsync(repoId, filePath).ConfigureAwait(false);
+
+        if (file is null)
+        {
+            throw new ArgumentException($"File not found: {filePath}", nameof(filePath));
+        }
+
+        var symbols = await GetSymbolsByFileAsync(file.Id).ConfigureAwait(false);
+        var dependencies = await GetDependenciesByFileAsync(file.Id).ConfigureAwait(false);
+
+        return new ModuleApi(file, symbols, dependencies);
+    }
+
+    public async Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(direction);
+
+        var clampedDepth = Math.Min(Math.Max(depth, 1), 10);
+
+        // Load all files for this repo into a lookup
+        var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var fileById = new Dictionary<long, FileRecord>();
+        var fileByPath = new Dictionary<string, FileRecord>(StringComparer.Ordinal);
+
+        foreach (var f in allFiles)
+        {
+            fileById[f.Id] = f;
+            fileByPath[f.RelativePath] = f;
+        }
+
+        var nodes = new HashSet<string>(StringComparer.Ordinal);
+        var edges = new List<DependencyEdge>();
+        var visited = new HashSet<long>();
+
+        // Determine starting file IDs
+        var frontier = new List<long>();
+
+        if (rootFile is not null)
+        {
+            if (fileByPath.TryGetValue(rootFile, out var root))
+            {
+                frontier.Add(root.Id);
+            }
+            else
+            {
+                return new DependencyGraph([], []);
+            }
+        }
+        else
+        {
+            frontier.AddRange(allFiles.Select(f => f.Id));
+        }
+
+        var isDependencies = string.Equals(direction, "dependencies", StringComparison.OrdinalIgnoreCase);
+
+        for (int level = 0; level < clampedDepth && frontier.Count > 0; level++)
+        {
+            var nextFrontier = new List<long>();
+
+            foreach (var fileId in frontier)
+            {
+                if (!visited.Add(fileId))
+                {
+                    continue;
+                }
+
+                if (!fileById.TryGetValue(fileId, out var currentFile))
+                {
+                    continue;
+                }
+
+                nodes.Add(currentFile.RelativePath);
+
+                if (isDependencies)
+                {
+                    var deps = await GetDependenciesByFileAsync(fileId).ConfigureAwait(false);
+
+                    foreach (var dep in deps)
+                    {
+                        var toPath = dep.RequiresPath;
+
+                        if (dep.ResolvedFileId.HasValue && fileById.TryGetValue(dep.ResolvedFileId.Value, out var resolved))
+                        {
+                            toPath = resolved.RelativePath;
+                            nodes.Add(toPath);
+                            nextFrontier.Add(dep.ResolvedFileId.Value);
+                        }
+                        else
+                        {
+                            nodes.Add(toPath);
+                        }
+
+                        edges.Add(new DependencyEdge(currentFile.RelativePath, toPath, dep.Alias));
+                    }
+                }
+                else
+                {
+                    // Dependents: find files that depend on the current file
+                    using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+                    command.CommandText =
+                        """
+                        SELECT d.id, d.file_id, d.requires_path, d.resolved_file_id, d.alias
+                        FROM dependencies d
+                        WHERE d.resolved_file_id = @fileId
+                        """;
+#pragma warning restore CA2100
+
+                    command.Parameters.AddWithValue("@fileId", fileId);
+
+                    using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        var depFileId = reader.GetInt64(1);
+                        var alias = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4);
+
+                        if (fileById.TryGetValue(depFileId, out var dependentFile))
+                        {
+                            nodes.Add(dependentFile.RelativePath);
+                            edges.Add(new DependencyEdge(dependentFile.RelativePath, currentFile.RelativePath, alias));
+                            nextFrontier.Add(depFileId);
+                        }
+                    }
+                }
+            }
+
+            frontier = nextFrontier;
+        }
+
+        return new DependencyGraph(
+            nodes.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+            edges);
+    }
+
+    public async Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var snapshot = await GetSnapshotAsync(snapshotId).ConfigureAwait(false);
+
+        if (snapshot is null)
+        {
+            return new ChangedFilesResult([], [], []);
+        }
+
+        var snapshotHashes = JsonSerializer.Deserialize<Dictionary<string, string>>(snapshot.FileHashes)
+            ?? new Dictionary<string, string>();
+
+        var currentFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var currentByPath = new Dictionary<string, FileRecord>(StringComparer.Ordinal);
+
+        foreach (var file in currentFiles)
+        {
+            currentByPath[file.RelativePath] = file;
+        }
+
+        var added = new List<FileRecord>();
+        var modified = new List<FileRecord>();
+        var removed = new List<string>();
+
+        // Files in current but not in snapshot = added; in both but hash differs = modified
+        foreach (var file in currentFiles)
+        {
+            if (!snapshotHashes.TryGetValue(file.RelativePath, out var oldHash))
+            {
+                added.Add(file);
+            }
+            else if (!string.Equals(oldHash, file.ContentHash, StringComparison.Ordinal))
+            {
+                modified.Add(file);
+            }
+        }
+
+        // Files in snapshot but not in current = removed
+        removed.AddRange(snapshotHashes.Keys.Where(path => !currentByPath.ContainsKey(path)));
+
+        return new ChangedFilesResult(added, modified, removed);
     }
 }
