@@ -1,5 +1,6 @@
 using CodeCompress.Core;
 using CodeCompress.Core.Storage;
+using CodeCompress.Server.Scoping;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CodeCompress.Server;
@@ -16,6 +17,9 @@ internal static class ServiceCollectionExtensions
         // ISymbolStore and IIndexEngine are resolved per-project at tool invocation time,
         // not at startup, because they require an active SqliteConnection.
         services.AddSingleton<IConnectionFactory, SqliteConnectionFactory>();
+
+        // Scoping — creates per-project scope with connection, store, and engine
+        services.AddSingleton<IProjectScopeFactory, ProjectScopeFactory>();
 
         return services;
     }
