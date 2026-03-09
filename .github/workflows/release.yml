@@ -33,11 +33,26 @@ jobs:
       - name: Determine version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
-      - name: Pack
+      - name: Patch server.json version
+        run: |
+          jq --arg v "$VERSION" '(.version, .packages[].version) = $v' src/CodeCompress.Server/.mcp/server.json > tmp.json
+          mv tmp.json src/CodeCompress.Server/.mcp/server.json
+
+      - name: Pack Server
+        run: dotnet pack src/CodeCompress.Server/CodeCompress.Server.csproj -c Release -o ./nupkg /p:Version=$VERSION
+
+      - name: Pack CLI
         run: dotnet pack src/CodeCompress.Cli/CodeCompress.Cli.csproj -c Release -o ./nupkg /p:Version=$VERSION
 
+      - name: Verify packages
+        run: |
+          echo "Packed NuGet packages:"
+          ls -la ./nupkg/*.nupkg
+          echo "Verifying Server package contains .mcp/server.json:"
+          unzip -l ./nupkg/CodeCompress.Server.$VERSION.nupkg | grep ".mcp/server.json"
+
       - name: Publish to NuGet
-        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Create GitHub Release
         env:
