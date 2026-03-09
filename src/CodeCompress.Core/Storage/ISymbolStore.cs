@@ -29,6 +29,7 @@ public interface ISymbolStore
     // Snapshots
     public Task<long> CreateSnapshotAsync(IndexSnapshot snapshot);
     public Task<IndexSnapshot?> GetSnapshotAsync(long snapshotId);
+    public Task<IndexSnapshot?> GetSnapshotByLabelAsync(string repoId, string snapshotLabel);
     public Task<IReadOnlyList<IndexSnapshot>> GetSnapshotsByRepoAsync(string repoId);
 
     // Search
