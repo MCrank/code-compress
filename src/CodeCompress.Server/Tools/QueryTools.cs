@@ -131,6 +131,180 @@ internal sealed class QueryTools
         }
     }
 
+    [McpServerTool(Name = "get_symbol")]
+    [Description("Get the source code of a specific symbol by its qualified name using byte-offset seeking.")]
+    public async Task<string> GetSymbol(
+        [Description("Absolute path to the project root directory")] string path,
+        [Description("Fully qualified symbol name (e.g., CombatService:ProcessAttack)")] string symbolName,
+        [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                return JsonSerializer.Serialize(
+                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Symbol = SanitizeSymbolName(symbolName) },
+                    SerializerOptions);
+            }
+
+            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+            var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+            if (file is null)
+            {
+                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = _pathValidator.ValidatePath(
+                    Path.Combine(validatedPath, file.RelativePath), validatedPath);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Path validation failed", "INVALID_PATH");
+            }
+
+            var sourceCode = includeContext
+                ? await ReadSourceCodeWithContextAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false)
+                : await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+            var response = new
+            {
+                symbol.Name,
+                symbol.Kind,
+                Parent = symbol.ParentSymbol,
+                File = file.RelativePath,
+                symbol.LineStart,
+                symbol.LineEnd,
+                symbol.Signature,
+                SourceCode = sourceCode,
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
+    [McpServerTool(Name = "get_symbols")]
+    [Description("Batch retrieve source code for multiple symbols by their qualified names.")]
+    public async Task<string> GetSymbols(
+        [Description("Absolute path to the project root directory")] string path,
+        [Description("Array of fully qualified symbol names")] string[] symbolNames,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        if (symbolNames is null || symbolNames.Length == 0)
+        {
+            return SerializeError("No symbol names provided", "EMPTY_SYMBOL_NAMES");
+        }
+
+        if (symbolNames.Length > 50)
+        {
+            return SerializeError("Too many symbols requested. Maximum is 50", "SYMBOL_LIMIT_EXCEEDED");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var foundSymbols = await scope.Store.GetSymbolsByNamesAsync(scope.RepoId, symbolNames).ConfigureAwait(false);
+            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+            var fileMap = files.ToDictionary(f => f.Id);
+
+            // Build set of qualified names that were found
+            var foundQualifiedNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var symbol in foundSymbols)
+            {
+                var qualifiedName = symbol.ParentSymbol is not null
+                    ? $"{symbol.ParentSymbol}:{symbol.Name}"
+                    : symbol.Name;
+                foundQualifiedNames.Add(qualifiedName);
+            }
+
+            // Group found symbols by file for efficient reading
+            var symbolsByFile = foundSymbols
+                .GroupBy(s => s.FileId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var results = new List<object>();
+
+            foreach (var (fileId, fileSymbols) in symbolsByFile)
+            {
+                if (!fileMap.TryGetValue(fileId, out var file))
+                {
+                    continue;
+                }
+
+                string resolvedPath;
+                try
+                {
+                    resolvedPath = _pathValidator.ValidatePath(
+                        Path.Combine(validatedPath, file.RelativePath), validatedPath);
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+
+                foreach (var symbol in fileSymbols)
+                {
+                    var sourceCode = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+                    results.Add(new
+                    {
+                        symbol.Name,
+                        symbol.Kind,
+                        Parent = symbol.ParentSymbol,
+                        File = file.RelativePath,
+                        symbol.LineStart,
+                        symbol.LineEnd,
+                        symbol.Signature,
+                        SourceCode = sourceCode,
+                    });
+                }
+            }
+
+            // Determine which requested names were not found
+            var errors = symbolNames
+                .Where(name => !foundQualifiedNames.Contains(name))
+                .Select(name => new
+                {
+                    Symbol = SanitizeSymbolName(name),
+                    Error = "Symbol not found",
+                    Code = "SYMBOL_NOT_FOUND",
+                })
+                .ToList();
+
+            var response = new
+            {
+                Results = results,
+                Errors = errors,
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
     private static string FormatOutline(Core.Models.ProjectOutline outline)
     {
         var sb = new StringBuilder();
@@ -185,6 +359,142 @@ internal sealed class QueryTools
         }
 
         return count;
+    }
+
+    private static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)
+    {
+        var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using (stream.ConfigureAwait(false))
+        {
+            stream.Seek(byteOffset, SeekOrigin.Begin);
+            var buffer = new byte[byteLength];
+            var bytesRead = 0;
+            while (bytesRead < byteLength)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(bytesRead, byteLength - bytesRead)).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                bytesRead += read;
+            }
+
+            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
+        }
+    }
+
+    private static async Task<string> ReadSourceCodeWithContextAsync(string filePath, int byteOffset, int byteLength, int contextLines = 5)
+    {
+        var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using (stream.ConfigureAwait(false))
+        {
+            // Find start position by scanning backward for context lines
+            var startOffset = await FindContextStartAsync(stream, byteOffset, contextLines).ConfigureAwait(false);
+
+            // Find end position by scanning forward for context lines
+            var endOffset = await FindContextEndAsync(stream, byteOffset + byteLength, contextLines).ConfigureAwait(false);
+
+            // Read the full region
+            var length = endOffset - startOffset;
+            stream.Seek(startOffset, SeekOrigin.Begin);
+            var buffer = new byte[length];
+            var bytesRead = 0;
+            while (bytesRead < length)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(bytesRead, length - bytesRead)).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                bytesRead += read;
+            }
+
+            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
+        }
+    }
+
+    private static async Task<int> FindContextStartAsync(FileStream stream, int symbolStart, int lines)
+    {
+        if (symbolStart == 0)
+        {
+            return 0;
+        }
+
+        // Read backward from symbolStart to find `lines` newline characters
+        var searchStart = Math.Max(0, symbolStart - 4096);
+        var searchLength = symbolStart - searchStart;
+        stream.Seek(searchStart, SeekOrigin.Begin);
+        var buffer = new byte[searchLength];
+        _ = await stream.ReadAsync(buffer.AsMemory(0, searchLength)).ConfigureAwait(false);
+
+        var newlineCount = 0;
+        for (var i = searchLength - 1; i >= 0; i--)
+        {
+            if (buffer[i] == (byte)'\n')
+            {
+                newlineCount++;
+                if (newlineCount == lines)
+                {
+                    return searchStart + i + 1;
+                }
+            }
+        }
+
+        return searchStart;
+    }
+
+    private static async Task<int> FindContextEndAsync(FileStream stream, int symbolEnd, int lines)
+    {
+        stream.Seek(symbolEnd, SeekOrigin.Begin);
+        var buffer = new byte[4096];
+        var bytesRead = await stream.ReadAsync(buffer).ConfigureAwait(false);
+
+        var newlineCount = 0;
+        for (var i = 0; i < bytesRead; i++)
+        {
+            if (buffer[i] == (byte)'\n')
+            {
+                newlineCount++;
+                if (newlineCount == lines)
+                {
+                    return symbolEnd + i + 1;
+                }
+            }
+        }
+
+        return symbolEnd + bytesRead;
+    }
+
+    private static string SanitizeSymbolName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return string.Empty;
+        }
+
+        // Allow only alphanumeric, colon, underscore, dot, hyphen
+        var sb = new StringBuilder(name.Length);
+        foreach (var c in name.Where(c => char.IsLetterOrDigit(c) || c is ':' or '_' or '.' or '-'))
+        {
+            sb.Append(c);
+        }
+
+        var result = sb.ToString();
+        return result.Length > 256 ? result[..256] : result;
     }
 
     private static string SerializeError(string error, string code) =>

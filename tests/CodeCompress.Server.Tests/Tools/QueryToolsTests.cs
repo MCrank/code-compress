@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
@@ -313,6 +315,450 @@ internal sealed class QueryToolsTests
         await Assert.That(depsArray[1].GetProperty("alias").GetString()).IsEqualTo("Damage");
     }
 
+    [Test]
+    public async Task GetSymbolExistingSymbolReturnsSourceCode()
+    {
+        var content = "line1\nline2\nfunction ProcessAttack()\n  body\nend\nline6\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // "line1\nline2\n" = 12 bytes, "function ProcessAttack()\n  body\nend" = 35 bytes
+            var symbol = CreateSymbol(1, 1, "ProcessAttack", "Method",
+                "function CombatService:ProcessAttack()", parent: "CombatService",
+                lineStart: 3, byteOffset: 12, byteLength: 35);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "CombatService:ProcessAttack")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 100, 6, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "CombatService:ProcessAttack").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("ProcessAttack");
+            await Assert.That(root.GetProperty("kind").GetString()).IsEqualTo("Method");
+            await Assert.That(root.GetProperty("parent").GetString()).IsEqualTo("CombatService");
+            await Assert.That(root.GetProperty("file").GetString()).IsEqualTo(fileName);
+            await Assert.That(root.GetProperty("line_start").GetInt32()).IsEqualTo(3);
+            await Assert.That(root.GetProperty("line_end").GetInt32()).IsEqualTo(8);
+            await Assert.That(root.GetProperty("signature").GetString())
+                .IsEqualTo("function CombatService:ProcessAttack()");
+            await Assert.That(root.GetProperty("source_code").GetString())
+                .IsEqualTo("function ProcessAttack()\n  body\nend");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolWithContextIncludesSurroundingLines()
+    {
+        var lines = new StringBuilder();
+        for (var i = 1; i <= 15; i++)
+        {
+            lines.Append(CultureInfo.InvariantCulture, $"line{i}\n");
+        }
+
+        var content = lines.ToString();
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // Lines 1-5 = "line1\nline2\nline3\nline4\nline5\n" = 30 bytes
+            // "line6\nline7\nline8\n" starts at byte 30, length = 18 bytes
+            var symbol = CreateSymbol(1, 1, "MyFunc", "Function",
+                "function MyFunc()", lineStart: 6, byteOffset: 30, byteLength: 18);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "MyFunc")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 15, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "MyFunc", includeContext: true).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var sourceCode = root.GetProperty("source_code").GetString()!;
+
+            // With 5 lines context, should include lines 1-13 (5 before line 6, lines 6-8, 5 after line 8)
+            await Assert.That(sourceCode).Contains("line1");
+            await Assert.That(sourceCode).Contains("line6");
+            await Assert.That(sourceCode).Contains("line7");
+            await Assert.That(sourceCode).Contains("line8");
+            await Assert.That(sourceCode).Contains("line13");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolWithContextAtFileStartHandlesGracefully()
+    {
+        var content = "function Start()\n  body\nend\nline4\nline5\nline6\nline7\nline8\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // Symbol at byte 0, "function Start()\n  body\nend" = 27 bytes
+            var symbol = CreateSymbol(1, 1, "Start", "Function",
+                "function Start()", lineStart: 1, byteOffset: 0, byteLength: 27);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Start")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 8, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "Start", includeContext: true).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var sourceCode = root.GetProperty("source_code").GetString()!;
+            await Assert.That(sourceCode).Contains("function Start()");
+            await Assert.That(sourceCode).Contains("body");
+            await Assert.That(sourceCode).Contains("end");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolWithContextAtFileEndHandlesGracefully()
+    {
+        var content = "line1\nline2\nline3\nline4\nline5\nfunction End()\n  body\nend\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // "line1\n" through "line5\n" = 5*6 = 30 bytes
+            // "function End()\n  body\nend" starts at byte 30, length = 25 bytes
+            var symbol = CreateSymbol(1, 1, "End", "Function",
+                "function End()", lineStart: 6, byteOffset: 30, byteLength: 25);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "End")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 8, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "End", includeContext: true).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var sourceCode = root.GetProperty("source_code").GetString()!;
+            await Assert.That(sourceCode).Contains("function End()");
+            await Assert.That(sourceCode).Contains("body");
+            await Assert.That(sourceCode).Contains("end");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolNonExistentReturnsError()
+    {
+        _store.GetSymbolByNameAsync("test-repo-id", "NonExistent")
+            .Returns((Symbol?)null);
+
+        var result = await _tools.GetSymbol("/valid/path", "NonExistent").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+    }
+
+    [Test]
+    public async Task GetSymbolInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.GetSymbol("/../../../etc/passwd", "SomeSymbol").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task GetSymbolByteOffsetMatchesFileContent()
+    {
+        var content = "-- header comment\nlocal x = 10\nfunction Exact()\n  return x\nend\n-- footer\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // "-- header comment\nlocal x = 10\n" = 18 + 13 = 31 bytes
+            // "function Exact()\n  return x\nend" = 31 bytes
+            var expectedSource = "function Exact()\n  return x\nend";
+            var byteOffset = Encoding.UTF8.GetByteCount("-- header comment\nlocal x = 10\n");
+            var byteLength = Encoding.UTF8.GetByteCount(expectedSource);
+
+            var symbol = CreateSymbol(1, 1, "Exact", "Function",
+                "function Exact()", lineStart: 3, byteOffset: byteOffset, byteLength: byteLength);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Exact")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 6, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "Exact").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(expectedSource);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolsAllFoundReturnsAllResults()
+    {
+        var content = "function A()\nend\nfunction B()\nend\nfunction C()\nend\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbols = new List<Symbol>
+            {
+                CreateSymbol(1, 1, "A", "Function", "function A()", lineStart: 1,
+                    byteOffset: 0, byteLength: 16),
+                CreateSymbol(2, 1, "B", "Function", "function B()", lineStart: 3,
+                    byteOffset: 17, byteLength: 16),
+                CreateSymbol(3, 1, "C", "Function", "function C()", lineStart: 5,
+                    byteOffset: 34, byteLength: 16),
+            };
+
+            _store.GetSymbolsByNamesAsync("test-repo-id", Arg.Any<IReadOnlyList<string>>())
+                .Returns(symbols);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 6, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbols(dir, ["A", "B", "C"]).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var results = root.GetProperty("results");
+            await Assert.That(results.GetArrayLength()).IsEqualTo(3);
+
+            var errors = root.GetProperty("errors");
+            await Assert.That(errors.GetArrayLength()).IsEqualTo(0);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolsSomeMissingReturnsPartialResults()
+    {
+        var content = "function A()\nend\nfunction B()\nend\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbols = new List<Symbol>
+            {
+                CreateSymbol(1, 1, "A", "Function", "function A()", lineStart: 1,
+                    byteOffset: 0, byteLength: 16),
+                CreateSymbol(2, 1, "B", "Function", "function B()", lineStart: 3,
+                    byteOffset: 17, byteLength: 16),
+            };
+
+            _store.GetSymbolsByNamesAsync("test-repo-id", Arg.Any<IReadOnlyList<string>>())
+                .Returns(symbols);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 4, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbols(dir, ["A", "B", "Missing"]).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var results = root.GetProperty("results");
+            await Assert.That(results.GetArrayLength()).IsEqualTo(2);
+
+            var errors = root.GetProperty("errors");
+            await Assert.That(errors.GetArrayLength()).IsEqualTo(1);
+            await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing");
+            await Assert.That(errors[0].GetProperty("error").GetString()).IsEqualTo("Symbol not found");
+            await Assert.That(errors[0].GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolsNoneFoundReturnsAllErrors()
+    {
+        _store.GetSymbolsByNamesAsync("test-repo-id", Arg.Any<IReadOnlyList<string>>())
+            .Returns(new List<Symbol>());
+
+        var result = await _tools.GetSymbols("/valid/path", ["Missing1", "Missing2"]).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        var results = root.GetProperty("results");
+        await Assert.That(results.GetArrayLength()).IsEqualTo(0);
+
+        var errors = root.GetProperty("errors");
+        await Assert.That(errors.GetArrayLength()).IsEqualTo(2);
+        await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing1");
+        await Assert.That(errors[1].GetProperty("symbol").GetString()).IsEqualTo("Missing2");
+    }
+
+    [Test]
+    public async Task GetSymbolsSameFileGroupsReads()
+    {
+        var content = "function A()\nend\nfunction B()\nend\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbols = new List<Symbol>
+            {
+                CreateSymbol(1, 1, "A", "Function", "function A()", lineStart: 1,
+                    byteOffset: 0, byteLength: 16),
+                CreateSymbol(2, 1, "B", "Function", "function B()", lineStart: 3,
+                    byteOffset: 17, byteLength: 16),
+            };
+
+            _store.GetSymbolsByNamesAsync("test-repo-id", Arg.Any<IReadOnlyList<string>>())
+                .Returns(symbols);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 200, 4, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbols(dir, ["A", "B"]).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var results = root.GetProperty("results");
+            await Assert.That(results.GetArrayLength()).IsEqualTo(2);
+
+            await Assert.That(results[0].GetProperty("name").GetString()).IsEqualTo("A");
+            await Assert.That(results[0].GetProperty("source_code").GetString())
+                .IsEqualTo("function A()\nend");
+            await Assert.That(results[1].GetProperty("name").GetString()).IsEqualTo("B");
+            await Assert.That(results[1].GetProperty("source_code").GetString())
+                .IsEqualTo("function B()\nend");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolsExceedsLimitReturnsError()
+    {
+        var names = Enumerable.Range(1, 51).Select(i => $"Symbol{i}").ToArray();
+
+        var result = await _tools.GetSymbols("/valid/path", names).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString())
+            .IsEqualTo("Too many symbols requested. Maximum is 50");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_LIMIT_EXCEEDED");
+    }
+
+    [Test]
+    public async Task GetSymbolsEmptyArrayReturnsError()
+    {
+        var result = await _tools.GetSymbols("/valid/path", []).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString())
+            .IsEqualTo("No symbol names provided");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_SYMBOL_NAMES");
+    }
+
+    [Test]
+    public async Task GetSymbolsInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.GetSymbols("/../../../etc/passwd", ["SomeSymbol"]).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
     private static Symbol CreateSymbol(
         long id,
         long fileId,
@@ -322,6 +768,15 @@ internal sealed class QueryToolsTests
         string visibility = "Public",
         string? parent = null,
         int lineStart = 1,
-        string? docComment = null) =>
-        new(id, fileId, name, kind, signature, parent, 0, 100, lineStart, lineStart + 5, visibility, docComment);
+        string? docComment = null,
+        int byteOffset = 0,
+        int byteLength = 100) =>
+        new(id, fileId, name, kind, signature, parent, byteOffset, byteLength, lineStart, lineStart + 5, visibility, docComment);
+
+    private static string CreateTempFile(string content)
+    {
+        var tempPath = Path.GetTempFileName();
+        File.WriteAllText(tempPath, content, new UTF8Encoding(false));
+        return tempPath;
+    }
 }
