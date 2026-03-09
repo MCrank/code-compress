@@ -1030,7 +1030,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(direction);
 
-        var clampedDepth = Math.Min(Math.Max(depth, 1), 10);
+        var clampedDepth = Math.Min(Math.Max(depth, 1), 50);
 
         // Load all files for this repo into a lookup
         var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
