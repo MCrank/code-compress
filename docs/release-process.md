@@ -132,19 +132,18 @@ Each step depends on the previous one succeeding. If build or test fails, pack/p
 
 ### What Gets Published
 
-The `dotnet pack` step packages `src/CodeCompress.Cli` as a [.NET tool](https://learn.microsoft.com/en-us/dotnet/core/tools/global-tools):
+The release workflow packs and publishes **two** NuGet packages:
 
-| Property | Value |
-|----------|-------|
-| Package ID | `CodeCompress` |
-| Tool command | `codecompress` |
-| License | MIT |
-| NuGet URL | https://www.nuget.org/packages/CodeCompress |
-| Source | https://github.com/MCrank/code-compress |
+| Package | Package ID | Tool Command | Purpose |
+|---------|-----------|-------------|---------|
+| **MCP Server** | `CodeCompress.Server` | `codecompress-server` | Primary — MCP server for AI agents |
+| **CLI Tool** | `CodeCompress` | `codecompress` | Optional — standalone CLI for testing/debugging |
+
+The Server package has `PackageType: McpServer` for NuGet.org MCP discoverability and includes `.mcp/server.json` registry metadata.
 
 The GitHub Release includes:
 - Auto-generated release notes (commit list since previous tag)
-- The `.nupkg` file attached as a downloadable asset
+- Both `.nupkg` files attached as downloadable assets
 
 ---
 
@@ -315,9 +314,46 @@ The release workflow uses `permissions: contents: write` to create GitHub Releas
 
 ---
 
-## Installation for End Users
+## Installation for MCP Clients
 
-Once a release is published, users can install CodeCompress as a global .NET tool:
+The primary package is `CodeCompress.Server` — the MCP server that AI agents connect to.
+
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later (`dnx` ships with the .NET 10 SDK)
+
+### Via dnx (recommended)
+
+No install needed — `dnx` downloads and runs the package in one shot:
+
+```bash
+dnx CodeCompress.Server --yes
+```
+
+MCP clients call this command as the stdio server process. See the [README](../README.md#mcp-client-configuration) for client-specific configuration examples (Claude Code, VS Code, Claude Desktop).
+
+### Via dotnet tool install
+
+For a persistent global install:
+
+```bash
+dotnet tool install -g CodeCompress.Server
+codecompress-server
+```
+
+### Windows Note
+
+On native Windows (not WSL), stdio MCP servers that use `dnx` may require the `cmd /c` wrapper:
+
+```bash
+cmd /c dnx CodeCompress.Server --yes
+```
+
+---
+
+## Installation for CLI Tool (Optional)
+
+The CLI tool is a separate package for testing and debugging outside of MCP:
 
 ### Install
 
@@ -356,10 +392,6 @@ codecompress
 ```
 
 This should print the usage/help text listing all available commands.
-
-### Prerequisites
-
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
 
 ---
 

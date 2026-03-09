@@ -42,55 +42,114 @@ Adding a new language requires implementing a single `ILanguageParser` interface
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
 
-### From Source
+### From NuGet (recommended)
+
+```bash
+# Via dnx (no install needed — downloads and runs in one shot)
+dnx CodeCompress.Server --yes
+
+# Via dotnet tool install (persistent global install)
+dotnet tool install -g CodeCompress.Server
+```
+
+> **Note:** `dnx` ships with the .NET 10 SDK and is the recommended way to run NuGet-based MCP servers.
+
+### From Source (development)
 
 ```bash
 git clone https://github.com/MCrank/code-compress.git
 cd code-compress
-dotnet build CodeCompress.slnx
+dotnet run --project src/CodeCompress.Server
 ```
 
-### As a Global Tool (coming soon)
-
-```bash
-dotnet tool install -g codecompress
-```
-
-## Setup
+## MCP Client Configuration
 
 ### Claude Code
 
-Add to your Claude Code settings (`.claude/settings.json` or project-level):
+```bash
+# One-liner setup
+claude mcp add --transport stdio codecompress -- dnx CodeCompress.Server --yes
+
+# Or from source
+claude mcp add --transport stdio codecompress -- dotnet run --project /path/to/src/CodeCompress.Server
+```
+
+### VS Code / GitHub Copilot (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "codecompress": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+### Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
   "mcpServers": {
     "codecompress": {
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+### Project-Scoped Sharing (`.mcp.json` at project root)
+
+Commit this to your repo so all team members get the MCP server automatically:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+### From Source (any client)
+
+For development, use `dotnet run` instead of `dnx`:
+
+```json
+{
+  "servers": {
+    "codecompress": {
+      "type": "stdio",
       "command": "dotnet",
-      "args": ["run", "--project", "/path/to/code-compress/src/CodeCompress.Server"],
-      "env": {}
+      "args": ["run", "--project", "/absolute/path/to/src/CodeCompress.Server"]
     }
   }
 }
 ```
 
-If installed as a global tool:
+### Windows Note
 
-```json
-{
-  "mcpServers": {
-    "codecompress": {
-      "command": "codecompress",
-      "args": [],
-      "env": {}
-    }
-  }
-}
+On native Windows (not WSL), stdio MCP servers that use `dnx` may require the `cmd /c` wrapper:
+
+```bash
+claude mcp add --transport stdio codecompress -- cmd /c dnx CodeCompress.Server --yes
 ```
 
-### Other MCP Clients
+## CLI Tool (Optional)
 
-CodeCompress uses stdio transport by default. Any MCP-compatible client can connect by launching the server process and communicating over stdin/stdout.
+CodeCompress also ships a standalone CLI for testing and debugging outside of MCP:
+
+```bash
+dotnet tool install -g CodeCompress
+codecompress index /path/to/project
+codecompress outline /path/to/project
+```
 
 ## Usage
 
