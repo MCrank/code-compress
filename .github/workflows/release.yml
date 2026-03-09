@@ -34,7 +34,9 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
       - name: Patch server.json version
-        run: sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" src/CodeCompress.Server/.mcp/server.json
+        run: |
+          jq --arg v "$VERSION" '(.version, .packages[].version) = $v' src/CodeCompress.Server/.mcp/server.json > tmp.json
+          mv tmp.json src/CodeCompress.Server/.mcp/server.json
 
       - name: Pack Server
         run: dotnet pack src/CodeCompress.Server/CodeCompress.Server.csproj -c Release -o ./nupkg /p:Version=$VERSION
