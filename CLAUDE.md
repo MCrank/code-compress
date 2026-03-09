@@ -43,14 +43,20 @@ dotnet run --project src/CodeCompress.Cli
 
 - **Language Parsers** — Strategy pattern via `ILanguageParser`. Each parser declares its `LanguageId` and `FileExtensions`. The `IndexEngine` auto-resolves parsers by file extension via DI. Adding a new language = one class, no other changes.
 - **Tool Router** — Attribute-based `[McpServerTool]` methods in tool classes under `Server/Tools/`
-- **Symbol Store** — Repository pattern over `Microsoft.Data.Sqlite` with FTS5 virtual tables for full-text search
-- **Index Engine** — Singleton service. Orchestrates parsing, SHA-256 change detection, and incremental indexing via `Parallel.ForEachAsync`
+- **Symbol Store** — `ISymbolStore` / `SqliteSymbolStore` — repository pattern over `Microsoft.Data.Sqlite` with FTS5 virtual tables for full-text search
+- **Index Engine** — `IIndexEngine` / `IndexEngine` — singleton service. Orchestrates file discovery, hashing, change detection, parsing, and storage updates via `Parallel.ForEachAsync`
+- **File Hasher** — `IFileHasher` / `FileHasher` — parallel SHA-256 file hashing with `ArrayPool<byte>` buffering
+- **Change Tracker** — `IChangeTracker` / `ChangeTracker` — pure-function diff of current vs stored hashes, produces `ChangeSet` (new/modified/deleted/unchanged)
+- **Path Validation** — `PathValidator` (static) for path traversal prevention; `IPathValidator` / `PathValidatorService` wrapper for DI/testability
 - **MCP Server Host** — `GenericHost` + `ModelContextProtocol` SDK, stdio transport
+- **DI Registration** — `ServiceCollectionExtensions.AddCodeCompressCore()` registers all Core services
 
 ### Data Flow
 
 ```
-AI Agent → MCP Protocol (stdio) → Tool Router → Index Engine → Language Parsers
+AI Agent → MCP Protocol (stdio) → Tool Router → Index Engine → File Hasher (parallel SHA-256)
+                                                             → Change Tracker (diff logic)
+                                                             → Language Parsers (per extension)
                                                              → Symbol Store (SQLite)
 ```
 
@@ -139,6 +145,7 @@ Enforced via `.editorconfig`:
 |---------|---------|
 | `ModelContextProtocol` | MCP SDK — server hosting, tool registration |
 | `Microsoft.Data.Sqlite` | SQLite access with FTS5 |
+| `Microsoft.Extensions.FileSystemGlobbing` | Glob pattern matching for file discovery |
 | `Microsoft.Extensions.Hosting` | Generic host for DI, logging |
 | `TUnit` | Testing framework |
 | `NSubstitute` | Mocking |

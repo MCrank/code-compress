@@ -79,14 +79,16 @@ Adding a new language requires **one class** implementing `ILanguageParser` — 
 
 ### 2.2 Core Components
 
-| Component            | Responsibility                         | .NET Pattern                                    |
-| -------------------- | -------------------------------------- | ----------------------------------------------- |
-| **MCP Server Host**  | Transport, tool registration, DI       | `GenericHost` + `ModelContextProtocol` SDK      |
-| **Tool Router**      | Dispatches MCP tool calls to handlers  | Attribute-based `[McpServerTool]` methods       |
-| **Index Engine**     | Orchestrates parsing, storage, queries | Singleton service via DI                        |
-| **Language Parsers** | Extract symbols from source files      | Strategy pattern (`ILanguageParser`)            |
-| **Symbol Store**     | SQLite persistence, FTS5, queries      | Repository pattern over `Microsoft.Data.Sqlite` |
-| **Change Tracker**   | SHA-256 file hashing, delta detection  | Integrated into Index Engine                    |
+| Component            | Responsibility                              | .NET Pattern                                    |
+| -------------------- | ------------------------------------------- | ----------------------------------------------- |
+| **MCP Server Host**  | Transport, tool registration, DI            | `GenericHost` + `ModelContextProtocol` SDK      |
+| **Tool Router**      | Dispatches MCP tool calls to handlers       | Attribute-based `[McpServerTool]` methods       |
+| **Index Engine**     | Orchestrates discovery, hashing, parsing    | `IIndexEngine` / `IndexEngine` singleton via DI |
+| **File Hasher**      | Parallel SHA-256 file hashing               | `IFileHasher` / `FileHasher`, `ArrayPool` buffering |
+| **Change Tracker**   | Diff current vs stored hashes → `ChangeSet` | `IChangeTracker` / `ChangeTracker`, pure function |
+| **Language Parsers** | Extract symbols from source files           | Strategy pattern (`ILanguageParser`)            |
+| **Symbol Store**     | SQLite persistence, FTS5, queries           | `ISymbolStore` / `SqliteSymbolStore`            |
+| **Path Validator**   | Path traversal prevention (OWASP A01)       | `PathValidator` (static) + `IPathValidator` for DI |
 
 ### 2.3 Data Model
 
@@ -179,7 +181,7 @@ Indexes a local project directory. Uses SHA-256 hashing for incremental updates 
 | `include_patterns` | string[] | No       | Glob patterns to include (default: all source files)                              |
 | `exclude_patterns` | string[] | No       | Glob patterns to exclude (default: common ignores)                                |
 
-**Returns:** `{ repo_id, files_indexed, files_skipped, symbols_found, duration_ms }`
+**Returns:** `{ repo_id, files_indexed, files_skipped, files_deleted, symbols_found, duration_ms }`
 
 **Language resolution (automatic, no configuration required):**
 
@@ -407,29 +409,27 @@ Returns the project file tree with metadata (file count, line count per director
 **TUnit patterns:**
 
 ```csharp
-[McpServerToolType]
-public sealed class LuauParserTests
+// Test classes must be internal sealed (CA1515, CA1852)
+// Method names use PascalCase, not Snake_Case (CA1707)
+internal sealed class LuauParserTests
 {
     [Test]
-    public async Task Parse_FunctionDeclaration_ExtractsSignature()
+    public async Task ParseFunctionDeclarationExtractsSignature()
     {
         var parser = new LuauParser();
         var content = "function CombatService:Attack(targetId: string): DamageResult"u8;
         var result = parser.Parse("test.luau", content);
 
-        await Assert.That(result.Symbols).HasCount(1);
+        await Assert.That(result.Symbols).Count().IsEqualTo(1);  // .HasCount() is obsolete
         await Assert.That(result.Symbols[0].Name).IsEqualTo("CombatService:Attack");
         await Assert.That(result.Symbols[0].Kind).IsEqualTo(SymbolKind.Method);
-        await Assert.That(result.Symbols[0].Signature)
-            .Contains("targetId: string")
-            .And.Contains("DamageResult");
     }
 
     [Test]
     [Arguments("export type AgentData = { id: string }", SymbolKind.Type, Visibility.Public)]
     [Arguments("type InternalState = { count: number }", SymbolKind.Type, Visibility.Private)]
     [Arguments("local function validate(x: string): boolean", SymbolKind.Function, Visibility.Private)]
-    public async Task Parse_SymbolVisibility_CorrectlyClassified(
+    public async Task ParseSymbolVisibilityCorrectlyClassified(
         string code, SymbolKind expectedKind, Visibility expectedVisibility)
     {
         var parser = new LuauParser();
@@ -510,7 +510,7 @@ public sealed class LuauParserTests
 public interface ILanguageParser
 {
     string LanguageId { get; }             // "luau", "csharp"
-    string[] FileExtensions { get; }       // [".luau"], [".cs"]
+    IReadOnlyList<string> FileExtensions { get; }  // [".luau"], [".cs"]
     ParseResult Parse(string filePath, ReadOnlySpan<byte> content);
 }
 
@@ -636,7 +636,7 @@ Snapshots store the complete set of `{file_path: content_hash}` pairs as a JSON 
 
 ```text
 CodeCompress/
-├── CodeCompress.sln
+├── CodeCompress.slnx                 → Solution file (.slnx XML format, .NET 10 native)
 ├── Directory.Packages.props          → Central Package Management (all versions here)
 ├── Directory.Build.props             → Shared build properties (TFM, analyzers, Nullable, ImplicitUsings)
 ├── global.json                       → .NET 10 SDK version pin
@@ -646,25 +646,40 @@ CodeCompress/
 ├── src/
 │   ├── CodeCompress.Core/              → Core library (parsers, indexing, storage)
 │   │   ├── CodeCompress.Core.csproj
+│   │   ├── ServiceCollectionExtensions.cs → DI registration: AddCodeCompressCore()
 │   │   ├── Parsers/
 │   │   │   ├── ILanguageParser.cs
 │   │   │   ├── LuauParser.cs
-│   │   │   └── CSharpParser.cs
+│   │   │   └── CSharpParser.cs         (Phase 2)
 │   │   ├── Indexing/
+│   │   │   ├── IIndexEngine.cs
 │   │   │   ├── IndexEngine.cs
+│   │   │   ├── IndexResult.cs
+│   │   │   ├── IFileHasher.cs
 │   │   │   ├── FileHasher.cs
-│   │   │   └── ChangeTracker.cs
+│   │   │   ├── IChangeTracker.cs
+│   │   │   ├── ChangeTracker.cs
+│   │   │   └── ChangeSet.cs
 │   │   ├── Storage/
-│   │   │   ├── SymbolStore.cs
+│   │   │   ├── ISymbolStore.cs
+│   │   │   ├── SqliteSymbolStore.cs
+│   │   │   ├── IConnectionFactory.cs
+│   │   │   ├── SqliteConnectionFactory.cs
 │   │   │   ├── Migrations.cs
-│   │   │   └── SqliteConnectionFactory.cs
+│   │   │   └── Fts5Sanitizer.cs
 │   │   ├── Models/
-│   │   │   ├── SymbolInfo.cs
-│   │   │   ├── DependencyInfo.cs
-│   │   │   ├── ParseResult.cs
-│   │   │   └── ProjectOutline.cs
+│   │   │   ├── SymbolInfo.cs, Symbol.cs
+│   │   │   ├── DependencyInfo.cs, Dependency.cs
+│   │   │   ├── FileRecord.cs, Repository.cs
+│   │   │   ├── ParseResult.cs, IndexSnapshot.cs
+│   │   │   ├── ProjectOutline.cs, OutlineGroup.cs
+│   │   │   ├── ModuleApi.cs, DependencyGraph.cs
+│   │   │   ├── SymbolKind.cs, Visibility.cs
+│   │   │   └── SymbolSearchResult.cs, TextSearchResult.cs, ChangedFilesResult.cs
 │   │   └── Validation/
-│   │       └── PathValidator.cs      → Path traversal prevention, canonicalization
+│   │       ├── PathValidator.cs        → Static path traversal prevention
+│   │       ├── IPathValidator.cs       → DI-injectable interface
+│   │       └── PathValidatorService.cs → Wraps static PathValidator for DI
 │   │
 │   ├── CodeCompress.Server/            → MCP server executable
 │   │   ├── CodeCompress.Server.csproj
@@ -683,13 +698,19 @@ CodeCompress/
 │   ├── CodeCompress.Core.Tests/        → Unit tests (TUnit)
 │   │   ├── CodeCompress.Core.Tests.csproj
 │   │   ├── Parsers/
-│   │   │   ├── LuauParserTests.cs
-│   │   │   └── CSharpParserTests.cs
+│   │   │   └── LuauParserTests.cs
 │   │   ├── Indexing/
 │   │   │   ├── IndexEngineTests.cs
-│   │   │   └── FileHasherTests.cs
+│   │   │   ├── FileHasherTests.cs
+│   │   │   └── ChangeTrackerTests.cs
 │   │   ├── Storage/
-│   │   │   └── SymbolStoreTests.cs
+│   │   │   ├── SymbolStoreCrudTests.cs
+│   │   │   ├── SymbolStoreQueryTests.cs
+│   │   │   ├── MigrationsTests.cs
+│   │   │   ├── SqliteConnectionFactoryTests.cs
+│   │   │   └── Fts5SanitizerTests.cs
+│   │   ├── Models/
+│   │   │   └── (model record tests)
 │   │   └── Validation/
 │   │       └── PathValidatorTests.cs → Path traversal attack tests
 │   │
