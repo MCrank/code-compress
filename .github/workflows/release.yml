@@ -28,7 +28,7 @@ jobs:
         run: dotnet build CodeCompress.slnx --no-restore -c Release
 
       - name: Test
-        run: dotnet test CodeCompress.slnx --no-build -c Release
+        run: dotnet test --solution CodeCompress.slnx --no-build -c Release
 
       - name: Determine version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
