@@ -434,8 +434,9 @@ public sealed partial class IndexEngine : IIndexEngine
         return deps;
     }
 
-    internal static string ComputeRepoId(string canonicalRoot)
+    public static string ComputeRepoId(string canonicalRoot)
     {
+        ArgumentNullException.ThrowIfNull(canonicalRoot);
         var bytes = Encoding.UTF8.GetBytes(canonicalRoot.ToUpperInvariant());
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexStringLower(hash);
