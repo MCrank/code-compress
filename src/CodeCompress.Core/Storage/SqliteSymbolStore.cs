@@ -474,13 +474,47 @@ public sealed class SqliteSymbolStore : ISymbolStore
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
+        var fileHashes = snapshot.FileHashes;
+        var symbolsJson = snapshot.SymbolsJson;
+
+        // Auto-populate file hashes and symbol data if not provided
+        if (string.IsNullOrEmpty(fileHashes))
+        {
+            var files = await GetFilesByRepoAsync(snapshot.RepoId).ConfigureAwait(false);
+            var hashDict = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var file in files)
+            {
+                hashDict[file.RelativePath] = file.ContentHash;
+            }
+
+            fileHashes = JsonSerializer.Serialize(hashDict);
+        }
+
+        if (string.IsNullOrEmpty(symbolsJson))
+        {
+            var files = await GetFilesByRepoAsync(snapshot.RepoId).ConfigureAwait(false);
+            var symbolDict = new Dictionary<string, List<SymbolSummary>>(StringComparer.Ordinal);
+            foreach (var file in files)
+            {
+                var symbols = await GetSymbolsByFileAsync(file.Id).ConfigureAwait(false);
+                if (symbols.Count > 0)
+                {
+                    symbolDict[file.RelativePath] = symbols
+                        .Select(s => new SymbolSummary(s.Name, s.Kind, s.Signature))
+                        .ToList();
+                }
+            }
+
+            symbolsJson = JsonSerializer.Serialize(symbolDict);
+        }
+
         using var command = _connection.CreateCommand();
 
 #pragma warning disable CA2100
         command.CommandText =
             """
-            INSERT INTO index_snapshots (repo_id, snapshot_label, created_at, file_hashes)
-            VALUES (@repoId, @snapshotLabel, @createdAt, @fileHashes)
+            INSERT INTO index_snapshots (repo_id, snapshot_label, created_at, file_hashes, symbols_json)
+            VALUES (@repoId, @snapshotLabel, @createdAt, @fileHashes, @symbolsJson)
             RETURNING id
             """;
 #pragma warning restore CA2100
@@ -488,7 +522,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.Parameters.AddWithValue("@repoId", snapshot.RepoId);
         command.Parameters.AddWithValue("@snapshotLabel", snapshot.SnapshotLabel);
         command.Parameters.AddWithValue("@createdAt", snapshot.CreatedAt);
-        command.Parameters.AddWithValue("@fileHashes", snapshot.FileHashes);
+        command.Parameters.AddWithValue("@fileHashes", fileHashes);
+        command.Parameters.AddWithValue("@symbolsJson", symbolsJson);
 
         var result = await command.ExecuteScalarAsync().ConfigureAwait(false);
         return (long)result!;
@@ -501,7 +536,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, repo_id, snapshot_label, created_at, file_hashes
+            SELECT id, repo_id, snapshot_label, created_at, file_hashes, symbols_json
             FROM index_snapshots WHERE id = @id
             """;
 #pragma warning restore CA2100
@@ -517,7 +552,43 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetInt64(3),
-                reader.GetString(4));
+                reader.GetString(4),
+                reader.GetString(5));
+        }
+
+        return null;
+    }
+
+    public async Task<IndexSnapshot?> GetSnapshotByLabelAsync(string repoId, string snapshotLabel)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(snapshotLabel);
+
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT id, repo_id, snapshot_label, created_at, file_hashes, symbols_json
+            FROM index_snapshots WHERE repo_id = @repoId AND snapshot_label = @label
+            ORDER BY created_at DESC LIMIT 1
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@label", snapshotLabel);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+        if (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            return new IndexSnapshot(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetString(4),
+                reader.GetString(5));
         }
 
         return null;
@@ -532,7 +603,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, repo_id, snapshot_label, created_at, file_hashes
+            SELECT id, repo_id, snapshot_label, created_at, file_hashes, symbols_json
             FROM index_snapshots WHERE repo_id = @repoId ORDER BY created_at DESC
             """;
 #pragma warning restore CA2100
@@ -549,7 +620,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetInt64(3),
-                reader.GetString(4)));
+                reader.GetString(4),
+                reader.GetString(5)));
         }
 
         return results;

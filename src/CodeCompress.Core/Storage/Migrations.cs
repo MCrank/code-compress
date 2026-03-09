@@ -60,7 +60,8 @@ public static class Migrations
             repo_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
             snapshot_label TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            file_hashes TEXT NOT NULL
+            file_hashes TEXT NOT NULL,
+            symbols_json TEXT NOT NULL DEFAULT ''
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_files_repo_id ON files(repo_id)",

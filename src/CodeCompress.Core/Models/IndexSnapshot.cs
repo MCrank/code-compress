@@ -5,4 +5,5 @@ public sealed record IndexSnapshot(
     string RepoId,
     string SnapshotLabel,
     long CreatedAt,
-    string FileHashes);
+    string FileHashes,
+    string SymbolsJson = "");
