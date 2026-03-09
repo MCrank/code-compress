@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CodeCompress.Core.Validation;
+using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
 using ModelContextProtocol.Server;
 
@@ -19,6 +20,11 @@ internal sealed class QueryTools
     private static readonly HashSet<string> ValidGroupByValues = new(StringComparer.OrdinalIgnoreCase)
     {
         "file", "kind", "directory",
+    };
+
+    private static readonly HashSet<string> ValidSymbolKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "function", "method", "type", "class", "interface", "export", "constant", "module",
     };
 
     private readonly IPathValidator _pathValidator;
@@ -299,6 +305,153 @@ internal sealed class QueryTools
             {
                 Results = results,
                 Errors = errors,
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
+    [McpServerTool(Name = "search_symbols")]
+    [Description("Search the symbol index using full-text search (supports AND, OR, NOT, prefix matching).")]
+    public async Task<string> SearchSymbols(
+        [Description("Absolute path to the project root directory")] string path,
+        [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
+        [Description("Filter by symbol kind (function, method, class, type, interface, export, constant, module)")] string? kind = null,
+        [Description("Maximum results to return (1-100)")] int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        if (kind is not null && !ValidSymbolKinds.Contains(kind))
+        {
+            return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+        }
+
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(query);
+
+        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        {
+            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            IReadOnlyList<Core.Models.SymbolSearchResult> results;
+            try
+            {
+                results = await scope.Store.SearchSymbolsAsync(
+                    scope.RepoId, sanitizedQuery, kind, clampedLimit).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // FTS5 syntax error — retry with literal phrase
+                var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+                results = await scope.Store.SearchSymbolsAsync(
+                    scope.RepoId, literalQuery, kind, clampedLimit).ConfigureAwait(false);
+            }
+
+            var response = new
+            {
+                Query = sanitizedQuery,
+                TotalMatches = results.Count,
+                Results = results.Select((r, index) => new
+                {
+                    r.Symbol.Name,
+                    r.Symbol.Kind,
+                    Parent = r.Symbol.ParentSymbol,
+                    File = r.FilePath,
+                    Line = r.Symbol.LineStart,
+                    r.Symbol.Signature,
+                    Snippet = r.Symbol.DocComment ?? string.Empty,
+                    Rank = index + 1,
+                }),
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
+    [McpServerTool(Name = "search_text")]
+    [Description("Search raw file contents using full-text search (supports AND, OR, NOT, prefix matching).")]
+    public async Task<string> SearchText(
+        [Description("Absolute path to the project root directory")] string path,
+        [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
+        [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
+        [Description("Maximum results to return (1-100)")] int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(query);
+        var sanitizedGlob = glob is not null ? Fts5QuerySanitizer.SanitizeGlob(glob) : null;
+
+        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        {
+            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        // Use null if glob sanitization produced empty string
+        if (string.IsNullOrWhiteSpace(sanitizedGlob))
+        {
+            sanitizedGlob = null;
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            IReadOnlyList<Core.Models.TextSearchResult> results;
+            try
+            {
+                results = await scope.Store.SearchTextAsync(
+                    scope.RepoId, sanitizedQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // FTS5 syntax error — retry with literal phrase
+                var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+                results = await scope.Store.SearchTextAsync(
+                    scope.RepoId, literalQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+            }
+
+            var response = new
+            {
+                Query = sanitizedQuery,
+                TotalMatches = results.Count,
+                Results = results.Select((r, index) => new
+                {
+                    r.FilePath,
+                    r.Snippet,
+                    Rank = index + 1,
+                }),
             };
 
             return JsonSerializer.Serialize(response, SerializerOptions);

@@ -759,6 +759,202 @@ internal sealed class QueryToolsTests
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
     }
 
+    [Test]
+    public async Task SearchSymbolsSimpleQueryReturnsRankedResults()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "ProcessAttack", "Method", "function CombatService:ProcessAttack()", parent: "CombatService"), "src/services/CombatService.luau", 1.0),
+            new(CreateSymbol(2, 1, "CalculateDamage", "Function", "function CalculateDamage()"), "src/utils/DamageCalc.luau", 0.8),
+        };
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>()).Returns(searchResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "damage").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(2);
+        var results = root.GetProperty("results");
+        await Assert.That(results.GetArrayLength()).IsEqualTo(2);
+        await Assert.That(results[0].GetProperty("name").GetString()).IsEqualTo("ProcessAttack");
+        await Assert.That(results[0].GetProperty("rank").GetInt32()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SearchSymbolsWithKindFilterFiltersResults()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "ProcessAttack", "Method", "function CombatService:ProcessAttack()", parent: "CombatService"), "src/services/CombatService.luau", 1.0),
+        };
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "method", Arg.Any<int>()).Returns(searchResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "attack", kind: "method").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), "method", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsInvalidKindReturnsError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "damage", kind: "invalid").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString())
+            .IsEqualTo("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_KIND");
+
+        await _store.DidNotReceive().SearchSymbolsAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsWithLimitRespectsLimit()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 5)
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "damage", limit: 5).ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 5).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsLimitClampedAbove100()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 100)
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "damage", limit: 500).ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 100).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsEmptyQueryReturnsError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query cannot be empty");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+    }
+
+    [Test]
+    public async Task SearchSymbolsInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.SearchSymbols("/../../../etc/passwd", "damage").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task SearchSymbolsMaliciousQuerySanitized()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "name:foo ^bar").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", "foo bar", Arg.Any<string?>(), Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextSimpleQueryReturnsFileMatches()
+    {
+        var searchResults = new List<TextSearchResult>
+        {
+            new("src/services/CombatService.luau", "...local damage = baseDamage * multiplier...", 1.0),
+        };
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>()).Returns(searchResults);
+
+        var result = await _tools.SearchText("/valid/path", "multiplier").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        var results = root.GetProperty("results");
+        await Assert.That(results[0].GetProperty("file_path").GetString()).IsEqualTo("src/services/CombatService.luau");
+        await Assert.That(results[0].GetProperty("snippet").GetString()).Contains("multiplier");
+    }
+
+    [Test]
+    public async Task SearchTextWithGlobFilterFiltersFiles()
+    {
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), "*.luau", Arg.Any<int>())
+            .Returns(new List<TextSearchResult>());
+
+        await _tools.SearchText("/valid/path", "damage", glob: "*.luau").ConfigureAwait(false);
+
+        await _store.Received(1).SearchTextAsync(
+            "test-repo-id", Arg.Any<string>(), "*.luau", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextMaliciousGlobSanitized()
+    {
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>())
+            .Returns(new List<TextSearchResult>());
+
+        await _tools.SearchText("/valid/path", "damage", glob: "*.luau; DROP TABLE").ConfigureAwait(false);
+
+        await _store.Received(1).SearchTextAsync(
+            "test-repo-id", Arg.Any<string>(), "*.luauDROPTABLE", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextWithLimitRespectsLimit()
+    {
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 10)
+            .Returns(new List<TextSearchResult>());
+
+        await _tools.SearchText("/valid/path", "damage", limit: 10).ConfigureAwait(false);
+
+        await _store.Received(1).SearchTextAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), 10).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextEmptyQueryReturnsError()
+    {
+        var result = await _tools.SearchText("/valid/path", "  ").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query cannot be empty");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+    }
+
+    [Test]
+    public async Task SearchTextInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.SearchText("/../../../etc/passwd", "damage").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
     private static Symbol CreateSymbol(
         long id,
         long fileId,
