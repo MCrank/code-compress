@@ -35,9 +35,9 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "dependency_graph")]
-    [Description("Get the import/require dependency graph for a project or a specific file.")]
+    [Description("Get the import/require dependency graph for a project or specific file. Shows which files depend on which others.")]
     public async Task<string> DependencyGraph(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Start traversal from a specific file (relative path). Omit for full project graph.")] string? rootFile = null,
         [Description("Direction: dependencies (outgoing), dependents (incoming), or both")] string direction = "both",
         [Description("Maximum traversal depth (1-50). Omit for unlimited.")] int? depth = null,

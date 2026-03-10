@@ -139,6 +139,7 @@ public sealed partial class IndexEngine : IIndexEngine
         filesToParse.AddRange(changeSet.ModifiedFiles);
 
         var parseResults = new ConcurrentDictionary<string, ParseResult>(StringComparer.OrdinalIgnoreCase);
+        var fileContents = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var totalSymbols = 0;
 
         await Parallel.ForEachAsync(
@@ -166,6 +167,7 @@ public sealed partial class IndexEngine : IIndexEngine
                     var bytes = await File.ReadAllBytesAsync(absPath, ct).ConfigureAwait(false);
                     var result = parser.Parse(relPath, bytes);
                     parseResults[relPath] = result;
+                    fileContents[relPath] = Encoding.UTF8.GetString(bytes);
                 }
                 catch (OperationCanceledException)
                 {
@@ -186,6 +188,7 @@ public sealed partial class IndexEngine : IIndexEngine
             {
                 await _symbolStore.DeleteSymbolsByFileAsync(delFile.Id).ConfigureAwait(false);
                 await _symbolStore.DeleteDependenciesByFileAsync(delFile.Id).ConfigureAwait(false);
+                await _symbolStore.DeleteFileContentAsync(delFile.RelativePath).ConfigureAwait(false);
                 await _symbolStore.DeleteFileAsync(delFile.Id).ConfigureAwait(false);
             }
         }
@@ -213,6 +216,11 @@ public sealed partial class IndexEngine : IIndexEngine
 
                     var deps = ConvertDependencies(pr.Dependencies, modFile.Id);
                     await _symbolStore.InsertDependenciesAsync(deps).ConfigureAwait(false);
+                }
+
+                if (fileContents.TryGetValue(modPath, out var modContent))
+                {
+                    await _symbolStore.UpsertFileContentAsync(modPath, modContent).ConfigureAwait(false);
                 }
             }
         }
@@ -267,6 +275,11 @@ public sealed partial class IndexEngine : IIndexEngine
 
                 var deps = ConvertDependencies(pr.Dependencies, newFile.Id);
                 await _symbolStore.InsertDependenciesAsync(deps).ConfigureAwait(false);
+            }
+
+            if (fileContents.TryGetValue(newPath, out var newContent))
+            {
+                await _symbolStore.UpsertFileContentAsync(newPath, newContent).ConfigureAwait(false);
             }
         }
 
@@ -441,8 +454,19 @@ public sealed partial class IndexEngine : IIndexEngine
     public static string ComputeRepoId(string canonicalRoot)
     {
         ArgumentNullException.ThrowIfNull(canonicalRoot);
-        var bytes = Encoding.UTF8.GetBytes(canonicalRoot.ToUpperInvariant());
-        var hash = SHA256.HashData(bytes);
+
+        // Normalize identically to SqliteConnectionFactory.ComputeRepoHash:
+        // forward-slash, trim trailing slash, case-fold for Windows.
+        var normalized = canonicalRoot
+            .Replace('\\', '/')
+            .TrimEnd('/');
+
+        if (OperatingSystem.IsWindows())
+        {
+            normalized = normalized.ToUpperInvariant();
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return Convert.ToHexStringLower(hash);
     }
 }

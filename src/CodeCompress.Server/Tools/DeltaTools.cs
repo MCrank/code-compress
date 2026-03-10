@@ -36,10 +36,10 @@ internal sealed partial class DeltaTools
     }
 
     [McpServerTool(Name = "changes_since")]
-    [Description("Show what changed since a named snapshot: new, modified, and deleted files with symbol-level diffs.")]
+    [Description("Show what changed since a named snapshot: new, modified, and deleted files with symbol-level diffs. Call snapshot_create first to set a baseline.")]
     public async Task<string> ChangesSince(
-        [Description("Absolute path to the project root directory")] string path,
-        [Description("Label of the snapshot to compare against")] string snapshotLabel,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Label of a previously created snapshot. Available labels are returned in the error if the snapshot is not found.")] string snapshotLabel,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -194,9 +194,9 @@ internal sealed partial class DeltaTools
     }
 
     [McpServerTool(Name = "file_tree")]
-    [Description("Get an annotated directory tree with file counts and line counts per directory.")]
+    [Description("Get an annotated directory tree with file counts and line counts per directory. Does NOT require an index — reads the filesystem directly.")]
     public async Task<string> FileTree(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Maximum directory depth (1-20, default 5)")] int maxDepth = 5,
         CancellationToken cancellationToken = default)
     {

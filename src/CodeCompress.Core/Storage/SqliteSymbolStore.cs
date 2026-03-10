@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CodeCompress.Core.Models;
@@ -262,6 +263,50 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning restore CA2100
 
         command.Parameters.AddWithValue("@id", fileId);
+
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+
+    // ── File Content FTS ─────────────────────────────────────────────────
+
+    public async Task UpsertFileContentAsync(string relativePath, string content)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentNullException.ThrowIfNull(content);
+
+        // Delete any existing entry first, then insert fresh
+        await DeleteFileContentAsync(relativePath).ConfigureAwait(false);
+
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            INSERT INTO file_content_fts (relative_path, content)
+            VALUES (@relativePath, @content)
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@relativePath", relativePath);
+        command.Parameters.AddWithValue("@content", content);
+
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+
+    public async Task DeleteFileContentAsync(string relativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            DELETE FROM file_content_fts WHERE relative_path = @relativePath
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@relativePath", relativePath);
 
         await command.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
@@ -852,17 +897,35 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         using var command = _connection.CreateCommand();
 
-        var placeholders = new StringBuilder();
-        for (int i = 0; i < symbolNames.Count; i++)
+        // Split names into simple (unqualified) and qualified (Parent:Child / Parent.Child)
+        var conditions = new StringBuilder();
+        var paramIndex = 0;
+
+        for (var i = 0; i < symbolNames.Count; i++)
         {
             if (i > 0)
             {
-                placeholders.Append(", ");
+                conditions.Append(" OR ");
             }
 
-            var paramName = $"@p{i}";
-            placeholders.Append(paramName);
-            command.Parameters.AddWithValue(paramName, symbolNames[i]);
+            var separatorIndex = symbolNames[i].IndexOfAny(['.', ':']);
+
+            if (separatorIndex > 0 && separatorIndex < symbolNames[i].Length - 1)
+            {
+                var parentParam = $"@parent{paramIndex}";
+                var childParam = $"@child{paramIndex}";
+                conditions.Append(CultureInfo.InvariantCulture, $"(s.parent_symbol = {parentParam} AND s.name = {childParam})");
+                command.Parameters.AddWithValue(parentParam, symbolNames[i][..separatorIndex]);
+                command.Parameters.AddWithValue(childParam, symbolNames[i][(separatorIndex + 1)..]);
+            }
+            else
+            {
+                var nameParam = $"@p{paramIndex}";
+                conditions.Append(CultureInfo.InvariantCulture, $"s.name = {nameParam}");
+                command.Parameters.AddWithValue(nameParam, symbolNames[i]);
+            }
+
+            paramIndex++;
         }
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholder names only
@@ -872,7 +935,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                     s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
              FROM symbols s
              JOIN files f ON f.id = s.file_id
-             WHERE s.name IN ({placeholders}) AND f.repo_id = @repoId
+             WHERE ({conditions}) AND f.repo_id = @repoId
              """;
 #pragma warning restore CA2100
 
