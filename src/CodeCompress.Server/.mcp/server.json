@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mcrank/code-compress",
+  "description": "MCP server that indexes codebases and provides AI agents with compressed, surgical access to code symbols via SQLite-backed persistent indexes.",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org/v3/index.json",
+      "identifier": "CodeCompress.Server",
+      "version": "0.1.0",
+      "runtimeHint": "dnx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": []
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/MCrank/code-compress",
+    "source": "github"
+  }
+}

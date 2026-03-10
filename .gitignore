@@ -53,6 +53,9 @@ ehthumbs.db
 Desktop.ini
 .DS_Store
 
+# Claude Code
+.claude/settings.local.json
+
 # Environment / secrets
 *.env
 appsettings.*.json
