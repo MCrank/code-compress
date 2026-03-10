@@ -44,8 +44,9 @@ launchSettings.json
 *.coveragexml
 coverage/
 
-# CodeCompress runtime data
-.codecompress/
+# CodeCompress index — commit index.db, ignore WAL files
+.code-compress/index.db-wal
+.code-compress/index.db-shm
 
 # OS files
 Thumbs.db

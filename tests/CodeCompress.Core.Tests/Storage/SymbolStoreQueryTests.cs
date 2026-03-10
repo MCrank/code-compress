@@ -220,6 +220,33 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(results).Count().IsEqualTo(0);
     }
 
+    [Test]
+    public async Task GetSymbolsByNamesAsyncHandlesQualifiedNames()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var results = await store.GetSymbolsByNamesAsync("repo1", ["MyClass:DoWork", "Initialize"]).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(2);
+        var names = results.Select(s => s.Name).ToList();
+        await Assert.That(names).Contains("DoWork");
+        await Assert.That(names).Contains("Initialize");
+    }
+
+    [Test]
+    public async Task GetSymbolsByNamesAsyncHandlesDotQualifiedNames()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var results = await store.GetSymbolsByNamesAsync("repo1", ["MyClass.DoWork"]).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(1);
+        await Assert.That(results[0].Name).IsEqualTo("DoWork");
+        await Assert.That(results[0].ParentSymbol).IsEqualTo("MyClass");
+    }
+
     // ── GetProjectOutlineAsync Tests ─────────────────────────────────────
 
     [Test]
@@ -537,5 +564,75 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(changes.Added).Count().IsEqualTo(0);
         await Assert.That(changes.Modified).Count().IsEqualTo(0);
         await Assert.That(changes.Removed).Count().IsEqualTo(0);
+    }
+
+    // ── File Content FTS Tests ───────────────────────────────────────────
+
+    [Test]
+    public async Task UpsertFileContentMakesContentSearchable()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        await store.UpsertFileContentAsync("src/main.luau", "local function Initialize()\n  print('hello world')\nend").ConfigureAwait(false);
+
+        var results = await store.SearchTextAsync("repo1", "hello", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].FilePath).IsEqualTo("src/main.luau");
+    }
+
+    [Test]
+    public async Task UpsertFileContentReplacesExistingContent()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        await store.UpsertFileContentAsync("src/main.luau", "old content alpha").ConfigureAwait(false);
+        await store.UpsertFileContentAsync("src/main.luau", "new content beta").ConfigureAwait(false);
+
+        var oldResults = await store.SearchTextAsync("repo1", "alpha", null, 10).ConfigureAwait(false);
+        var newResults = await store.SearchTextAsync("repo1", "beta", null, 10).ConfigureAwait(false);
+
+        await Assert.That(oldResults).Count().IsEqualTo(0);
+        await Assert.That(newResults.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task DeleteFileContentRemovesFromSearch()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        await store.UpsertFileContentAsync("src/main.luau", "searchable content gamma").ConfigureAwait(false);
+        await store.DeleteFileContentAsync("src/main.luau").ConfigureAwait(false);
+
+        var results = await store.SearchTextAsync("repo1", "gamma", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTextAsyncReturnsEmptyForUnindexedContent()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var results = await store.SearchTextAsync("repo1", "nonexistent", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTextAsyncFiltersbyRepoViaFileJoin()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        await store.UpsertFileContentAsync("src/main.luau", "unique token zeta").ConfigureAwait(false);
+
+        var results = await store.SearchTextAsync("nonexistent-repo", "zeta", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
     }
 }

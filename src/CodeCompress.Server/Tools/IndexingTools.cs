@@ -28,9 +28,9 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "index_project")]
-    [Description("Index a codebase to build a searchable symbol database.")]
+    [Description("Index a codebase to build a searchable symbol database. Must be called before any query tools. Re-running performs an incremental update — only changed files are re-parsed.")]
     public async Task<string> IndexProject(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to a specific language (e.g., 'luau')")] string? language = null,
         [Description("Glob patterns for files to include")] string[]? includePatterns = null,
         [Description("Glob patterns for files to exclude")] string[]? excludePatterns = null,
@@ -77,9 +77,9 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "snapshot_create")]
-    [Description("Create a named snapshot of the current index state for delta queries.")]
+    [Description("Create a named snapshot of the current index state. Use before making changes, then call changes_since to see a symbol-level diff.")]
     public async Task<string> SnapshotCreate(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Human-readable snapshot label")] string label,
         CancellationToken cancellationToken = default)
     {
@@ -124,9 +124,9 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "invalidate_cache")]
-    [Description("Invalidate the index cache, forcing a full re-index on the next index_project call.")]
+    [Description("Delete the entire index for a project, forcing a full re-index on the next index_project call.")]
     public async Task<string> InvalidateCache(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;

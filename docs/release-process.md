@@ -327,7 +327,7 @@ The primary package is `CodeCompress.Server` — the MCP server that AI agents c
 No install needed — `dnx` downloads and runs the package in one shot:
 
 ```bash
-dnx CodeCompress.Server --yes
+dnx CodeCompress.Server
 ```
 
 MCP clients call this command as the stdio server process. See the [README](../README.md#mcp-client-configuration) for client-specific configuration examples (Claude Code, VS Code, Claude Desktop).
@@ -346,7 +346,7 @@ codecompress-server
 On native Windows (not WSL), stdio MCP servers that use `dnx` may require the `cmd /c` wrapper:
 
 ```bash
-cmd /c dnx CodeCompress.Server --yes
+cmd /c dnx CodeCompress.Server
 ```
 
 ---
