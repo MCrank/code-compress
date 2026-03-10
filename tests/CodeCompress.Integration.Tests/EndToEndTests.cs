@@ -404,6 +404,49 @@ internal sealed class EndToEndTests : IDisposable
         await Assert.That(retrieved!.FileHashes).IsNotEqualTo(string.Empty);
     }
 
+    // ── Search Text (File Content FTS) Tests ───────────────────────────
+
+    [Test]
+    public async Task SearchTextReturnsResultsAfterIndexing()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchTextAsync(_repoId, "CombatService", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task SearchTextFindsStringLiteralsInFileContent()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Search for a keyword that appears in file content but may not be a symbol name
+        var results = await _store.SearchTextAsync(_repoId, "function", null, 50).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task SearchTextReturnsEmptyForNonexistentContent()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchTextAsync(_repoId, "zzz_nonexistent_token_xyz", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTextReturnsEmptyForWrongRepo()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchTextAsync("wrong-repo-id", "CombatService", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private async Task IndexSampleProjectAsync()

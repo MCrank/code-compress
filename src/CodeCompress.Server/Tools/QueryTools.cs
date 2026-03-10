@@ -40,9 +40,9 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed, token-efficient overview of an entire codebase with signatures only.")]
+    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Requires index_project to have been called first.")]
     public async Task<string> ProjectOutline(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
@@ -77,10 +77,10 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_module_api")]
-    [Description("Get the full public API surface of a single module file.")]
+    [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies.")]
     public async Task<string> GetModuleApi(
-        [Description("Absolute path to the project root directory")] string path,
-        [Description("Relative path to the module file (e.g., src/services/CombatService.luau)")] string modulePath,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -138,10 +138,10 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbol")]
-    [Description("Get the source code of a specific symbol by its qualified name using byte-offset seeking.")]
+    [Description("Retrieve the full source code of a specific symbol by its qualified name using byte-offset seeking.")]
     public async Task<string> GetSymbol(
-        [Description("Absolute path to the project root directory")] string path,
-        [Description("Fully qualified symbol name (e.g., CombatService:ProcessAttack)")] string symbolName,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'CombatService:ProcessAttack') or just the name for top-level symbols. Use search_symbols to discover names.")] string symbolName,
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
@@ -205,10 +205,10 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbols")]
-    [Description("Batch retrieve source code for multiple symbols by their qualified names.")]
+    [Description("Batch retrieve source code for multiple symbols in one call. More efficient than calling get_symbol repeatedly. Maximum 50 names per call.")]
     public async Task<string> GetSymbols(
-        [Description("Absolute path to the project root directory")] string path,
-        [Description("Array of fully qualified symbol names")] string[] symbolNames,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -312,9 +312,9 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using full-text search (supports AND, OR, NOT, prefix matching).")]
+    [Description("Search the symbol index using FTS5 full-text search. Supports AND, OR, NOT, quoted phrases, and prefix* matching.")]
     public async Task<string> SearchSymbols(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("Filter by symbol kind (function, method, class, type, interface, export, constant, module)")] string? kind = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
@@ -387,9 +387,9 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw file contents using full-text search (supports AND, OR, NOT, prefix matching).")]
+    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob filtering.")]
     public async Task<string> SearchText(
-        [Description("Absolute path to the project root directory")] string path,
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,

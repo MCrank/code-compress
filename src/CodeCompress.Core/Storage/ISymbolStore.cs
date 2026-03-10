@@ -32,6 +32,10 @@ public interface ISymbolStore
     public Task<IndexSnapshot?> GetSnapshotByLabelAsync(string repoId, string snapshotLabel);
     public Task<IReadOnlyList<IndexSnapshot>> GetSnapshotsByRepoAsync(string repoId);
 
+    // File Content FTS
+    public Task UpsertFileContentAsync(string relativePath, string content);
+    public Task DeleteFileContentAsync(string relativePath);
+
     // Search
     public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit);
     public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit);

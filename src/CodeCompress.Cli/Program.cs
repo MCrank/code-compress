@@ -14,13 +14,6 @@ services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
 using var provider = services.BuildServiceProvider();
 
-if (args.Length == 0)
-{
-    await PrintUsageAsync().ConfigureAwait(false);
-    return 1;
-}
-
-var command = args[0];
 var serializerOptions = new JsonSerializerOptions
 {
     PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -29,7 +22,33 @@ var serializerOptions = new JsonSerializerOptions
 
 try
 {
-    return await RunCommandAsync(command, args, provider, serializerOptions).ConfigureAwait(false);
+    var cli = CliArgs.Parse(args);
+
+    if (cli.Command.Length == 0)
+    {
+        await Console.Out.WriteLineAsync(HelpText.FormatGeneralHelp()).ConfigureAwait(false);
+        return 1;
+    }
+
+    if (cli.HelpRequested)
+    {
+        await Console.Out.WriteLineAsync(HelpText.FormatCommandHelp(cli.Command)).ConfigureAwait(false);
+        return 0;
+    }
+
+    if (!HelpText.IsKnownCommand(cli.Command))
+    {
+        await Console.Error.WriteLineAsync($"Unknown command: {cli.Command}").ConfigureAwait(false);
+        await Console.Out.WriteLineAsync(HelpText.FormatGeneralHelp()).ConfigureAwait(false);
+        return 1;
+    }
+
+    return await RunCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+}
+catch (CliException ex)
+{
+    await Console.Error.WriteLineAsync($"Error: {ex.Message}").ConfigureAwait(false);
+    return 1;
 }
 catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
 {
@@ -43,50 +62,71 @@ catch (ArgumentException ex)
 }
 
 static async Task<int> RunCommandAsync(
-    string command,
-    string[] args,
+    CliArgs cli,
     ServiceProvider provider,
     JsonSerializerOptions serializerOptions)
 {
-    switch (command)
+    var cmd = cli.Command;
+    if (string.Equals(cmd, "index", StringComparison.OrdinalIgnoreCase))
     {
-        case "index":
-            return await IndexCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "outline":
-            return await OutlineCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "get-symbol":
-            return await GetSymbolCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "search":
-            return await SearchCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "search-text":
-            return await SearchTextCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "changes":
-            return await ChangesCommandAsync(args, provider).ConfigureAwait(false);
-        case "snapshot":
-            return await SnapshotCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        case "file-tree":
-            return await FileTreeCommandAsync(args, provider).ConfigureAwait(false);
-        case "deps":
-            return await DepsCommandAsync(args, provider, serializerOptions).ConfigureAwait(false);
-        default:
-            await Console.Error.WriteLineAsync($"Unknown command: {command}").ConfigureAwait(false);
-            await PrintUsageAsync().ConfigureAwait(false);
-            return 1;
+        return await IndexCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
     }
+
+    if (string.Equals(cmd, "outline", StringComparison.OrdinalIgnoreCase))
+    {
+        return await OutlineCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "get-symbol", StringComparison.OrdinalIgnoreCase))
+    {
+        return await GetSymbolCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "search-text", StringComparison.OrdinalIgnoreCase))
+    {
+        return await SearchTextCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "search", StringComparison.OrdinalIgnoreCase))
+    {
+        return await SearchCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "changes", StringComparison.OrdinalIgnoreCase))
+    {
+        return await ChangesCommandAsync(cli, provider).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "snapshot", StringComparison.OrdinalIgnoreCase))
+    {
+        return await SnapshotCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "file-tree", StringComparison.OrdinalIgnoreCase))
+    {
+        return await FileTreeCommandAsync(cli, provider).ConfigureAwait(false);
+    }
+
+    if (string.Equals(cmd, "deps", StringComparison.OrdinalIgnoreCase))
+    {
+        return await DepsCommandAsync(cli, provider, serializerOptions).ConfigureAwait(false);
+    }
+
+    throw new CliException($"Unknown command: {cli.Command}");
 }
 
-static async Task<int> IndexCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> IndexCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 2)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress index <path>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var language = cli.GetOption("language");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var result = await scope.Engine.IndexProjectAsync(scope.ProjectRoot, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        var result = await scope.Engine.IndexProjectAsync(
+            scope.ProjectRoot,
+            language,
+            cancellationToken: CancellationToken.None).ConfigureAwait(false);
 
         await Console.Out.WriteLineAsync(JsonSerializer.Serialize(
             new
@@ -102,15 +142,11 @@ static async Task<int> IndexCommandAsync(string[] args, ServiceProvider provider
     }
 }
 
-static async Task<int> OutlineCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> OutlineCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 2)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress outline <path>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
         var outline = await scope.Store.GetProjectOutlineAsync(scope.RepoId, false, "file", 3).ConfigureAwait(false);
@@ -119,22 +155,19 @@ static async Task<int> OutlineCommandAsync(string[] args, ServiceProvider provid
     }
 }
 
-static async Task<int> GetSymbolCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> GetSymbolCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 3)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress get-symbol <path> <name>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var name = cli.RequireOption("name");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, args[2]).ConfigureAwait(false);
+        var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
 
         if (symbol is null)
         {
-            await Console.Error.WriteLineAsync($"Symbol not found: {args[2]}").ConfigureAwait(false);
+            await Console.Error.WriteLineAsync($"Symbol not found: {name}").ConfigureAwait(false);
             return 1;
         }
 
@@ -143,61 +176,52 @@ static async Task<int> GetSymbolCommandAsync(string[] args, ServiceProvider prov
     }
 }
 
-static async Task<int> SearchCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> SearchCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 3)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress search <path> <query>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var query = cli.RequireOption("query");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, args[2], null, 50).ConfigureAwait(false);
+        var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
         await Console.Out.WriteLineAsync(JsonSerializer.Serialize(results, options)).ConfigureAwait(false);
         return 0;
     }
 }
 
-static async Task<int> SearchTextCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> SearchTextCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 3)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress search-text <path> <query>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var query = cli.RequireOption("query");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchTextAsync(scope.RepoId, args[2], null, 50).ConfigureAwait(false);
+        var results = await scope.Store.SearchTextAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
         await Console.Out.WriteLineAsync(JsonSerializer.Serialize(results, options)).ConfigureAwait(false);
         return 0;
     }
 }
 
-static async Task<int> ChangesCommandAsync(string[] args, ServiceProvider provider)
+static async Task<int> ChangesCommandAsync(CliArgs cli, ServiceProvider provider)
 {
-    if (args.Length < 3)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress changes <path> <label>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var label = cli.RequireOption("label");
 
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var snapshot = await scope.Store.GetSnapshotByLabelAsync(scope.RepoId, args[2]).ConfigureAwait(false);
+        var snapshot = await scope.Store.GetSnapshotByLabelAsync(scope.RepoId, label).ConfigureAwait(false);
 
         if (snapshot is null)
         {
-            await Console.Error.WriteLineAsync($"Snapshot not found: {args[2]}").ConfigureAwait(false);
+            await Console.Error.WriteLineAsync($"Snapshot not found: {label}").ConfigureAwait(false);
             return 1;
         }
 
         var changedFiles = await scope.Store.GetChangedFilesAsync(scope.RepoId, snapshot.Id).ConfigureAwait(false);
-        await Console.Out.WriteLineAsync($"Changes since snapshot \"{args[2]}\":").ConfigureAwait(false);
+        await Console.Out.WriteLineAsync($"Changes since snapshot \"{label}\":").ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  New files: {changedFiles.Added.Count}").ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  Modified files: {changedFiles.Modified.Count}").ConfigureAwait(false);
         await Console.Out.WriteLineAsync($"  Deleted files: {changedFiles.Removed.Count}").ConfigureAwait(false);
@@ -212,26 +236,22 @@ static async Task<int> ChangesCommandAsync(string[] args, ServiceProvider provid
             await Console.Out.WriteLineAsync($"  ~ {file.RelativePath}").ConfigureAwait(false);
         }
 
-        foreach (var path in changedFiles.Removed)
+        foreach (var filePath in changedFiles.Removed)
         {
-            await Console.Out.WriteLineAsync($"  - {path}").ConfigureAwait(false);
+            await Console.Out.WriteLineAsync($"  - {filePath}").ConfigureAwait(false);
         }
 
         return 0;
     }
 }
 
-static async Task<int> SnapshotCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> SnapshotCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 2)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress snapshot <path> [label]").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var label = cli.GetOption("label")
+        ?? DateTimeOffset.UtcNow.ToString("yyyy-MM-dd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
 
-    var label = args.Length >= 3 ? args[2] : DateTimeOffset.UtcNow.ToString("yyyy-MM-dd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
         var snapshot = new CodeCompress.Core.Models.IndexSnapshot(
@@ -250,16 +270,14 @@ static async Task<int> SnapshotCommandAsync(string[] args, ServiceProvider provi
     }
 }
 
-static async Task<int> FileTreeCommandAsync(string[] args, ServiceProvider provider)
+static async Task<int> FileTreeCommandAsync(CliArgs cli, ServiceProvider provider)
 {
-    if (args.Length < 2)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress file-tree <path>").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var depthStr = cli.GetOption("depth");
+    var maxDepth = depthStr is not null && int.TryParse(depthStr, out var d) ? Math.Clamp(d, 1, 20) : 5;
 
     var pathValidator = provider.GetRequiredService<IPathValidator>();
-    var validatedPath = pathValidator.ValidatePath(args[1], args[1]);
+    var validatedPath = pathValidator.ValidatePath(path, path);
 
     if (!Directory.Exists(validatedPath))
     {
@@ -267,21 +285,16 @@ static async Task<int> FileTreeCommandAsync(string[] args, ServiceProvider provi
         return 1;
     }
 
-    await PrintDirectoryTreeAsync(validatedPath, validatedPath, 5, 0).ConfigureAwait(false);
+    await PrintDirectoryTreeAsync(validatedPath, validatedPath, maxDepth, 0).ConfigureAwait(false);
     return 0;
 }
 
-static async Task<int> DepsCommandAsync(string[] args, ServiceProvider provider, JsonSerializerOptions options)
+static async Task<int> DepsCommandAsync(CliArgs cli, ServiceProvider provider, JsonSerializerOptions options)
 {
-    if (args.Length < 2)
-    {
-        await Console.Error.WriteLineAsync("Usage: codecompress deps <path> [file]").ConfigureAwait(false);
-        return 1;
-    }
+    var path = cli.RequireOption("path");
+    var rootFile = cli.GetOption("file");
 
-    var rootFile = args.Length >= 3 ? args[2] : null;
-
-    var scope = await CreateProjectScopeAsync(args[1], provider).ConfigureAwait(false);
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
         var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, "both", 3).ConfigureAwait(false);
@@ -349,24 +362,4 @@ static async Task PrintDirectoryTreeAsync(string rootPath, string currentPath, i
     {
         // Skip inaccessible directories
     }
-}
-
-static async Task PrintUsageAsync()
-{
-    await Console.Out.WriteLineAsync("""
-        CodeCompress CLI — Index and query code symbols
-
-        Usage: codecompress <command> [arguments]
-
-        Commands:
-          index <path>                  Index a project directory
-          outline <path>                Show project outline
-          get-symbol <path> <name>      Retrieve a specific symbol
-          search <path> <query>         Search symbols by name
-          search-text <path> <query>    Full-text search in files
-          changes <path> <label>        Show changes since snapshot
-          snapshot <path> [label]       Create a snapshot
-          file-tree <path>              Show annotated file tree
-          deps <path> [file]            Show dependency graph
-        """).ConfigureAwait(false);
 }
