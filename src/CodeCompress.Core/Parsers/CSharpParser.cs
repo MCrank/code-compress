@@ -20,10 +20,10 @@ public sealed partial class CSharpParser : ILanguageParser
     [GeneratedRegex(@"^\s*namespace\s+([\w.]+)\s*;")]
     private static partial Regex FileScopedNamespacePattern();
 
-    [GeneratedRegex(@"^\s*namespace\s+([\w.]+)\s*$")]
+    [GeneratedRegex(@"^\s*namespace\s+([\w.]+)\s*(?:\{.*)?$")]
     private static partial Regex BlockScopedNamespacePattern();
 
-    [GeneratedRegex(@"^\s*((?:(?:public|internal|private|protected|static|abstract|sealed|partial|readonly|file|required|new)\s+)*)(?:(class|interface|struct)\s+|(record)\s+(?:(class|struct)\s+)?)([\w]+)\s*(<[^>]+>)?\s*(.*)$")]
+    [GeneratedRegex(@"^\s*((?:(?:public|internal|private|protected|static|abstract|sealed|partial|readonly|file|required|new)\s+)*)(?:(class|interface|struct)\s+|(record)\s+(?:(class|struct)\s+)?)([\w]+)\s*(.*)$")]
     private static partial Regex TypeDeclarationPattern();
 
     [GeneratedRegex(@"^\s*((?:(?:public|internal|private|protected|static|abstract|sealed|partial|readonly|file|required|new)\s+)*)enum\s+(\w+)\s*(.*)$")]
@@ -798,11 +798,13 @@ public sealed partial class CSharpParser : ILanguageParser
 
         var docComment = BuildDocComment(docCommentLines);
         var currentDepth = GetCurrentBraceDepth(parentStack);
+        var namespaceName = match.Groups[1].Value;
+        var signature = $"namespace {namespaceName}";
 
         parentStack.Add(new PendingType(
-            Name: match.Groups[1].Value,
+            Name: namespaceName,
             Kind: SymbolKind.Module,
-            Signature: trimmed,
+            Signature: signature,
             ParentName: null,
             ByteOffset: byteOffset,
             LineStart: lineNumber,
@@ -885,8 +887,10 @@ public sealed partial class CSharpParser : ILanguageParser
         var recordKeyword = match.Groups[3].Value;
         var recordSubKeyword = match.Groups[4].Value;
         var name = match.Groups[5].Value;
-        var genericParams = match.Groups[6].Value;
-        var rest = match.Groups[7].Value.Trim();
+        var restRaw = match.Groups[6].Value.Trim();
+
+        // Extract generic parameters using balanced angle-bracket matching
+        var (genericParams, rest) = ExtractGenericParameters(restRaw);
 
         SymbolKind kind;
         string keyword;
@@ -1160,6 +1164,34 @@ public sealed partial class CSharpParser : ILanguageParser
         }
 
         return -1;
+    }
+
+    private static (string? GenericPart, string Remainder) ExtractGenericParameters(string text)
+    {
+        if (text.Length == 0 || text[0] != '<')
+        {
+            return (null, text);
+        }
+
+        var depth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '<')
+            {
+                depth++;
+            }
+            else if (text[i] == '>')
+            {
+                depth--;
+            }
+
+            if (depth == 0)
+            {
+                return (text[..(i + 1)], text[(i + 1)..].TrimStart());
+            }
+        }
+
+        return (null, text); // Unbalanced — treat as no generics
     }
 
     private static int FindSignatureEnd(string text)

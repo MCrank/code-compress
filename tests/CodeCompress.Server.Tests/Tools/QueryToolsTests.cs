@@ -787,7 +787,7 @@ internal sealed class QueryToolsTests
         {
             new(CreateSymbol(1, 1, "ProcessAttack", "Method", "function CombatService:ProcessAttack()", parent: "CombatService"), "src/services/CombatService.luau", 1.0),
         };
-        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "method", Arg.Any<int>()).Returns(searchResults);
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "Method", Arg.Any<int>()).Returns(searchResults);
 
         var result = await _tools.SearchSymbols("/valid/path", "attack", kind: "method").ConfigureAwait(false);
 
@@ -796,7 +796,43 @@ internal sealed class QueryToolsTests
         await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
 
         await _store.Received(1).SearchSymbolsAsync(
-            "test-repo-id", Arg.Any<string>(), "method", Arg.Any<int>()).ConfigureAwait(false);
+            "test-repo-id", Arg.Any<string>(), "Method", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsKindNormalizedToPascalCase()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "WorkItem", kind: "class").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsKindUppercaseNormalized()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "WorkItem", kind: "CLASS").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsKindMixedCaseNormalized()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "WorkItem", kind: "cLaSs").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), "Class", Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
