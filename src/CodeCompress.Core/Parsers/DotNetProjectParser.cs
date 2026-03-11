@@ -135,7 +135,10 @@ public sealed class DotNetProjectParser : ILanguageParser
         }
 
         // Extract project name from path (e.g., "..\Foo\Foo.csproj" → "Foo")
-        var fileName = Path.GetFileNameWithoutExtension(includePath);
+        // Normalize backslashes to forward slashes for cross-platform compatibility,
+        // since MSBuild paths in XML often use backslashes regardless of OS.
+        var normalizedPath = includePath.Replace('\\', '/');
+        var fileName = Path.GetFileNameWithoutExtension(normalizedPath);
         if (string.IsNullOrEmpty(fileName))
         {
             return;
