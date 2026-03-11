@@ -966,7 +966,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Aggregation ─────────────────────────────────────────────────────
 
-    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth)
+    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(groupBy);
@@ -991,6 +991,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
             sql.Append(" AND s.visibility != 'Private'");
         }
 
+        if (pathFilter is not null)
+        {
+            sql.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
+        }
+
         sql.Append(" ORDER BY f.relative_path, s.line_start");
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
@@ -998,6 +1003,12 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning restore CA2100
 
         command.Parameters.AddWithValue("@repoId", repoId);
+
+        if (pathFilter is not null)
+        {
+            var prefix = pathFilter.EndsWith('/') ? pathFilter : pathFilter + "/";
+            command.Parameters.AddWithValue("@pathPrefix", prefix);
+        }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
 

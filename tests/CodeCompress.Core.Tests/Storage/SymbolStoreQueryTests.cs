@@ -247,6 +247,127 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(results[0].ParentSymbol).IsEqualTo("MyClass");
     }
 
+    // ── GetProjectOutlineAsync PathFilter Tests ─────────────────────────
+
+    private static async Task<SqliteSymbolStore> SeedMultiFileDataAsync(SqliteConnection connection)
+    {
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "luau", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file1 = new FileRecord(0, "repo1", "src/services/Combat.luau", "hash1", 512, 20, 1000, 1000);
+        var file2 = new FileRecord(0, "repo1", "src/utils/Math.luau", "hash2", 256, 10, 1000, 1000);
+        var file3 = new FileRecord(0, "repo1", "src/Core/Models/Foo.luau", "hash3", 128, 5, 1000, 1000);
+        var file4 = new FileRecord(0, "repo1", "src/Core/Services/Bar.luau", "hash4", 128, 5, 1000, 1000);
+        var file5 = new FileRecord(0, "repo1", "src/servicesExtra/Bonus.luau", "hash5", 128, 5, 1000, 1000);
+        await store.InsertFilesAsync([file1, file2, file3, file4, file5]).ConfigureAwait(false);
+
+        var f1 = await store.GetFileByPathAsync("repo1", "src/services/Combat.luau").ConfigureAwait(false);
+        var f2 = await store.GetFileByPathAsync("repo1", "src/utils/Math.luau").ConfigureAwait(false);
+        var f3 = await store.GetFileByPathAsync("repo1", "src/Core/Models/Foo.luau").ConfigureAwait(false);
+        var f4 = await store.GetFileByPathAsync("repo1", "src/Core/Services/Bar.luau").ConfigureAwait(false);
+        var f5 = await store.GetFileByPathAsync("repo1", "src/servicesExtra/Bonus.luau").ConfigureAwait(false);
+
+        await store.InsertSymbolsAsync([
+            new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null),
+            new Symbol(0, f2!.Id, "Add", "Function", "function Add(a, b)", null, 0, 30, 1, 3, "Public", null),
+            new Symbol(0, f3!.Id, "FooModel", "Class", "class FooModel", null, 0, 40, 1, 4, "Public", null),
+            new Symbol(0, f4!.Id, "BarService", "Class", "class BarService", null, 0, 40, 1, 4, "Public", null),
+            new Symbol(0, f5!.Id, "BonusFunc", "Function", "function BonusFunc()", null, 0, 30, 1, 3, "Private", null),
+        ]).ConfigureAwait(false);
+
+        return store;
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncFiltersByPathPrefix()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services").ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("Attack");
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterWithTrailingSlash()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services/").ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("Attack");
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterNestedPath()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/Core/Models").ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("FooModel");
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterNoMatchReturnsEmptyGroups()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "nonexistent").ConfigureAwait(false);
+
+        await Assert.That(outline.Groups).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterNullReturnsAllSymbols()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, null).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterCombinesWithIncludePrivate()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", false, "file", 1, "src/servicesExtra").ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPathFilterDoesNotMatchPartialDirectoryName()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services").ConfigureAwait(false);
+
+        var allFiles = outline.Groups.Select(g => g.Name).ToList();
+        await Assert.That(allFiles).DoesNotContain("src/servicesExtra/Bonus.luau");
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("Attack");
+    }
+
     // ── GetProjectOutlineAsync Tests ─────────────────────────────────────
 
     [Test]

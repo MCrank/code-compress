@@ -47,6 +47,7 @@ internal sealed class QueryTools
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
+        [Description("Filter outline to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -64,6 +65,19 @@ internal sealed class QueryTools
             return SerializeError("Invalid group_by value. Must be one of: file, kind, directory", "INVALID_GROUP_BY");
         }
 
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
+        }
+
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
@@ -71,7 +85,8 @@ internal sealed class QueryTools
                 scope.RepoId,
                 includePrivate,
                 groupBy,
-                maxDepth ?? 0).ConfigureAwait(false);
+                maxDepth ?? 0,
+                validatedPathFilter).ConfigureAwait(false);
 
             return FormatOutline(outline);
         }
