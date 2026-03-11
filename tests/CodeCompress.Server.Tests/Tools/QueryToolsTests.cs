@@ -196,11 +196,90 @@ internal sealed class QueryToolsTests
     {
         var distinctivePath = "/very/unique/distinctive/test/path/12345";
         var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>()).Returns(outline);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>()).Returns(outline);
 
         var result = await _tools.ProjectOutline(distinctivePath).ConfigureAwait(false);
 
         await Assert.That(result).DoesNotContain(distinctivePath);
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterPassesToStore()
+    {
+        var outline = new ProjectOutline("test-repo-id", []);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), "src/services").Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", pathFilter: "src/services").ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), "src/services").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterNullPassesNullToStore()
+    {
+        var outline = new ProjectOutline("test-repo-id", []);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), null).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), null).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterWithTraversalReturnsError()
+    {
+        var result = await _tools.ProjectOutline("/valid/path", pathFilter: "../etc").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Invalid path filter");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterAbsolutePathReturnsError()
+    {
+        var result = await _tools.ProjectOutline("/valid/path", pathFilter: "/etc/passwd").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterEmptyStringReturnsError()
+    {
+        var result = await _tools.ProjectOutline("/valid/path", pathFilter: "  ").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterDoesNotEchoRawFilter()
+    {
+        var maliciousFilter = "src/<script>alert(1)</script>";
+        var outline = new ProjectOutline("test-repo-id", []);
+        _store.GetProjectOutlineAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>()).Returns(outline);
+
+        var result = await _tools.ProjectOutline("/valid/path", pathFilter: maliciousFilter).ConfigureAwait(false);
+
+        await Assert.That(result).DoesNotContain(maliciousFilter);
+    }
+
+    [Test]
+    public async Task ProjectOutlinePathFilterCombinesWithGroupBy()
+    {
+        var outline = new ProjectOutline("test-repo-id", []);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "kind", Arg.Any<int>(), "src/services").Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", groupBy: "kind", pathFilter: "src/services").ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "kind", Arg.Any<int>(), "src/services").ConfigureAwait(false);
     }
 
     [Test]

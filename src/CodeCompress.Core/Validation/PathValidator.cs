@@ -99,6 +99,50 @@ public static class PathValidator
         }
     }
 
+    /// <summary>
+    /// Validates a path filter prefix used for scoping queries to a subdirectory.
+    /// Unlike ValidatePath/ValidateRelativePath, this is not a filesystem path —
+    /// it's a prefix match against stored relative_path values.
+    /// Returns the normalized, sanitized prefix.
+    /// </summary>
+    public static string ValidatePathFilter(string pathFilter)
+    {
+        ValidateInputNotEmpty(pathFilter, nameof(pathFilter));
+        RejectNullBytes(pathFilter, nameof(pathFilter));
+
+        // Normalize backslashes to forward slashes
+        var normalized = pathFilter.Replace('\\', '/');
+
+        // Trim whitespace
+        normalized = normalized.Trim();
+
+        // Reject absolute paths
+        if (normalized.StartsWith('/') || (normalized.Length >= 2 && normalized[1] == ':'))
+        {
+            throw new ArgumentException("Path filter must be a relative path.", nameof(pathFilter));
+        }
+
+        // Reject parent traversal
+        if (normalized.Split('/').Any(segment => segment == ".."))
+        {
+            throw new ArgumentException("Path filter must not contain parent directory traversal.", nameof(pathFilter));
+        }
+
+        // Strip LIKE wildcards to prevent unintended pattern matching
+        normalized = normalized.Replace("%", string.Empty, StringComparison.Ordinal)
+                               .Replace("_", string.Empty, StringComparison.Ordinal);
+
+        // Strip trailing slash
+        normalized = normalized.TrimEnd('/');
+
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new ArgumentException("Path filter is empty after sanitization.", nameof(pathFilter));
+        }
+
+        return normalized;
+    }
+
     private static void ValidateInputNotEmpty(string value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value))

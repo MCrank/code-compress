@@ -45,7 +45,7 @@ public interface ISymbolStore
     public Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames);
 
     // Aggregation
-    public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth);
+    public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null);
     public Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath);
     public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);

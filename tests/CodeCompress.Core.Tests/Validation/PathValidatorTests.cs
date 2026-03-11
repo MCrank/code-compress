@@ -258,4 +258,103 @@ internal sealed class PathValidatorTests
 
         await Assert.That(result).IsEqualTo(Path.GetFullPath(literalPath));
     }
+
+    // ── ValidatePathFilter Tests ─────────────────────────────────
+
+    [Test]
+    public async Task ValidatePathFilterReturnsNormalizedPrefix()
+    {
+        var result = PathValidator.ValidatePathFilter("src/Core/Models/");
+
+        await Assert.That(result).IsEqualTo("src/Core/Models");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterStripsTrailingSlash()
+    {
+        var result = PathValidator.ValidatePathFilter("src/services/");
+
+        await Assert.That(result).IsEqualTo("src/services");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterNoTrailingSlashPassesThrough()
+    {
+        var result = PathValidator.ValidatePathFilter("src/services");
+
+        await Assert.That(result).IsEqualTo("src/services");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterNormalizesBackslashes()
+    {
+        var result = PathValidator.ValidatePathFilter("src\\Core\\Models");
+
+        await Assert.That(result).IsEqualTo("src/Core/Models");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterTrimsWhitespace()
+    {
+        var result = PathValidator.ValidatePathFilter("  src/Core  ");
+
+        await Assert.That(result).IsEqualTo("src/Core");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task ValidatePathFilterRejectsNullOrEmpty(string input)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Task.FromResult(PathValidator.ValidatePathFilter(input)));
+    }
+
+    [Test]
+    public async Task ValidatePathFilterRejectsNull()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Task.FromResult(PathValidator.ValidatePathFilter(null!)));
+    }
+
+    [Test]
+    [Arguments("../etc")]
+    [Arguments("src/../../etc")]
+    public async Task ValidatePathFilterRejectsParentTraversal(string input)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Task.FromResult(PathValidator.ValidatePathFilter(input)));
+    }
+
+    [Test]
+    [Arguments("/etc/passwd")]
+    [Arguments("C:\\Windows")]
+    public async Task ValidatePathFilterRejectsAbsolutePath(string input)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Task.FromResult(PathValidator.ValidatePathFilter(input)));
+    }
+
+    [Test]
+    public async Task ValidatePathFilterRejectsNullBytes()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Task.FromResult(PathValidator.ValidatePathFilter("src\0/evil")));
+    }
+
+    [Test]
+    public async Task ValidatePathFilterAcceptsSingleSegment()
+    {
+        var result = PathValidator.ValidatePathFilter("src");
+
+        await Assert.That(result).IsEqualTo("src");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterStripsLikeWildcards()
+    {
+        var result = PathValidator.ValidatePathFilter("src/%models_");
+
+        await Assert.That(result).IsEqualTo("src/models");
+    }
 }
