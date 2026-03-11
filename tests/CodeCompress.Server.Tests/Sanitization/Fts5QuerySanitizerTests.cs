@@ -1,3 +1,4 @@
+using CodeCompress.Core.Storage;
 using CodeCompress.Server.Sanitization;
 
 namespace CodeCompress.Server.Tests.Sanitization;
@@ -178,5 +179,79 @@ internal sealed class Fts5QuerySanitizerTests
         var result = Fts5QuerySanitizer.Sanitize("damage AND health");
 
         await Assert.That(result).IsEqualTo("damage AND health");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobPlainTextReturnsFts5Strategy()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("OrderService");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("OrderService");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobPrefixReturnsPrefixStrategy()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("AddMaestro*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Prefix);
+        await Assert.That(result.Fts5Query).IsEqualTo("AddMaestro*");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobSuffixReturnsSqlLikeStrategy()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("*Handler");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.SqlLike);
+        await Assert.That(result.SqlLikePattern).IsEqualTo("%Handler");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobContainsReturnsSqlLikeStrategy()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("*Maestro*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.SqlLike);
+        await Assert.That(result.SqlLikePattern).IsEqualTo("%Maestro%");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobComplexPatternReturnsSqlLikeStrategy()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("I*Service");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.SqlLike);
+        await Assert.That(result.SqlLikePattern).IsEqualTo("I%Service");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobEmptyReturnsEmptyFts5()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobWildcardOnlyReturnsEmptyFts5()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobPrefixWithColumnFilterSanitized()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("name:Add*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Prefix);
+        await Assert.That(result.Fts5Query).IsEqualTo("Add*");
     }
 }

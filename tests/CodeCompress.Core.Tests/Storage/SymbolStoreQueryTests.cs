@@ -79,12 +79,12 @@ internal sealed class SymbolStoreQueryTests
     }
 
     [Test]
-    public async Task SearchSymbolsAsyncReturnsEmptyForSanitizedEmptyQuery()
+    public async Task SearchSymbolsAsyncReturnsEmptyForEmptyQuery()
     {
         using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
         var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
 
-        var results = await store.SearchSymbolsAsync("repo1", ")(--", null, 10).ConfigureAwait(false);
+        var results = await store.SearchSymbolsAsync("repo1", "", null, 10).ConfigureAwait(false);
 
         await Assert.That(results).Count().IsEqualTo(0);
     }

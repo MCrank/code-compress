@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CodeCompress.Core.Models;
+using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
@@ -328,11 +329,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search. Supports AND, OR, NOT, quoted phrases, and prefix* matching.")]
+    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Optionally filter by file path.")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
+        [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
         [Description("Filter by symbol kind (function, method, class, type, interface, export, constant, module)")] string? kind = null,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models')")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
@@ -351,6 +353,11 @@ internal sealed class QueryTools
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
 
+        if (GlobPattern.IsWildcardOnly(query))
+        {
+            return SerializeError("Search query is too broad — provide at least one non-wildcard term", "QUERY_TOO_BROAD");
+        }
+
         if (kind is not null)
         {
             if (!ValidSymbolKinds.Contains(kind))
@@ -365,10 +372,23 @@ internal sealed class QueryTools
             }
         }
 
-        var clampedLimit = Math.Clamp(limit, 1, 100);
-        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(query);
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
+        }
 
-        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        var clampedLimit = Math.Clamp(limit, 1, 100);
+        var glob = Fts5QuerySanitizer.SanitizeAsGlob(query);
+
+        if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern))
         {
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
@@ -380,19 +400,20 @@ internal sealed class QueryTools
             try
             {
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, sanitizedQuery, kind, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, glob.Fts5Query, kind, clampedLimit, validatedPathFilter, glob.SqlLikePattern).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
                 // FTS5 syntax error — retry with literal phrase
                 var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, literalQuery, kind, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, literalQuery, kind, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
+            var displayQuery = !string.IsNullOrEmpty(glob.Fts5Query) ? glob.Fts5Query : glob.SqlLikePattern ?? query;
             var response = new
             {
-                Query = sanitizedQuery,
+                Query = displayQuery,
                 TotalMatches = results.Count,
                 Results = results.Select((r, index) => new
                 {
@@ -412,11 +433,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob filtering.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob and path filtering.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Config')")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
@@ -433,6 +455,19 @@ internal sealed class QueryTools
         if (string.IsNullOrWhiteSpace(query))
         {
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
         }
 
         var clampedLimit = Math.Clamp(limit, 1, 100);
@@ -457,14 +492,14 @@ internal sealed class QueryTools
             try
             {
                 results = await scope.Store.SearchTextAsync(
-                    scope.RepoId, sanitizedQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, sanitizedQuery, sanitizedGlob, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
                 // FTS5 syntax error — retry with literal phrase
                 var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
                 results = await scope.Store.SearchTextAsync(
-                    scope.RepoId, literalQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, literalQuery, sanitizedGlob, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
             var response = new
