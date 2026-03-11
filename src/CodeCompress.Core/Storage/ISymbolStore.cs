@@ -37,8 +37,8 @@ public interface ISymbolStore
     public Task DeleteFileContentAsync(string relativePath);
 
     // Search
-    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit);
-    public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit);
+    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null);
+    public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null);
 
     // Lookups
     public Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName);

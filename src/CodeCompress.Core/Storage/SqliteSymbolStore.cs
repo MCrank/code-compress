@@ -681,13 +681,15 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Search ──────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit)
+    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(query);
 
-        var sanitized = Fts5Sanitizer.Sanitize(query);
-        if (sanitized.Length == 0)
+        var useFts5 = query.Length > 0;
+        var useLike = !string.IsNullOrEmpty(nameLikePattern);
+
+        if (!useFts5 && !useLike)
         {
             return [];
         }
@@ -697,20 +699,47 @@ public sealed class SqliteSymbolStore : ISymbolStore
         using var command = _connection.CreateCommand();
 
         var sql = new StringBuilder();
-        sql.Append(
-            """
-            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
-                   f.relative_path, bm25(symbols_fts) AS rank
-            FROM symbols_fts
-            JOIN symbols s ON s.id = symbols_fts.rowid
-            JOIN files f ON f.id = s.file_id
-            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
-            """);
+
+        if (useFts5)
+        {
+            sql.Append(
+                """
+                SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       f.relative_path, bm25(symbols_fts) AS rank
+                FROM symbols_fts
+                JOIN symbols s ON s.id = symbols_fts.rowid
+                JOIN files f ON f.id = s.file_id
+                WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+                """);
+
+            if (useLike)
+            {
+                sql.Append(@" AND s.name LIKE @namePattern ESCAPE '!'");
+            }
+        }
+        else
+        {
+            sql.Append(
+                """
+                SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       f.relative_path, 0.0 AS rank
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.repo_id = @repoId
+                """);
+            sql.Append(@" AND s.name LIKE @namePattern ESCAPE '!'");
+        }
 
         if (kind is not null)
         {
             sql.Append(" AND s.kind = @kind");
+        }
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
         }
 
         sql.Append(" ORDER BY rank LIMIT @limit");
@@ -719,13 +748,29 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText = sql.ToString();
 #pragma warning restore CA2100
 
-        command.Parameters.AddWithValue("@query", sanitized);
+        if (useFts5)
+        {
+            command.Parameters.AddWithValue("@query", query);
+        }
+
+        if (useLike)
+        {
+            command.Parameters.AddWithValue("@namePattern", nameLikePattern);
+        }
+
         command.Parameters.AddWithValue("@repoId", repoId);
         command.Parameters.AddWithValue("@limit", clampedLimit);
 
         if (kind is not null)
         {
             command.Parameters.AddWithValue("@kind", kind);
+        }
+
+        if (pathFilter is not null)
+        {
+            // Normalize to OS-native separator to match stored relative_path values
+            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -753,13 +798,12 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return results;
     }
 
-    public async Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit)
+    public async Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(query);
 
-        var sanitized = Fts5Sanitizer.Sanitize(query);
-        if (sanitized.Length == 0)
+        if (query.Length == 0)
         {
             return [];
         }
@@ -783,19 +827,30 @@ public sealed class SqliteSymbolStore : ISymbolStore
             sql.Append(" AND fts.relative_path GLOB @glob");
         }
 
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND fts.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
         sql.Append(" ORDER BY rank LIMIT @limit");
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
         command.CommandText = sql.ToString();
 #pragma warning restore CA2100
 
-        command.Parameters.AddWithValue("@query", sanitized);
+        command.Parameters.AddWithValue("@query", query);
         command.Parameters.AddWithValue("@repoId", repoId);
         command.Parameters.AddWithValue("@limit", clampedLimit);
 
         if (glob is not null)
         {
             command.Parameters.AddWithValue("@glob", glob);
+        }
+
+        if (pathFilter is not null)
+        {
+            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);

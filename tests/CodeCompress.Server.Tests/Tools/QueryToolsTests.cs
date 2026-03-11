@@ -1070,6 +1070,128 @@ internal sealed class QueryToolsTests
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
     }
 
+    [Test]
+    public async Task SearchSymbolsWildcardOnlyQueryReturnsError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "*").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query is too broad — provide at least one non-wildcard term");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("QUERY_TOO_BROAD");
+    }
+
+    [Test]
+    public async Task SearchSymbolsPrefixGlobPassesFts5PrefixQuery()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "AddMaestro*").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", "AddMaestro*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsSuffixGlobPassesSqlLikePattern()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Handler")
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "*Handler").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Handler").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsContainsGlobPassesSqlLikePattern()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Maestro%")
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "*Maestro*").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Maestro%").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsComplexGlobPassesSqlLikePattern()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "I%Service")
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "I*Service").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "I%Service").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsWithPathFilterPassesValidatedFilter()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Core", Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "Order", pathFilter: "src/Core/").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Core", Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchSymbolsInvalidPathFilterReturnsError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "Order", pathFilter: "../../etc/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Invalid path filter");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task SearchTextWithPathFilterPassesValidatedFilter()
+    {
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config")
+            .Returns(new List<TextSearchResult>());
+
+        await _tools.SearchText("/valid/path", "connectionString", pathFilter: "src/Config/").ConfigureAwait(false);
+
+        await _store.Received(1).SearchTextAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextInvalidPathFilterReturnsError()
+    {
+        var result = await _tools.SearchText("/valid/path", "damage", pathFilter: "../../etc/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Invalid path filter");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task SearchSymbolsPlainQueryStillWorksFts5()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "OrderService", "Class", "public class OrderService"), "src/OrderService.cs", 1.0),
+        };
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(searchResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "OrderService").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+    }
+
     private static Symbol CreateSymbol(
         long id,
         long fileId,
