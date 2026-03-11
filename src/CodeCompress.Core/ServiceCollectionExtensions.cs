@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         // Parsers
         services.AddSingleton<ILanguageParser, LuauParser>();
         services.AddSingleton<ILanguageParser, CSharpParser>();
+        services.AddSingleton<ILanguageParser, DotNetProjectParser>();
 
         // Indexing
         services.AddSingleton<IFileHasher, FileHasher>();
