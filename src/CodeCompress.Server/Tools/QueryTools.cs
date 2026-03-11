@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using CodeCompress.Core.Models;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
@@ -335,9 +336,18 @@ internal sealed class QueryTools
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
 
-        if (kind is not null && !ValidSymbolKinds.Contains(kind))
+        if (kind is not null)
         {
-            return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+            if (!ValidSymbolKinds.Contains(kind))
+            {
+                return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+            }
+
+            // Normalize to PascalCase to match DB storage (SymbolKind.ToString())
+            if (Enum.TryParse<SymbolKind>(kind, ignoreCase: true, out var parsedKind))
+            {
+                kind = parsedKind.ToString();
+            }
         }
 
         var clampedLimit = Math.Clamp(limit, 1, 100);

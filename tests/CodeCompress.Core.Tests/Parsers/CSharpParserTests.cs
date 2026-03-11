@@ -1162,6 +1162,281 @@ internal sealed class CSharpParserTests
         await Assert.That(method.Visibility).IsEqualTo(Visibility.Private);
     }
 
+    // ── Block-scoped namespace with brace on same line ─────────
+
+    [Test]
+    public async Task BlockScopedNamespaceWithBraceOnSameLine()
+    {
+        var source = """
+            namespace Foo.Bar {
+              public class Baz { }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var ns = result.Symbols.First(s => s.Kind == SymbolKind.Module);
+        await Assert.That(ns.Name).IsEqualTo("Foo.Bar");
+        await Assert.That(ns.Signature).IsEqualTo("namespace Foo.Bar");
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("Baz");
+    }
+
+    [Test]
+    public async Task BlockScopedNamespaceWithBraceNoSpace()
+    {
+        var source = """
+            namespace Foo.Bar{
+            }
+            """;
+
+        var result = Parse(source);
+
+        var ns = result.Symbols.First(s => s.Kind == SymbolKind.Module);
+        await Assert.That(ns.Name).IsEqualTo("Foo.Bar");
+    }
+
+    // ── Nested generic type parameters ──────────────────────────
+
+    [Test]
+    public async Task NestedGenericTypeParametersExtracted()
+    {
+        var source = """
+            public class Repo<Dictionary<string, int>>
+            {
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("Repo");
+        await Assert.That(cls.Signature).IsEqualTo("public class Repo<Dictionary<string, int>>");
+    }
+
+    [Test]
+    public async Task DeeplyNestedGenericsExtracted()
+    {
+        var source = """
+            public class Cache<Dict<string, List<int>>>
+            {
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("Cache");
+        await Assert.That(cls.Signature).IsEqualTo("public class Cache<Dict<string, List<int>>>");
+    }
+
+    [Test]
+    public async Task GenericWithNestedGenericsAndBaseType()
+    {
+        var source = """
+            public class Foo<Dict<string, int>> : IBar
+            {
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("Foo");
+        await Assert.That(cls.Signature).IsEqualTo("public class Foo<Dict<string, int>> : IBar");
+    }
+
+    // ── Extension method tests ──────────────────────────────────
+
+    [Test]
+    public async Task ExtensionMethodWithGenericReturnType()
+    {
+        var source = """
+            public static class Extensions
+            {
+                public static IServiceCollection AddFoo(this IServiceCollection services)
+                {
+                    return services;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("AddFoo");
+        await Assert.That(method.ParentSymbol).IsEqualTo("Extensions");
+        await Assert.That(method.Signature).IsEqualTo("public static IServiceCollection AddFoo(this IServiceCollection services)");
+    }
+
+    [Test]
+    public async Task MultipleExtensionMethodsInStaticClass()
+    {
+        var source = """
+            public static class Extensions
+            {
+                public static void Foo(this string s) { }
+                public static void Bar(this string s) { }
+                public static void Baz(this string s) { }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var methods = result.Symbols.Where(s => s.Kind == SymbolKind.Method).ToList();
+        await Assert.That(methods).Count().IsEqualTo(3);
+        await Assert.That(methods[0].ParentSymbol).IsEqualTo("Extensions");
+        await Assert.That(methods[1].ParentSymbol).IsEqualTo("Extensions");
+        await Assert.That(methods[2].ParentSymbol).IsEqualTo("Extensions");
+    }
+
+    [Test]
+    public async Task ExtensionMethodWithGenericConstraints()
+    {
+        var source = """
+            public static class Extensions
+            {
+                public static T Find<T>(this IQueryable<T> query) where T : class
+                {
+                    return default;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Find");
+        await Assert.That(method.Signature).IsEqualTo("public static T Find<T>(this IQueryable<T> query) where T : class");
+    }
+
+    [Test]
+    public async Task ExtensionMethodWithAttributes()
+    {
+        var source = """
+            public static class Extensions
+            {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                public static int Count(this IEnumerable<int> source)
+                {
+                    return 0;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Count");
+    }
+
+    // ── Additional parser robustness tests ──────────────────────
+
+    [Test]
+    public async Task AbstractClassWithGenericBase()
+    {
+        var source = """
+            public abstract class BaseEntity<TId> where TId : struct
+            {
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("BaseEntity");
+        await Assert.That(cls.Signature).IsEqualTo("public abstract class BaseEntity<TId> where TId : struct");
+    }
+
+    [Test]
+    public async Task PartialClassMultipleFiles()
+    {
+        var source1 = """
+            public partial class Foo
+            {
+                public void A() { }
+            }
+            """;
+
+        var source2 = """
+            public partial class Foo
+            {
+                public void B() { }
+            }
+            """;
+
+        var result1 = Parse(source1);
+        var result2 = Parse(source2);
+
+        var cls1 = result1.Symbols.First(s => s.Kind == SymbolKind.Class);
+        var cls2 = result2.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls1.Name).IsEqualTo("Foo");
+        await Assert.That(cls2.Name).IsEqualTo("Foo");
+    }
+
+    [Test]
+    public async Task StaticClassWithMethods()
+    {
+        var source = """
+            public static class Extensions
+            {
+                public static void Foo() { }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.Name).IsEqualTo("Extensions");
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Foo");
+        await Assert.That(method.ParentSymbol).IsEqualTo("Extensions");
+    }
+
+    [Test]
+    public async Task SealedAbstractStaticModifierCombinations()
+    {
+        var source = """
+            public sealed class A { }
+            public abstract class B { }
+            public static class C { }
+            internal sealed class D { }
+            """;
+
+        var result = Parse(source);
+
+        var classes = result.Symbols.Where(s => s.Kind == SymbolKind.Class).ToList();
+        await Assert.That(classes).Count().IsEqualTo(4);
+        await Assert.That(classes[0].Name).IsEqualTo("A");
+        await Assert.That(classes[1].Name).IsEqualTo("B");
+        await Assert.That(classes[2].Name).IsEqualTo("C");
+        await Assert.That(classes[3].Name).IsEqualTo("D");
+    }
+
+    [Test]
+    public async Task RecordWithBodyAndMethods()
+    {
+        var source = """
+            public record Foo(int X)
+            {
+                public int Double() => X * 2;
+            }
+            """;
+
+        var result = Parse(source);
+
+        var rec = result.Symbols.First(s => s.Name == "Foo");
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+
+        var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
+        await Assert.That(method.Name).IsEqualTo("Double");
+        await Assert.That(method.ParentSymbol).IsEqualTo("Foo");
+    }
+
+    // ── Complex real-world file ─────────────────────────────────
+
     [Test]
     public async Task ComplexRealWorldFileAllSymbolsExtracted()
     {
