@@ -1,6 +1,7 @@
 using CodeCompress.Core;
 using CodeCompress.Core.Storage;
 using CodeCompress.Server.Scoping;
+using CodeCompress.Server.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CodeCompress.Server;
@@ -20,6 +21,12 @@ internal static class ServiceCollectionExtensions
 
         // Scoping — creates per-project scope with connection, store, and engine
         services.AddSingleton<IProjectScopeFactory, ProjectScopeFactory>();
+
+        // Activity tracking — shared singleton reset by each tool call
+        services.AddSingleton<IActivityTracker, ActivityTracker>();
+
+        // Idle timeout — BackgroundService that shuts down the server after inactivity
+        services.AddHostedService<IdleTimeoutService>();
 
         return services;
     }

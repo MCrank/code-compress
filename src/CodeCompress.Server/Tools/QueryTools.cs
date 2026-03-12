@@ -2,9 +2,12 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using CodeCompress.Core.Models;
+using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
+using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -29,14 +32,17 @@ internal sealed class QueryTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
+    private readonly IActivityTracker _activityTracker;
 
-    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
+    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
+        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "project_outline")]
@@ -46,8 +52,11 @@ internal sealed class QueryTools
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
+        [Description("Filter outline to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -63,6 +72,19 @@ internal sealed class QueryTools
             return SerializeError("Invalid group_by value. Must be one of: file, kind, directory", "INVALID_GROUP_BY");
         }
 
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
+        }
+
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
@@ -70,7 +92,8 @@ internal sealed class QueryTools
                 scope.RepoId,
                 includePrivate,
                 groupBy,
-                maxDepth ?? 0).ConfigureAwait(false);
+                maxDepth ?? 0,
+                validatedPathFilter).ConfigureAwait(false);
 
             return FormatOutline(outline);
         }
@@ -83,6 +106,8 @@ internal sealed class QueryTools
         [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -145,6 +170,8 @@ internal sealed class QueryTools
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -211,6 +238,8 @@ internal sealed class QueryTools
         [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -312,14 +341,17 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search. Supports AND, OR, NOT, quoted phrases, and prefix* matching.")]
+    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Optionally filter by file path.")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
+        [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
         [Description("Filter by symbol kind (function, method, class, type, interface, export, constant, module)")] string? kind = null,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models')")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -335,15 +367,48 @@ internal sealed class QueryTools
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
 
-        if (kind is not null && !ValidSymbolKinds.Contains(kind))
+        if (GlobPattern.IsWildcardOnly(query) && pathFilter is null)
         {
-            return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+            return SerializeError("Search query is too broad — provide at least one non-wildcard term", "QUERY_TOO_BROAD");
+        }
+
+        if (kind is not null)
+        {
+            if (!ValidSymbolKinds.Contains(kind))
+            {
+                return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+            }
+
+            // Normalize to PascalCase to match DB storage (SymbolKind.ToString())
+            if (Enum.TryParse<SymbolKind>(kind, ignoreCase: true, out var parsedKind))
+            {
+                kind = parsedKind.ToString();
+            }
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
         }
 
         var clampedLimit = Math.Clamp(limit, 1, 100);
-        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(query);
+        var glob = Fts5QuerySanitizer.SanitizeAsGlob(query);
 
-        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        // Wildcard-only query with pathFilter: browse all symbols under that path
+        if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern) && validatedPathFilter is not null)
+        {
+            glob = GlobPattern.CreateSqlLike(string.Empty, "%");
+        }
+
+        if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern))
         {
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
@@ -355,19 +420,20 @@ internal sealed class QueryTools
             try
             {
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, sanitizedQuery, kind, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, glob.Fts5Query, kind, clampedLimit, validatedPathFilter, glob.SqlLikePattern).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
                 // FTS5 syntax error — retry with literal phrase
                 var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, literalQuery, kind, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, literalQuery, kind, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
+            var displayQuery = !string.IsNullOrEmpty(glob.Fts5Query) ? glob.Fts5Query : glob.SqlLikePattern ?? query;
             var response = new
             {
-                Query = sanitizedQuery,
+                Query = displayQuery,
                 TotalMatches = results.Count,
                 Results = results.Select((r, index) => new
                 {
@@ -387,14 +453,17 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob filtering.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob and path filtering.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Config')")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -408,6 +477,19 @@ internal sealed class QueryTools
         if (string.IsNullOrWhiteSpace(query))
         {
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
         }
 
         var clampedLimit = Math.Clamp(limit, 1, 100);
@@ -432,14 +514,14 @@ internal sealed class QueryTools
             try
             {
                 results = await scope.Store.SearchTextAsync(
-                    scope.RepoId, sanitizedQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, sanitizedQuery, sanitizedGlob, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
                 // FTS5 syntax error — retry with literal phrase
                 var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
                 results = await scope.Store.SearchTextAsync(
-                    scope.RepoId, literalQuery, sanitizedGlob, clampedLimit).ConfigureAwait(false);
+                    scope.RepoId, literalQuery, sanitizedGlob, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
             var response = new

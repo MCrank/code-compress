@@ -37,15 +37,15 @@ public interface ISymbolStore
     public Task DeleteFileContentAsync(string relativePath);
 
     // Search
-    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit);
-    public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit);
+    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null);
+    public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null);
 
     // Lookups
     public Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName);
     public Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames);
 
     // Aggregation
-    public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth);
+    public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null);
     public Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath);
     public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);

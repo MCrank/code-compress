@@ -1,6 +1,6 @@
 <div align="center">
 
-# `{ CodeCompress }`
+<img src="assets/banner.png" alt="CodeCompress MCP Server" width="100%" />
 
 **Persistent code index for AI agents. Ask for exactly what you need.**
 
@@ -45,11 +45,6 @@ Pick your tool and run one command — that's it.
 claude mcp add --transport stdio codecompress -- dnx CodeCompress.Server --yes
 ```
 
-> **Windows (not WSL)?** Use `cmd /c` wrapper:
-> ```bash
-> claude mcp add --transport stdio codecompress -- cmd /c dnx CodeCompress.Server --yes
-> ```
-
 </details>
 
 <details>
@@ -68,8 +63,6 @@ Create `.vscode/mcp.json` in your project:
   }
 }
 ```
-
-> **Windows (not WSL)?** Change `"command"` to `"cmd"` and `"args"` to `["/c", "dnx", "CodeCompress.Server", "--yes"]`.
 
 </details>
 
@@ -150,8 +143,8 @@ AI Agent  <── MCP (stdio) ──>  CodeCompress Server
                                  Index Engine
                                    /      \
                           Language       SQLite Store
-                          Parsers        ~/.codecompress/
-                        (Luau, C#)      {project-hash}.db
+                          Parsers        .code-compress/
+                        (Luau, C#)      index.db
 ```
 
 1. **Index** — CodeCompress walks your source files, hashes each one (SHA-256), and extracts symbols (functions, classes, types, constants) and dependencies (imports/requires) using language-specific parsers.
@@ -204,6 +197,58 @@ CodeCompress is designed to stay current with minimal effort:
 | `file_tree` | Annotated project file tree |
 | `dependency_graph` | Import/require dependency graph for a file |
 
+### Server Management
+
+| Tool | What it does |
+|------|---|
+| `stop_server` | Gracefully shut down the server to release resources and DLL locks |
+
+> **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
+
+## Server Lifecycle & Idle Timeout
+
+The CodeCompress server manages its own lifecycle to avoid consuming resources indefinitely.
+
+### Idle Timeout
+
+By default, the server **automatically shuts down after 10 minutes of inactivity** (no MCP tool calls). Every tool call resets the idle timer. The MCP client will restart the server automatically on the next tool call — the restart cost is just process startup (~1–2s), not re-indexing (the SQLite database persists on disk).
+
+| Setting | Value |
+|---|---|
+| **Default timeout** | 600 seconds (10 minutes) |
+| **Disable auto-shutdown** | Set to `0` |
+
+### Configuration
+
+The idle timeout can be configured via **environment variable** or **CLI argument**. If both are set, the CLI argument takes precedence.
+
+**Environment variable** — set `CODECOMPRESS_IDLE_TIMEOUT` (in seconds) in your MCP server config:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"],
+      "env": {
+        "CODECOMPRESS_IDLE_TIMEOUT": "120"
+      }
+    }
+  }
+}
+```
+
+**CLI argument** — pass `--idle-timeout` (in seconds):
+
+```bash
+codecompress-server --idle-timeout 120
+```
+
+### Stop Server Tool
+
+The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/file locks during development without manually killing processes. The server exits gracefully, closing all SQLite connections, and restarts automatically on the next tool call.
+
 ## Supported Languages
 
 | Language | Status | Parser |
@@ -216,18 +261,18 @@ Adding a new language requires implementing a single `ILanguageParser` interface
 
 ## Where is my data stored?
 
-All index data is stored **locally** at:
+All index data is stored **locally** in the project directory:
 
 ```
-~/.codecompress/{project-hash}.db
+<project-root>/.code-compress/index.db
 ```
 
-- One SQLite database per project
-- The project hash is derived from the canonical project path
+- One SQLite database per project, stored alongside the code
 - Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots
 - **No data leaves your machine** — no network calls, no telemetry
+- Add `.code-compress/` to your `.gitignore` (WAL and SHM files should already be excluded)
 
-To clear the index for a project, delete the corresponding `.db` file. To clear everything, delete the `~/.codecompress/` directory.
+To clear the index for a project, delete its `.code-compress/` directory.
 
 ## Security
 

@@ -447,7 +447,118 @@ internal sealed class EndToEndTests : IDisposable
         await Assert.That(results).Count().IsEqualTo(0);
     }
 
+    // ── Glob Pattern Search Tests ────────────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsFts5PrefixMatchFindsResults()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // FTS5 prefix query — "Combat*" should match CombatService, etc.
+        var results = await _store.SearchSymbolsAsync(_repoId, "Combat*", kind: null, limit: 20).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        var names = results.Select(r => r.Symbol.Name).ToList();
+        await Assert.That(names.Any(n => n.Contains("Combat", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsSqlLikeSuffixMatchFindsResults()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Suffix pattern — should use SQL LIKE '%Service'
+        var results = await _store.SearchSymbolsAsync(_repoId, query: string.Empty, kind: null, limit: 20, nameLikePattern: "%Service").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Name.EndsWith("Service", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsSqlLikeContainsMatchFindsResults()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Contains pattern — should use SQL LIKE '%Combat%'
+        var results = await _store.SearchSymbolsAsync(_repoId, query: string.Empty, kind: null, limit: 20, nameLikePattern: "%Combat%").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Name.Contains("Combat", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsEmptyQueryWithNoLikePatternReturnsEmpty()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(_repoId, query: string.Empty, kind: null, limit: 20).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchSymbolsWithPathFilterScopesToDirectory()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Filter by the Services subdirectory path
+        var servicesPath = GetDirectoryPrefix("CombatService.luau");
+        var filteredResults = await _store.SearchSymbolsAsync(_repoId, "Combat*", kind: null, limit: 20, pathFilter: servicesPath).ConfigureAwait(false);
+
+        // Filtered results should be subset
+        await Assert.That(filteredResults).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(filteredResults.All(r => r.FilePath.StartsWith(servicesPath + "/", StringComparison.OrdinalIgnoreCase)
+            || r.FilePath.StartsWith(servicesPath + "\\", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsWithNonMatchingPathFilterReturnsEmpty()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(_repoId, "CombatService", kind: null, limit: 20, pathFilter: "nonexistent/path").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTextWithPathFilterScopesToDirectory()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var servicesPath = GetDirectoryPrefix("CombatService.luau");
+        var results = await _store.SearchTextAsync(_repoId, "function", glob: null, limit: 50, pathFilter: servicesPath).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.FilePath.StartsWith(servicesPath + "/", StringComparison.OrdinalIgnoreCase)
+            || r.FilePath.StartsWith(servicesPath + "\\", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsSqlLikeWithKindFilterCombines()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // LIKE '%Service' with kind "Class" — should find service classes
+        var results = await _store.SearchSymbolsAsync(_repoId, query: string.Empty, kind: "Class", limit: 20, nameLikePattern: "%Service").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Kind == "Class" && r.Symbol.Name.EndsWith("Service", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets the directory prefix for a file in the index (without trailing separator).
+    /// </summary>
+    private string GetDirectoryPrefix(string fileName)
+    {
+        var relativePath = GetStoredRelativePath(fileName);
+        var separator = relativePath.Contains('/', StringComparison.Ordinal) ? '/' : '\\';
+        var lastSep = relativePath.LastIndexOf(separator);
+        return lastSep >= 0 ? relativePath[..lastSep] : string.Empty;
+    }
+
 
     private async Task IndexSampleProjectAsync()
     {
