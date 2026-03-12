@@ -39,6 +39,7 @@ public interface ISymbolStore
     // Search
     public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null);
     public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null);
+    public Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(string repoId, string symbolName, string projectRoot, int limit, string? pathFilter = null);
 
     // Lookups
     public Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName);

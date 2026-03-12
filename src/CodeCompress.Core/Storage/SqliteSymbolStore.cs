@@ -879,6 +879,120 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return results;
     }
 
+    public async Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(string repoId, string symbolName, string projectRoot, int limit, string? pathFilter = null)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(symbolName);
+        ArgumentNullException.ThrowIfNull(projectRoot);
+
+        if (symbolName.Length == 0)
+        {
+            return [];
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 100);
+
+        // Step 1: Use FTS5 to find files containing the symbol name
+        using var command = _connection.CreateCommand();
+
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT fts.relative_path, bm25(file_content_fts) AS rank
+            FROM file_content_fts AS fts
+            WHERE file_content_fts MATCH @query
+              AND fts.relative_path IN (SELECT relative_path FROM files WHERE repo_id = @repoId)
+            """);
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND fts.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" ORDER BY rank LIMIT @fileLimit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        // Wrap as quoted phrase for exact matching
+        var quotedName = $"\"{symbolName.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+        command.Parameters.AddWithValue("@query", quotedName);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@fileLimit", clampedLimit);
+
+        if (pathFilter is not null)
+        {
+            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var matchedFiles = new List<(string RelativePath, double Rank)>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            matchedFiles.Add((reader.GetString(0), reader.GetDouble(1)));
+        }
+
+        // Step 2: Read each matched file from disk, find line-level matches with context
+        var results = new List<ReferenceResult>();
+
+        foreach (var (relativePath, rank) in matchedFiles)
+        {
+            var fullPath = Path.Combine(projectRoot, relativePath);
+            if (!File.Exists(fullPath))
+            {
+                continue;
+            }
+
+            var lines = await File.ReadAllLinesAsync(fullPath).ConfigureAwait(false);
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].Contains(symbolName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var snippetBuilder = new StringBuilder();
+
+                // 1 line before
+                if (i > 0)
+                {
+                    snippetBuilder.AppendLine(lines[i - 1]);
+                }
+
+                // Matching line
+                snippetBuilder.AppendLine(lines[i]);
+
+                // 1 line after
+                if (i < lines.Length - 1)
+                {
+                    snippetBuilder.Append(lines[i + 1]);
+                }
+
+                results.Add(new ReferenceResult(
+                    relativePath,
+                    i + 1, // 1-based line number
+                    snippetBuilder.ToString(),
+                    rank));
+
+                if (results.Count >= clampedLimit)
+                {
+                    return results;
+                }
+            }
+
+            if (results.Count >= clampedLimit)
+            {
+                break;
+            }
+        }
+
+        return results;
+    }
+
     // ── Lookups ─────────────────────────────────────────────────────────
 
     public async Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName)
