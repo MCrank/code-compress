@@ -1061,7 +1061,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            var prefix = pathFilter.EndsWith('/') ? pathFilter : pathFilter + "/";
+            // Normalize to OS-native separator to match stored relative_path values
+            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            var prefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedPrefix
+                : normalizedPrefix + Path.DirectorySeparatorChar;
             command.Parameters.AddWithValue("@pathPrefix", prefix);
         }
 

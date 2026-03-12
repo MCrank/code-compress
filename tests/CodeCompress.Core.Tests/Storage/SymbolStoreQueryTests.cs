@@ -249,24 +249,27 @@ internal sealed class SymbolStoreQueryTests
 
     // ── GetProjectOutlineAsync PathFilter Tests ─────────────────────────
 
+    private static string OsPath(string forwardSlashPath) =>
+        forwardSlashPath.Replace('/', Path.DirectorySeparatorChar);
+
     private static async Task<SqliteSymbolStore> SeedMultiFileDataAsync(SqliteConnection connection)
     {
         var store = new SqliteSymbolStore(connection);
         var repo = new Repository("repo1", "/test/path", "TestProject", "luau", 1000, 0, 0);
         await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
 
-        var file1 = new FileRecord(0, "repo1", "src/services/Combat.luau", "hash1", 512, 20, 1000, 1000);
-        var file2 = new FileRecord(0, "repo1", "src/utils/Math.luau", "hash2", 256, 10, 1000, 1000);
-        var file3 = new FileRecord(0, "repo1", "src/Core/Models/Foo.luau", "hash3", 128, 5, 1000, 1000);
-        var file4 = new FileRecord(0, "repo1", "src/Core/Services/Bar.luau", "hash4", 128, 5, 1000, 1000);
-        var file5 = new FileRecord(0, "repo1", "src/servicesExtra/Bonus.luau", "hash5", 128, 5, 1000, 1000);
+        var file1 = new FileRecord(0, "repo1", OsPath("src/services/Combat.luau"), "hash1", 512, 20, 1000, 1000);
+        var file2 = new FileRecord(0, "repo1", OsPath("src/utils/Math.luau"), "hash2", 256, 10, 1000, 1000);
+        var file3 = new FileRecord(0, "repo1", OsPath("src/Core/Models/Foo.luau"), "hash3", 128, 5, 1000, 1000);
+        var file4 = new FileRecord(0, "repo1", OsPath("src/Core/Services/Bar.luau"), "hash4", 128, 5, 1000, 1000);
+        var file5 = new FileRecord(0, "repo1", OsPath("src/servicesExtra/Bonus.luau"), "hash5", 128, 5, 1000, 1000);
         await store.InsertFilesAsync([file1, file2, file3, file4, file5]).ConfigureAwait(false);
 
-        var f1 = await store.GetFileByPathAsync("repo1", "src/services/Combat.luau").ConfigureAwait(false);
-        var f2 = await store.GetFileByPathAsync("repo1", "src/utils/Math.luau").ConfigureAwait(false);
-        var f3 = await store.GetFileByPathAsync("repo1", "src/Core/Models/Foo.luau").ConfigureAwait(false);
-        var f4 = await store.GetFileByPathAsync("repo1", "src/Core/Services/Bar.luau").ConfigureAwait(false);
-        var f5 = await store.GetFileByPathAsync("repo1", "src/servicesExtra/Bonus.luau").ConfigureAwait(false);
+        var f1 = await store.GetFileByPathAsync("repo1", OsPath("src/services/Combat.luau")).ConfigureAwait(false);
+        var f2 = await store.GetFileByPathAsync("repo1", OsPath("src/utils/Math.luau")).ConfigureAwait(false);
+        var f3 = await store.GetFileByPathAsync("repo1", OsPath("src/Core/Models/Foo.luau")).ConfigureAwait(false);
+        var f4 = await store.GetFileByPathAsync("repo1", OsPath("src/Core/Services/Bar.luau")).ConfigureAwait(false);
+        var f5 = await store.GetFileByPathAsync("repo1", OsPath("src/servicesExtra/Bonus.luau")).ConfigureAwait(false);
 
         await store.InsertSymbolsAsync([
             new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null),
@@ -362,7 +365,7 @@ internal sealed class SymbolStoreQueryTests
         var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services").ConfigureAwait(false);
 
         var allFiles = outline.Groups.Select(g => g.Name).ToList();
-        await Assert.That(allFiles).DoesNotContain("src/servicesExtra/Bonus.luau");
+        await Assert.That(allFiles).DoesNotContain(OsPath("src/servicesExtra/Bonus.luau"));
         var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
         await Assert.That(allSymbols).Count().IsEqualTo(1);
         await Assert.That(allSymbols[0].Name).IsEqualTo("Attack");
