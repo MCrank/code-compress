@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
+using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -17,14 +18,17 @@ internal sealed partial class IndexingTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
+    private readonly IActivityTracker _activityTracker;
 
-    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
+    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
+        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "index_project")]
@@ -36,6 +40,8 @@ internal sealed partial class IndexingTools
         [Description("Glob patterns for files to exclude")] string[]? excludePatterns = null,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -83,6 +89,8 @@ internal sealed partial class IndexingTools
         [Description("Human-readable snapshot label")] string label,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -129,6 +137,8 @@ internal sealed partial class IndexingTools
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
