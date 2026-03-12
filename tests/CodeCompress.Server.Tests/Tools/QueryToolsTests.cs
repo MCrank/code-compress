@@ -1508,6 +1508,56 @@ internal sealed class QueryToolsTests
         await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task SearchSymbolsPathFilterScopesResultsToDirectory()
+    {
+        var srcSymbol = new SymbolSearchResult(
+            CreateSymbol(1, 1, "ParserBase", "Class", "public class ParserBase"),
+            "src/Core/Parsers/ParserBase.cs",
+            1.0);
+        var searchResults = new List<SymbolSearchResult> { srcSymbol };
+
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src", Arg.Any<string?>())
+            .Returns(searchResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "Parser", pathFilter: "src/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        var firstResult = root.GetProperty("results").EnumerateArray().First();
+        await Assert.That(firstResult.GetProperty("file").GetString()).IsEqualTo("src/Core/Parsers/ParserBase.cs");
+        await Assert.That(firstResult.GetProperty("name").GetString()).IsEqualTo("ParserBase");
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src", Arg.Any<string?>()).ConfigureAwait(false);
+        await _store.DidNotReceive().SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Is<string?>(p => p == null), Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task SearchTextPathFilterScopesResultsToDirectory()
+    {
+        var textResults = new List<TextSearchResult>
+        {
+            new("src/Config/Settings.cs", "var conn = \"Server=localhost\";", 1.0),
+        };
+
+        _store.SearchTextAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config")
+            .Returns(textResults);
+
+        var result = await _tools.SearchText("/valid/path", "connectionString", pathFilter: "src/Config/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        var firstResult = root.GetProperty("results").EnumerateArray().First();
+        await Assert.That(firstResult.GetProperty("file_path").GetString()).IsEqualTo("src/Config/Settings.cs");
+
+        await _store.Received(1).SearchTextAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config").ConfigureAwait(false);
+    }
+
     private static Symbol CreateSymbol(
         long id,
         long fileId,
