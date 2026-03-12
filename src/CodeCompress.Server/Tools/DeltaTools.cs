@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
+using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -25,14 +26,17 @@ internal sealed partial class DeltaTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
+    private readonly IActivityTracker _activityTracker;
 
-    public DeltaTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
+    public DeltaTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
+        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "changes_since")]
@@ -42,6 +46,8 @@ internal sealed partial class DeltaTools
         [Description("Label of a previously created snapshot. Available labels are returned in the error if the snapshot is not found.")] string snapshotLabel,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         string validatedPath;
         try
         {
@@ -200,6 +206,8 @@ internal sealed partial class DeltaTools
         [Description("Maximum directory depth (1-20, default 5)")] int maxDepth = 5,
         CancellationToken cancellationToken = default)
     {
+        _activityTracker.RecordActivity();
+
         _ = cancellationToken;
 
         string validatedPath;

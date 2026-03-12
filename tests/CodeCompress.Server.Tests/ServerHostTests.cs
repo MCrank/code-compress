@@ -2,6 +2,7 @@ using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Parsers;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
+using CodeCompress.Server.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -119,5 +120,22 @@ internal sealed class ServerHostTests
         var mcpServer = _host.Services.GetService<McpServer>();
 
         await Assert.That(mcpServer).IsNotNull();
+    }
+
+    [Test]
+    public async Task ActivityTrackerResolves()
+    {
+        var tracker = _host.Services.GetService<IActivityTracker>();
+
+        await Assert.That(tracker).IsNotNull();
+    }
+
+    [Test]
+    public async Task ActivityTrackerIsSingleton()
+    {
+        var tracker1 = _host.Services.GetService<IActivityTracker>();
+        var tracker2 = _host.Services.GetService<IActivityTracker>();
+
+        await Assert.That(tracker1).IsSameReferenceAs(tracker2!);
     }
 }

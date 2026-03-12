@@ -4,6 +4,7 @@ using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
+using CodeCompress.Server.Services;
 using CodeCompress.Server.Tools;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -17,6 +18,7 @@ internal sealed class IndexingToolsTests
     private IProjectScope _scope = null!;
     private IIndexEngine _engine = null!;
     private ISymbolStore _store = null!;
+    private IActivityTracker _activityTracker = null!;
     private IndexingTools _tools = null!;
 
     [Before(Test)]
@@ -27,6 +29,7 @@ internal sealed class IndexingToolsTests
         _scope = Substitute.For<IProjectScope>();
         _engine = Substitute.For<IIndexEngine>();
         _store = Substitute.For<ISymbolStore>();
+        _activityTracker = Substitute.For<IActivityTracker>();
 
         _scope.Engine.Returns(_engine);
         _scope.Store.Returns(_store);
@@ -34,7 +37,7 @@ internal sealed class IndexingToolsTests
         _scopeFactory.CreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_scope);
         _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>()).Returns(callInfo => callInfo.ArgAt<string>(0));
 
-        _tools = new IndexingTools(_pathValidator, _scopeFactory);
+        _tools = new IndexingTools(_pathValidator, _scopeFactory, _activityTracker);
     }
 
     [Test]
