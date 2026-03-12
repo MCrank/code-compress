@@ -46,13 +46,13 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Supports pagination via offset/maxSymbols for large codebases. Requires index_project to have been called first.")]
+    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Supports pagination via offset/maxSymbols for large codebases. Use pathFilter to scope results to a subdirectory (e.g., pathFilter='src/' to exclude test files). Requires index_project to have been called first.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
-        [Description("Filter outline to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
+        [Description("Filter outline to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module). Optional.")] string? pathFilter = null,
         [Description("Maximum number of symbols to return (1-5000, default 500). Use with offset to paginate large codebases.")] int maxSymbols = 500,
         [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
@@ -418,12 +418,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Optionally filter by file path.")]
+    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Core/Models' to target a module).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
         [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
-        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models')")] string? pathFilter = null,
+        [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module), 'lib/' (library code only).")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
@@ -530,12 +530,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob and path filtering.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Config' to target configuration).")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
-        [Description("Filter results to files under this relative directory path (e.g., 'src/Config')")] string? pathFilter = null,
+        [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Config' (configuration files only).")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
