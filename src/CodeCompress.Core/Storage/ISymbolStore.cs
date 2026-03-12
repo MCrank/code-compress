@@ -49,5 +49,6 @@ public interface ISymbolStore
     public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0);
     public Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath);
     public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
+    public Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);
 }

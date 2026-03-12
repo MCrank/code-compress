@@ -1449,6 +1449,160 @@ public sealed class SqliteSymbolStore : ISymbolStore
             edges);
     }
 
+    public async Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        // 1. Find all .csproj / .fsproj / .vbproj files in the repo
+        var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var projectExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".csproj", ".fsproj", ".vbproj" };
+
+        var projectFiles = allFiles
+            .Where(f => projectExtensions.Contains(Path.GetExtension(f.RelativePath)))
+            .ToList();
+
+        // Build lookup: normalized relative path -> FileRecord
+        var projectByNormalizedPath = new Dictionary<string, FileRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pf in projectFiles)
+        {
+            var normalized = pf.RelativePath.Replace('\\', '/');
+            projectByNormalizedPath[normalized] = pf;
+        }
+
+        // Apply project filter
+        var filteredProjects = projectFiles;
+        if (!string.IsNullOrEmpty(projectFilter))
+        {
+            filteredProjects = projectFiles
+                .Where(f => Path.GetFileNameWithoutExtension(f.RelativePath)
+                    .Contains(projectFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var projectNodes = new List<ProjectNode>();
+        var projectEdges = new List<ProjectDependencyEdge>();
+
+        foreach (var pf in filteredProjects)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(pf.RelativePath);
+            var normalizedPath = pf.RelativePath.Replace('\\', '/');
+            projectNodes.Add(new ProjectNode(projectName, normalizedPath));
+
+            // 2. Get dependencies for this project file (these are <ProjectReference> entries)
+            var deps = await GetDependenciesByFileAsync(pf.Id).ConfigureAwait(false);
+            var edges = await ResolveProjectReferencesAsync(
+                projectName, normalizedPath, deps, projectByNormalizedPath, allFiles).ConfigureAwait(false);
+            projectEdges.AddRange(edges);
+        }
+
+        // Sort nodes by name
+        projectNodes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+
+        return new ProjectDependencyResult(projectNodes, projectEdges);
+    }
+
+    private async Task<List<ProjectDependencyEdge>> ResolveProjectReferencesAsync(
+        string projectName,
+        string normalizedProjectPath,
+        IReadOnlyList<Dependency> deps,
+        Dictionary<string, FileRecord> projectByNormalizedPath,
+        IReadOnlyList<FileRecord> allFiles)
+    {
+        var edges = new List<ProjectDependencyEdge>();
+        var projectDir = Path.GetDirectoryName(normalizedProjectPath)?.Replace('\\', '/') ?? string.Empty;
+
+        // Resolve all dependency paths and match to known project files
+        var resolvedRefs = deps
+            .Select(dep =>
+            {
+                var rawCombined = projectDir.Length > 0
+                    ? projectDir + "/" + dep.RequiresPath.Replace('\\', '/')
+                    : dep.RequiresPath.Replace('\\', '/');
+                return NormalizeRelativePath(rawCombined);
+            })
+            .Select(resolvedPath => projectByNormalizedPath
+                .FirstOrDefault(kvp => kvp.Key.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)))
+            .Where(kvp => kvp.Value is not null)
+            .ToList();
+
+        // S3267: Loop cannot be simplified — body contains async calls
+#pragma warning disable S3267
+        foreach (var targetProjectFile in resolvedRefs)
+#pragma warning restore S3267
+        {
+            var targetName = Path.GetFileNameWithoutExtension(targetProjectFile.Key);
+            var sharedTypes = await GetPublicTypesForProjectAsync(targetProjectFile.Key, allFiles)
+                .ConfigureAwait(false);
+
+            edges.Add(new ProjectDependencyEdge(projectName, targetName, sharedTypes));
+        }
+
+        return edges;
+    }
+
+    private async Task<IReadOnlyList<string>> GetPublicTypesForProjectAsync(
+        string projectFilePath, IReadOnlyList<FileRecord> allFiles)
+    {
+        // Determine the project directory from its .csproj path
+        var projectDir = Path.GetDirectoryName(projectFilePath)?.Replace('\\', '/') ?? string.Empty;
+
+        // Find all source files under this project's directory (excluding .csproj, .props, etc.)
+        var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs", ".fs", ".vb", ".luau", ".lua" };
+        var sourceFiles = allFiles
+            .Where(f =>
+            {
+                var normalized = f.RelativePath.Replace('\\', '/');
+                return normalized.StartsWith(projectDir + "/", StringComparison.OrdinalIgnoreCase)
+                       && sourceExtensions.Contains(Path.GetExtension(normalized));
+            })
+            .ToList();
+
+        var publicTypes = new List<string>();
+
+        foreach (var sf in sourceFiles)
+        {
+            var symbols = await GetSymbolsByFileAsync(sf.Id).ConfigureAwait(false);
+            var types = symbols
+                .Where(sym => string.Equals(sym.Visibility, "Public", StringComparison.OrdinalIgnoreCase)
+                    && sym.ParentSymbol is null
+                    && IsTypeKind(sym.Kind))
+                .Select(sym => $"{sym.Kind}: {sym.Name}");
+
+            publicTypes.AddRange(types);
+        }
+
+        publicTypes.Sort(StringComparer.Ordinal);
+        return publicTypes;
+    }
+
+    private static bool IsTypeKind(string kind) =>
+        string.Equals(kind, "Class", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "Interface", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "Type", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRelativePath(string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var stack = new List<string>();
+
+        foreach (var segment in segments)
+        {
+            if (segment == "..")
+            {
+                if (stack.Count > 0)
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                }
+            }
+            else if (segment != ".")
+            {
+                stack.Add(segment);
+            }
+        }
+
+        return string.Join("/", stack);
+    }
+
     public async Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId)
     {
         ArgumentNullException.ThrowIfNull(repoId);

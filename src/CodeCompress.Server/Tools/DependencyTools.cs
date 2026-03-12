@@ -176,6 +176,126 @@ internal sealed class DependencyTools
         return sb.ToString();
     }
 
+    [McpServerTool(Name = "project_dependencies")]
+    [Description("Show inter-project dependency relationships in a .NET solution. Parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types.")]
+    public async Task<string> ProjectDependencies(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MySolution' or '/home/user/my-solution'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Filter to projects whose name contains this string (case-insensitive). Omit for all projects.")] string? projectFilter = null,
+        CancellationToken cancellationToken = default)
+    {
+        _activityTracker.RecordActivity();
+
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var result = await scope.Store.GetProjectDependencyGraphAsync(scope.RepoId, projectFilter)
+                .ConfigureAwait(false);
+
+            if (result.Projects.Count == 0)
+            {
+                return SerializeError("No project files (.csproj/.fsproj/.vbproj) found in index. Run index_project first.", "NO_PROJECTS");
+            }
+
+            return FormatProjectDependencies(result, projectFilter);
+        }
+    }
+
+    private static string FormatProjectDependencies(ProjectDependencyResult result, string? projectFilter)
+    {
+        var sb = new StringBuilder();
+
+        // Header
+        if (projectFilter is not null)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"Project dependencies (filter: \"{projectFilter}\"):");
+        }
+        else
+        {
+            sb.AppendLine("Project dependencies:");
+        }
+
+        sb.AppendLine();
+
+        // Build edge lookups
+        var outgoing = new Dictionary<string, List<ProjectDependencyEdge>>(StringComparer.Ordinal);
+        var incoming = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var edge in result.Edges)
+        {
+            if (!outgoing.TryGetValue(edge.FromProject, out var outList))
+            {
+                outList = [];
+                outgoing[edge.FromProject] = outList;
+            }
+
+            outList.Add(edge);
+
+            if (!incoming.TryGetValue(edge.ToProject, out var inList))
+            {
+                inList = [];
+                incoming[edge.ToProject] = inList;
+            }
+
+            inList.Add(edge.FromProject);
+        }
+
+        // Render each project node
+        foreach (var project in result.Projects)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"[{project.Name}] ({project.RelativePath})");
+
+            // Show outgoing references
+            if (outgoing.TryGetValue(project.Name, out var refs))
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  references -> {string.Join(", ", refs.Select(r => r.ToProject).Order(StringComparer.Ordinal))}");
+
+                // Show shared types per reference
+                foreach (var edge in refs.OrderBy(e => e.ToProject, StringComparer.Ordinal))
+                {
+                    if (edge.SharedTypes.Count > 0)
+                    {
+                        sb.AppendLine(CultureInfo.InvariantCulture,
+                            $"    via {edge.ToProject}: {string.Join(", ", edge.SharedTypes)}");
+                    }
+                }
+            }
+            else
+            {
+                sb.AppendLine("  references -> (none)");
+            }
+
+            // Show incoming references
+            if (incoming.TryGetValue(project.Name, out var inRefs))
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  referenced by -> {string.Join(", ", inRefs.Order(StringComparer.Ordinal))}");
+            }
+            else
+            {
+                sb.AppendLine("  referenced by -> (none)");
+            }
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine(CultureInfo.InvariantCulture,
+            $"Total: {result.Projects.Count} projects, {result.Edges.Count} project references");
+
+        return sb.ToString();
+    }
+
     private static string SerializeError(string error, string code) =>
         JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
 }
