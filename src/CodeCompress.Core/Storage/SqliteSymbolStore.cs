@@ -734,7 +734,14 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (kind is not null)
         {
-            sql.Append(" AND s.kind = @kind");
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                sql.Append(" AND s.kind IN (@kind, @kindEnum)");
+            }
+            else
+            {
+                sql.Append(" AND s.kind = @kind");
+            }
         }
 
         if (pathFilter is not null)
@@ -764,6 +771,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
         if (kind is not null)
         {
             command.Parameters.AddWithValue("@kind", kind);
+
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                command.Parameters.AddWithValue("@kindEnum", nameof(SymbolKind.Enum));
+            }
         }
 
         if (pathFilter is not null)
@@ -862,6 +874,120 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetDouble(2)));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(string repoId, string symbolName, string projectRoot, int limit, string? pathFilter = null)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(symbolName);
+        ArgumentNullException.ThrowIfNull(projectRoot);
+
+        if (symbolName.Length == 0)
+        {
+            return [];
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 100);
+
+        // Step 1: Use FTS5 to find files containing the symbol name
+        using var command = _connection.CreateCommand();
+
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT fts.relative_path, bm25(file_content_fts) AS rank
+            FROM file_content_fts AS fts
+            WHERE file_content_fts MATCH @query
+              AND fts.relative_path IN (SELECT relative_path FROM files WHERE repo_id = @repoId)
+            """);
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND fts.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" ORDER BY rank LIMIT @fileLimit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        // Wrap as quoted phrase for exact matching
+        var quotedName = $"\"{symbolName.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+        command.Parameters.AddWithValue("@query", quotedName);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@fileLimit", clampedLimit);
+
+        if (pathFilter is not null)
+        {
+            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var matchedFiles = new List<(string RelativePath, double Rank)>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            matchedFiles.Add((reader.GetString(0), reader.GetDouble(1)));
+        }
+
+        // Step 2: Read each matched file from disk, find line-level matches with context
+        var results = new List<ReferenceResult>();
+
+        foreach (var (relativePath, rank) in matchedFiles)
+        {
+            var fullPath = Path.Combine(projectRoot, relativePath);
+            if (!File.Exists(fullPath))
+            {
+                continue;
+            }
+
+            var lines = await File.ReadAllLinesAsync(fullPath).ConfigureAwait(false);
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].Contains(symbolName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var snippetBuilder = new StringBuilder();
+
+                // 1 line before
+                if (i > 0)
+                {
+                    snippetBuilder.AppendLine(lines[i - 1]);
+                }
+
+                // Matching line
+                snippetBuilder.AppendLine(lines[i]);
+
+                // 1 line after
+                if (i < lines.Length - 1)
+                {
+                    snippetBuilder.Append(lines[i + 1]);
+                }
+
+                results.Add(new ReferenceResult(
+                    relativePath,
+                    i + 1, // 1-based line number
+                    snippetBuilder.ToString(),
+                    rank));
+
+                if (results.Count >= clampedLimit)
+                {
+                    return results;
+                }
+            }
+
+            if (results.Count >= clampedLimit)
+            {
+                break;
+            }
         }
 
         return results;
@@ -1021,13 +1147,49 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Aggregation ─────────────────────────────────────────────────────
 
-    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null)
+    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(groupBy);
 
         var clampedDepth = Math.Min(Math.Max(maxDepth, 1), 10);
 
+        // Build shared WHERE clause
+        var whereClause = new StringBuilder(" WHERE f.repo_id = @repoId");
+        if (!includePrivate)
+        {
+            whereClause.Append(" AND s.visibility != 'Private'");
+        }
+
+        if (pathFilter is not null)
+        {
+            whereClause.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
+        }
+
+        // Step 1: Get total symbol count for truncation detection
+        using var countCommand = _connection.CreateCommand();
+        var countSql = new StringBuilder();
+        countSql.Append("SELECT COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id ");
+        countSql.Append(whereClause);
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        countCommand.CommandText = countSql.ToString();
+#pragma warning restore CA2100
+
+        countCommand.Parameters.AddWithValue("@repoId", repoId);
+        string? normalizedPrefix = null;
+        if (pathFilter is not null)
+        {
+            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedPrefix
+                : normalizedPrefix + Path.DirectorySeparatorChar;
+            countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
+        }
+
+        var totalCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync().ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+
+        // Step 2: Fetch symbols with optional pagination
         using var command = _connection.CreateCommand();
 
         var sql = new StringBuilder();
@@ -1038,20 +1200,14 @@ public sealed class SqliteSymbolStore : ISymbolStore
                    f.relative_path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
-            WHERE f.repo_id = @repoId
             """);
-
-        if (!includePrivate)
-        {
-            sql.Append(" AND s.visibility != 'Private'");
-        }
-
-        if (pathFilter is not null)
-        {
-            sql.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
-        }
-
+        sql.Append(whereClause);
         sql.Append(" ORDER BY f.relative_path, s.line_start");
+
+        if (limit > 0)
+        {
+            sql.Append(" LIMIT @limit OFFSET @offset");
+        }
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
         command.CommandText = sql.ToString();
@@ -1061,12 +1217,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            // Normalize to OS-native separator to match stored relative_path values
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            var prefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
-                ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
-            command.Parameters.AddWithValue("@pathPrefix", prefix);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix!);
+        }
+
+        if (limit > 0)
+        {
+            command.Parameters.AddWithValue("@limit", limit);
+            command.Parameters.AddWithValue("@offset", offset);
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -1144,7 +1301,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
             }
         }
 
-        return new ProjectOutline(repoId, groups);
+        var fetchedCount = symbolsByKey.Values.Sum(l => l.Count);
+        var isTruncated = limit > 0 && (offset + fetchedCount) < totalCount;
+
+        return new ProjectOutline(repoId, groups, totalCount, isTruncated);
     }
 
     public async Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath)
@@ -1289,6 +1449,160 @@ public sealed class SqliteSymbolStore : ISymbolStore
             edges);
     }
 
+    public async Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        // 1. Find all .csproj / .fsproj / .vbproj files in the repo
+        var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var projectExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".csproj", ".fsproj", ".vbproj" };
+
+        var projectFiles = allFiles
+            .Where(f => projectExtensions.Contains(Path.GetExtension(f.RelativePath)))
+            .ToList();
+
+        // Build lookup: normalized relative path -> FileRecord
+        var projectByNormalizedPath = new Dictionary<string, FileRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pf in projectFiles)
+        {
+            var normalized = pf.RelativePath.Replace('\\', '/');
+            projectByNormalizedPath[normalized] = pf;
+        }
+
+        // Apply project filter
+        var filteredProjects = projectFiles;
+        if (!string.IsNullOrEmpty(projectFilter))
+        {
+            filteredProjects = projectFiles
+                .Where(f => Path.GetFileNameWithoutExtension(f.RelativePath)
+                    .Contains(projectFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var projectNodes = new List<ProjectNode>();
+        var projectEdges = new List<ProjectDependencyEdge>();
+
+        foreach (var pf in filteredProjects)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(pf.RelativePath);
+            var normalizedPath = pf.RelativePath.Replace('\\', '/');
+            projectNodes.Add(new ProjectNode(projectName, normalizedPath));
+
+            // 2. Get dependencies for this project file (these are <ProjectReference> entries)
+            var deps = await GetDependenciesByFileAsync(pf.Id).ConfigureAwait(false);
+            var edges = await ResolveProjectReferencesAsync(
+                projectName, normalizedPath, deps, projectByNormalizedPath, allFiles).ConfigureAwait(false);
+            projectEdges.AddRange(edges);
+        }
+
+        // Sort nodes by name
+        projectNodes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+
+        return new ProjectDependencyResult(projectNodes, projectEdges);
+    }
+
+    private async Task<List<ProjectDependencyEdge>> ResolveProjectReferencesAsync(
+        string projectName,
+        string normalizedProjectPath,
+        IReadOnlyList<Dependency> deps,
+        Dictionary<string, FileRecord> projectByNormalizedPath,
+        IReadOnlyList<FileRecord> allFiles)
+    {
+        var edges = new List<ProjectDependencyEdge>();
+        var projectDir = Path.GetDirectoryName(normalizedProjectPath)?.Replace('\\', '/') ?? string.Empty;
+
+        // Resolve all dependency paths and match to known project files
+        var resolvedRefs = deps
+            .Select(dep =>
+            {
+                var rawCombined = projectDir.Length > 0
+                    ? projectDir + "/" + dep.RequiresPath.Replace('\\', '/')
+                    : dep.RequiresPath.Replace('\\', '/');
+                return NormalizeRelativePath(rawCombined);
+            })
+            .Select(resolvedPath => projectByNormalizedPath
+                .FirstOrDefault(kvp => kvp.Key.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)))
+            .Where(kvp => kvp.Value is not null)
+            .ToList();
+
+        // S3267: Loop cannot be simplified — body contains async calls
+#pragma warning disable S3267
+        foreach (var targetProjectFile in resolvedRefs)
+#pragma warning restore S3267
+        {
+            var targetName = Path.GetFileNameWithoutExtension(targetProjectFile.Key);
+            var sharedTypes = await GetPublicTypesForProjectAsync(targetProjectFile.Key, allFiles)
+                .ConfigureAwait(false);
+
+            edges.Add(new ProjectDependencyEdge(projectName, targetName, sharedTypes));
+        }
+
+        return edges;
+    }
+
+    private async Task<IReadOnlyList<string>> GetPublicTypesForProjectAsync(
+        string projectFilePath, IReadOnlyList<FileRecord> allFiles)
+    {
+        // Determine the project directory from its .csproj path
+        var projectDir = Path.GetDirectoryName(projectFilePath)?.Replace('\\', '/') ?? string.Empty;
+
+        // Find all source files under this project's directory (excluding .csproj, .props, etc.)
+        var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs", ".fs", ".vb", ".luau", ".lua" };
+        var sourceFiles = allFiles
+            .Where(f =>
+            {
+                var normalized = f.RelativePath.Replace('\\', '/');
+                return normalized.StartsWith(projectDir + "/", StringComparison.OrdinalIgnoreCase)
+                       && sourceExtensions.Contains(Path.GetExtension(normalized));
+            })
+            .ToList();
+
+        var publicTypes = new List<string>();
+
+        foreach (var sf in sourceFiles)
+        {
+            var symbols = await GetSymbolsByFileAsync(sf.Id).ConfigureAwait(false);
+            var types = symbols
+                .Where(sym => string.Equals(sym.Visibility, "Public", StringComparison.OrdinalIgnoreCase)
+                    && sym.ParentSymbol is null
+                    && IsTypeKind(sym.Kind))
+                .Select(sym => $"{sym.Kind}: {sym.Name}");
+
+            publicTypes.AddRange(types);
+        }
+
+        publicTypes.Sort(StringComparer.Ordinal);
+        return publicTypes;
+    }
+
+    private static bool IsTypeKind(string kind) =>
+        string.Equals(kind, "Class", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "Interface", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "Type", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRelativePath(string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var stack = new List<string>();
+
+        foreach (var segment in segments)
+        {
+            if (segment == "..")
+            {
+                if (stack.Count > 0)
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                }
+            }
+            else if (segment != ".")
+            {
+                stack.Add(segment);
+            }
+        }
+
+        return string.Join("/", stack);
+    }
+
     public async Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -1332,5 +1646,136 @@ public sealed class SqliteSymbolStore : ISymbolStore
         removed.AddRange(snapshotHashes.Keys.Where(path => !currentByPath.ContainsKey(path)));
 
         return new ChangedFilesResult(added, modified, removed);
+    }
+
+    public async Task<ProjectOutline> SearchTopicOutlineAsync(string repoId, string query, int limit, string? pathFilter = null)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (query.Length == 0)
+        {
+            return new ProjectOutline(repoId, [], 0, false);
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 200);
+
+        // Step 1: Count total FTS5 matches for truncation detection
+        using var countCommand = _connection.CreateCommand();
+        var countSql = new StringBuilder();
+        countSql.Append(
+            """
+            SELECT COUNT(*)
+            FROM symbols_fts
+            JOIN symbols s ON s.id = symbols_fts.rowid
+            JOIN files f ON f.id = s.file_id
+            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+            """);
+
+        if (pathFilter is not null)
+        {
+            countSql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        countCommand.CommandText = countSql.ToString();
+#pragma warning restore CA2100
+
+        countCommand.Parameters.AddWithValue("@query", query);
+        countCommand.Parameters.AddWithValue("@repoId", repoId);
+
+        string? normalizedPrefix = null;
+        if (pathFilter is not null)
+        {
+            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedPrefix
+                : normalizedPrefix + Path.DirectorySeparatorChar;
+            countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
+        }
+
+        var totalCount = Convert.ToInt32(
+            await countCommand.ExecuteScalarAsync().ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
+
+        if (totalCount == 0)
+        {
+            return new ProjectOutline(repoId, [], 0, false);
+        }
+
+        // Step 2: Fetch symbols with limit, ordered by file then line
+        using var command = _connection.CreateCommand();
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   f.relative_path
+            FROM symbols_fts
+            JOIN symbols s ON s.id = symbols_fts.rowid
+            JOIN files f ON f.id = s.file_id
+            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+            """);
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" ORDER BY f.relative_path, s.line_start LIMIT @limit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@query", query);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        if (pathFilter is not null)
+        {
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix!);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+        var symbolsByFile = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var symbol = new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+
+            var filePath = reader.GetString(12);
+
+            if (!symbolsByFile.TryGetValue(filePath, out var list))
+            {
+                list = [];
+                symbolsByFile[filePath] = list;
+            }
+
+            list.Add(symbol);
+        }
+
+        var groups = symbolsByFile
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .Select(kvp => new OutlineGroup(kvp.Key, kvp.Value, []))
+            .ToList();
+
+        var fetchedCount = symbolsByFile.Values.Sum(l => l.Count);
+        var isTruncated = fetchedCount < totalCount;
+
+        return new ProjectOutline(repoId, groups, totalCount, isTruncated);
     }
 }

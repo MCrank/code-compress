@@ -260,7 +260,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.Signature).IsEqualTo("public record Foo(int X, string Y);");
     }
 
@@ -274,7 +274,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Point");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.Signature).IsEqualTo("public record struct Point(int X, int Y);");
     }
 
@@ -295,7 +295,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var en = result.Symbols.First(s => s.Name == "Color");
-        await Assert.That(en.Kind).IsEqualTo(SymbolKind.Type);
+        await Assert.That(en.Kind).IsEqualTo(SymbolKind.Enum);
         await Assert.That(en.Visibility).IsEqualTo(Visibility.Public);
     }
 
@@ -659,7 +659,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.LineEnd).IsEqualTo(4);
     }
 
@@ -1428,7 +1428,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
 
         var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
         await Assert.That(method.Name).IsEqualTo("Double");
@@ -1495,7 +1495,7 @@ internal sealed class CSharpParserTests
         var properties = result.Symbols.Where(s => s.Kind == SymbolKind.Constant).ToList();
         await Assert.That(properties.Count).IsGreaterThanOrEqualTo(2);
 
-        var enums = result.Symbols.Where(s => s.Kind == SymbolKind.Type).ToList();
+        var enums = result.Symbols.Where(s => s.Kind == SymbolKind.Enum).ToList();
         await Assert.That(enums).Count().IsEqualTo(1);
 
         // Dependencies from using statements

@@ -732,7 +732,7 @@ public sealed partial class CSharpParser : ILanguageParser
             if (entry.IsContainer)
             {
                 // Don't match methods/properties inside enums
-                if (entry.Kind == SymbolKind.Type)
+                if (entry.Kind is SymbolKind.Type or SymbolKind.Enum)
                 {
                     return false;
                 }
@@ -857,7 +857,7 @@ public sealed partial class CSharpParser : ILanguageParser
 
         parentStack.Add(new PendingType(
             Name: name,
-            Kind: SymbolKind.Type,
+            Kind: SymbolKind.Enum,
             Signature: signature,
             ParentName: parentName,
             ByteOffset: byteOffset,
@@ -896,7 +896,7 @@ public sealed partial class CSharpParser : ILanguageParser
         string keyword;
         if (!string.IsNullOrEmpty(recordKeyword))
         {
-            kind = SymbolKind.Class;
+            kind = SymbolKind.Record;
             keyword = string.IsNullOrEmpty(recordSubKeyword)
                 ? "record"
                 : $"record {recordSubKeyword}";

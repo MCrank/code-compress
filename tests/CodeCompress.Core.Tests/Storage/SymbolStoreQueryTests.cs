@@ -464,6 +464,100 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(outline.Groups).Count().IsEqualTo(0);
     }
 
+    // ── GetProjectOutlineAsync Pagination Tests ────────────────────────
+
+    [Test]
+    public async Task GetProjectOutlineAsyncReturnsTotalSymbolCount()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1).ConfigureAwait(false);
+
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncWithLimitReturnsTruncatedResults()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 2).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(2);
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsTrue();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncWithOffsetSkipsSymbols()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, offset: 2, limit: 10).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(2);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncZeroLimitReturnsAllSymbols()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 0).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsFalse();
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncLimitExceedsTotalReturnsNotTruncated()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 100).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPaginationCombinesWithPathFilter()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services", limit: 1).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(1);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPaginationCombinesWithIncludePrivate()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        // Without private: 3 public symbols (Initialize, MyClass, DoWork)
+        var outline = await store.GetProjectOutlineAsync("repo1", false, "file", 1, limit: 2).ConfigureAwait(false);
+
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(3);
+        await Assert.That(outline.IsTruncated).IsTrue();
+    }
+
     // ── GetModuleApiAsync Tests ──────────────────────────────────────────
 
     [Test]
@@ -758,5 +852,143 @@ internal sealed class SymbolStoreQueryTests
         var results = await store.SearchTextAsync("nonexistent-repo", "zeta", null, 10).ConfigureAwait(false);
 
         await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    // ── SearchTopicOutlineAsync Tests ────────────────────────────────────
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncReturnsMatchingSymbolsGroupedByFile()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "Initialize", 50).ConfigureAwait(false);
+
+        await Assert.That(outline.Groups.Count).IsGreaterThan(0);
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols.Count).IsGreaterThan(0);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("Initialize");
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncGroupsByFilePath()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "function", 50).ConfigureAwait(false);
+
+        await Assert.That(outline.Groups.Count).IsGreaterThan(1);
+        var groupNames = outline.Groups.Select(g => g.Name).ToList();
+        foreach (var name in groupNames)
+        {
+            await Assert.That(name).Contains(".luau");
+        }
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncRespectsLimit()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "function", 1).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols.Count).IsLessThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncReturnsTruncatedWhenLimitExceeded()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "function", 1).ConfigureAwait(false);
+
+        await Assert.That(outline.IsTruncated).IsTrue();
+        await Assert.That(outline.TotalSymbolCount).IsGreaterThan(1);
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncReturnsEmptyForNoMatches()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "nonexistentxyz", 50).ConfigureAwait(false);
+
+        await Assert.That(outline.Groups).Count().IsEqualTo(0);
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(0);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncReturnsEmptyForEmptyQuery()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "", 50).ConfigureAwait(false);
+
+        await Assert.That(outline.Groups).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncFiltersbyPathFilter()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "function", 50, "src/services").ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols.Count).IsGreaterThan(0);
+        foreach (var group in outline.Groups)
+        {
+            await Assert.That(group.Name).StartsWith(OsPath("src/services/"));
+        }
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncMatchesDocComments()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("repo1", "Initializes", 50).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols.Count).IsGreaterThan(0);
+        await Assert.That(allSymbols[0].Name).IsEqualTo("Initialize");
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncReturnsEmptyForWrongRepo()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.SearchTopicOutlineAsync("nonexistent", "Initialize", 50).ConfigureAwait(false);
+
+        await Assert.That(outline.Groups).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchTopicOutlineAsyncOrdersSymbolsByLineWithinFile()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        // "function" matches multiple symbols in the same file via FTS5
+        var outline = await store.SearchTopicOutlineAsync("repo1", "function", 50).ConfigureAwait(false);
+
+        foreach (var group in outline.Groups)
+        {
+            for (var i = 1; i < group.Symbols.Count; i++)
+            {
+                await Assert.That(group.Symbols[i].LineStart).IsGreaterThanOrEqualTo(group.Symbols[i - 1].LineStart);
+            }
+        }
     }
 }

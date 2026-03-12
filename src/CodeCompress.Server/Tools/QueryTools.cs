@@ -27,7 +27,7 @@ internal sealed class QueryTools
 
     private static readonly HashSet<string> ValidSymbolKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "function", "method", "type", "class", "interface", "export", "constant", "module",
+        "function", "method", "type", "class", "interface", "export", "constant", "module", "record", "enum",
     };
 
     private readonly IPathValidator _pathValidator;
@@ -46,13 +46,15 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Requires index_project to have been called first.")]
+    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Supports pagination via offset/maxSymbols for large codebases. Use pathFilter to scope results to a subdirectory (e.g., pathFilter='src/' to exclude test files). Requires index_project to have been called first.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
-        [Description("Filter outline to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
+        [Description("Filter outline to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module). Optional.")] string? pathFilter = null,
+        [Description("Maximum number of symbols to return (1-5000, default 500). Use with offset to paginate large codebases.")] int maxSymbols = 500,
+        [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
     {
         _activityTracker.RecordActivity();
@@ -85,6 +87,9 @@ internal sealed class QueryTools
             }
         }
 
+        var clampedMaxSymbols = Math.Clamp(maxSymbols, 1, 5000);
+        var clampedOffset = Math.Max(offset, 0);
+
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
@@ -93,9 +98,11 @@ internal sealed class QueryTools
                 includePrivate,
                 groupBy,
                 maxDepth ?? 0,
-                validatedPathFilter).ConfigureAwait(false);
+                validatedPathFilter,
+                clampedOffset,
+                clampedMaxSymbols).ConfigureAwait(false);
 
-            return FormatOutline(outline);
+            return FormatOutline(outline, clampedOffset, clampedMaxSymbols);
         }
     }
 
@@ -231,6 +238,76 @@ internal sealed class QueryTools
         }
     }
 
+    [McpServerTool(Name = "expand_symbol")]
+    [Description("Retrieve only the body of a nested symbol (e.g., a single method within a class) without loading the entire parent. Use 'Parent:Child' qualified names to extract just the method you need — saves ~60% tokens vs get_symbol on the parent class. Returns the leaf symbol source code with optional 3-line context.")]
+    public async Task<string> ExpandSymbol(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'PlayerService:GetHealth'). Use search_symbols to discover names.")] string symbolName,
+        [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
+        CancellationToken cancellationToken = default)
+    {
+        _activityTracker.RecordActivity();
+
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                return JsonSerializer.Serialize(
+                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Symbol = SanitizeSymbolName(symbolName) },
+                    SerializerOptions);
+            }
+
+            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+            var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+            if (file is null)
+            {
+                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = _pathValidator.ValidatePath(
+                    Path.Combine(validatedPath, file.RelativePath), validatedPath);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Path validation failed", "INVALID_PATH");
+            }
+
+            var sourceCode = includeContext
+                ? await ReadSourceCodeWithContextAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength, contextLines: 3).ConfigureAwait(false)
+                : await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+            var response = new
+            {
+                symbol.Name,
+                symbol.Kind,
+                Parent = symbol.ParentSymbol,
+                File = file.RelativePath,
+                symbol.LineStart,
+                symbol.LineEnd,
+                symbol.Signature,
+                symbol.DocComment,
+                SourceCode = sourceCode,
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
     [McpServerTool(Name = "get_symbols")]
     [Description("Batch retrieve source code for multiple symbols in one call. More efficient than calling get_symbol repeatedly. Maximum 50 names per call.")]
     public async Task<string> GetSymbols(
@@ -341,12 +418,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Optionally filter by file path.")]
+    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Core/Models' to target a module).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
-        [Description("Filter by symbol kind (function, method, class, type, interface, export, constant, module)")] string? kind = null,
-        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models')")] string? pathFilter = null,
+        [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
+        [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module), 'lib/' (library code only).")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
@@ -376,7 +453,7 @@ internal sealed class QueryTools
         {
             if (!ValidSymbolKinds.Contains(kind))
             {
-                return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module", "INVALID_KIND");
+                return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, record, interface, export, constant, module", "INVALID_KIND");
             }
 
             // Normalize to PascalCase to match DB storage (SymbolKind.ToString())
@@ -452,13 +529,81 @@ internal sealed class QueryTools
         }
     }
 
+    [McpServerTool(Name = "topic_outline")]
+    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines the search power of search_symbols with the structured presentation of project_outline. Use for questions like 'show me all authentication-related types' or 'find all Kubernetes symbols'.")]
+    public async Task<string> TopicOutline(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Topic or keyword to search for (e.g., 'authentication', 'kubernetes', 'database'). Searches symbol names, signatures, and doc comments via FTS5.")] string topic,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
+        [Description("Maximum number of symbols to return (1-200, default 50). Limits output to prevent token overflow.")] int maxResults = 50,
+        CancellationToken cancellationToken = default)
+    {
+        _activityTracker.RecordActivity();
+
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            return SerializeError("Topic query cannot be empty", "EMPTY_QUERY");
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
+        }
+
+        var clampedLimit = Math.Clamp(maxResults, 1, 200);
+        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(topic);
+
+        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        {
+            return SerializeError("Topic query cannot be empty", "EMPTY_QUERY");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            Core.Models.ProjectOutline outline;
+            try
+            {
+                outline = await scope.Store.SearchTopicOutlineAsync(
+                    scope.RepoId, sanitizedQuery, clampedLimit, validatedPathFilter).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // FTS5 syntax error — retry with literal phrase
+                var literalQuery = $"\"{topic.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+                outline = await scope.Store.SearchTopicOutlineAsync(
+                    scope.RepoId, literalQuery, clampedLimit, validatedPathFilter).ConfigureAwait(false);
+            }
+
+            return FormatTopicOutline(outline, sanitizedQuery, clampedLimit);
+        }
+    }
+
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Supports glob and path filtering.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Config' to target configuration).")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
-        [Description("Filter results to files under this relative directory path (e.g., 'src/Config')")] string? pathFilter = null,
+        [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Config' (configuration files only).")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
@@ -540,15 +685,60 @@ internal sealed class QueryTools
         }
     }
 
-    private static string FormatOutline(Core.Models.ProjectOutline outline)
+    private static string FormatTopicOutline(Core.Models.ProjectOutline outline, string query, int maxResults)
     {
         var sb = new StringBuilder();
-        var totalSymbols = CountSymbols(outline.Groups);
-        sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline ({totalSymbols} symbols)");
+        var pageSymbols = CountSymbols(outline.Groups);
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Topic Outline: \"{query}\" (showing {pageSymbols} of {outline.TotalSymbolCount} matches)");
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Topic Outline: \"{query}\" ({pageSymbols} matches)");
+        }
 
         foreach (var group in outline.Groups)
         {
             RenderGroup(sb, group, depth: 0);
+        }
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine();
+            sb.AppendLine("---");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"**Truncated:** {outline.TotalSymbolCount - pageSymbols} more matches. Refine your topic query or use `pathFilter` to narrow results. Max: `maxResults: {maxResults}`.");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string FormatOutline(Core.Models.ProjectOutline outline, int offset, int maxSymbols)
+    {
+        var sb = new StringBuilder();
+        var pageSymbols = CountSymbols(outline.Groups);
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline (showing {pageSymbols} of {outline.TotalSymbolCount} symbols, offset {offset})");
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline ({pageSymbols} symbols)");
+        }
+
+        foreach (var group in outline.Groups)
+        {
+            RenderGroup(sb, group, depth: 0);
+        }
+
+        if (outline.IsTruncated)
+        {
+            var nextOffset = offset + pageSymbols;
+            sb.AppendLine();
+            sb.AppendLine(CultureInfo.InvariantCulture, $"---");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"**Truncated:** {outline.TotalSymbolCount - nextOffset} symbols remaining. Call again with `offset: {nextOffset}, maxSymbols: {maxSymbols}` to continue.");
         }
 
         return sb.ToString();

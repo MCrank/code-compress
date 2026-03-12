@@ -84,11 +84,12 @@ internal sealed class CSharpEndToEndTests : IDisposable
         // Verify some specific symbol kinds appear
         var allSymbolKinds = CollectSymbolKinds(outline.Groups);
         await Assert.That(allSymbolKinds).Contains("Class");
+        await Assert.That(allSymbolKinds).Contains("Record");
         await Assert.That(allSymbolKinds).Contains("Method");
         await Assert.That(allSymbolKinds).Contains("Interface");
         await Assert.That(allSymbolKinds).Contains("Module");
         await Assert.That(allSymbolKinds).Contains("Constant");
-        await Assert.That(allSymbolKinds).Contains("Type");
+        await Assert.That(allSymbolKinds).Contains("Enum");
     }
 
     [Test]
@@ -125,11 +126,60 @@ internal sealed class CSharpEndToEndTests : IDisposable
 
         // The record is stored as a Class kind
         var symbols = await _store.GetSymbolsByNamesAsync(_repoId, ["Player"]).ConfigureAwait(false);
-        var record = symbols.FirstOrDefault(s => s.Kind == "Class" && s.Name == "Player");
+        var record = symbols.FirstOrDefault(s => s.Kind == "Record" && s.Name == "Player");
 
         await Assert.That(record).IsNotNull();
         await Assert.That(record!.Signature).Contains("record");
         await Assert.That(record.Signature).Contains("Player");
+    }
+
+    [Test]
+    public async Task GetSymbolBySimpleNameFindsRecord()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // get_symbol uses GetSymbolByNameAsync — simple name lookup
+        var symbol = await _store.GetSymbolByNameAsync(_repoId, "Player").ConfigureAwait(false);
+
+        await Assert.That(symbol).IsNotNull();
+        await Assert.That(symbol!.Name).IsEqualTo("Player");
+        await Assert.That(symbol.Kind).IsEqualTo("Record");
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindRecordReturnsOnlyRecords()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "Player", kind: "Record", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Kind == "Record")).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindEnumReturnsOnlyEnums()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "GameState", kind: "Enum", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Kind == "Enum")).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindTypeAlsoReturnsEnums()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "GameState", kind: "Type", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.Any(r => r.Symbol.Kind == "Enum")).IsTrue();
     }
 
     [Test]
@@ -214,7 +264,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(symbols).Count().IsGreaterThanOrEqualTo(1);
         var itemRarity = symbols.First(s => s.Name == "ItemRarity");
         await Assert.That(itemRarity.ParentSymbol).IsEqualTo("Inventory");
-        await Assert.That(itemRarity.Kind).IsEqualTo("Type");
+        await Assert.That(itemRarity.Kind).IsEqualTo("Enum");
     }
 
     [Test]
@@ -236,6 +286,35 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(processAttack).IsNotNull();
         await Assert.That(processAttack!.DocComment).IsNotNull();
         await Assert.That(processAttack.DocComment!).Contains("Processes an attack");
+    }
+
+    [Test]
+    public async Task NestedMethodByteOffsetReturnsOnlyMethodBody()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Get the nested method
+        var method = await _store.GetSymbolByNameAsync(
+            _repoId, "CombatService:ProcessAttackAsync").ConfigureAwait(false);
+
+        // Get the parent class
+        var parentSymbols = await _store.GetSymbolsByNamesAsync(_repoId, ["CombatService"]).ConfigureAwait(false);
+        var parentClass = parentSymbols.First(s => s.Kind == "Class");
+
+        await Assert.That(method).IsNotNull();
+        await Assert.That(method!.ByteLength).IsLessThan(parentClass.ByteLength);
+
+        // Read the method source and verify it contains method content, not entire class
+        var files = await _store.GetFilesByRepoAsync(_repoId).ConfigureAwait(false);
+        var file = files.First(f => f.RelativePath.Contains("CombatService", StringComparison.Ordinal)
+                                    && !f.RelativePath.Contains("ICombat", StringComparison.Ordinal));
+        var fullPath = Path.Combine(_sampleProjectPath, file.RelativePath);
+        var bytes = await File.ReadAllBytesAsync(fullPath).ConfigureAwait(false);
+        var methodSource = System.Text.Encoding.UTF8.GetString(bytes, method.ByteOffset, method.ByteLength);
+
+        await Assert.That(methodSource).Contains("ProcessAttackAsync");
+        // Method source should NOT contain the class declaration
+        await Assert.That(methodSource).DoesNotContain("public class CombatService");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

@@ -546,6 +546,84 @@ internal sealed class EndToEndTests : IDisposable
         await Assert.That(results.All(r => r.Symbol.Kind == "Class" && r.Symbol.Name.EndsWith("Service", StringComparison.OrdinalIgnoreCase))).IsTrue();
     }
 
+    // ── Find References Tests ────────────────────────────────────────────
+
+    [Test]
+    public async Task FindReferencesFindsCallSitesAcrossFiles()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // "CombatService" should appear in multiple files (definition + usages)
+        var results = await _store.FindReferencesAsync(_repoId, "CombatService", _sampleProjectPath, 50).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.ContextSnippet.Contains("CombatService", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(results.All(r => r.Line > 0)).IsTrue();
+    }
+
+    [Test]
+    public async Task FindReferencesReturnsLineNumbersAndSnippets()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.FindReferencesAsync(_repoId, "ProcessAttack", _sampleProjectPath, 50).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThanOrEqualTo(1);
+
+        foreach (var result in results)
+        {
+            // Line numbers are 1-based
+            await Assert.That(result.Line).IsGreaterThan(0);
+            // Snippet should contain the symbol name
+            await Assert.That(result.ContextSnippet).Contains("ProcessAttack");
+            // Snippet should have context (multiple lines)
+            await Assert.That(result.ContextSnippet).Contains("\n");
+        }
+    }
+
+    [Test]
+    public async Task FindReferencesWithPathFilterScopesToDirectory()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var servicesPath = GetDirectoryPrefix("CombatService.luau");
+        var results = await _store.FindReferencesAsync(_repoId, "CombatService", _sampleProjectPath, 50, servicesPath).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.FilePath.StartsWith(servicesPath + "/", StringComparison.OrdinalIgnoreCase)
+            || r.FilePath.StartsWith(servicesPath + "\\", StringComparison.OrdinalIgnoreCase))).IsTrue();
+    }
+
+    [Test]
+    public async Task FindReferencesRespectsLimit()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.FindReferencesAsync(_repoId, "function", _sampleProjectPath, 3).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsLessThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task FindReferencesNoMatchesReturnsEmpty()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.FindReferencesAsync(_repoId, "zzz_completely_nonexistent_xyz", _sampleProjectPath, 20).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FindReferencesEmptySymbolNameReturnsEmpty()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.FindReferencesAsync(_repoId, "", _sampleProjectPath, 20).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(0);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     /// <summary>

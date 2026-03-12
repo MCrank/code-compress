@@ -13,6 +13,9 @@ internal sealed class SymbolKindTests
     [Arguments(SymbolKind.Export, 5)]
     [Arguments(SymbolKind.Constant, 6)]
     [Arguments(SymbolKind.Module, 7)]
+    [Arguments(SymbolKind.Record, 8)]
+    [Arguments(SymbolKind.Enum, 9)]
+    [Arguments(SymbolKind.ConfigKey, 10)]
     public async Task EnumMemberHasExpectedIntValue(SymbolKind kind, int expectedValue)
     {
         var actualValue = (int)kind;
@@ -21,10 +24,10 @@ internal sealed class SymbolKindTests
     }
 
     [Test]
-    public async Task GetValuesReturnsExactlyEightMembers()
+    public async Task GetValuesReturnsExactlyElevenMembers()
     {
         var values = Enum.GetValues<SymbolKind>();
 
-        await Assert.That(values).Count().IsEqualTo(8);
+        await Assert.That(values).Count().IsEqualTo(11);
     }
 }
