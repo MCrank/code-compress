@@ -11,5 +11,6 @@ public enum SymbolKind
     Constant,
     Module,
     Record,
-    Enum
+    Enum,
+    ConfigKey
 }
