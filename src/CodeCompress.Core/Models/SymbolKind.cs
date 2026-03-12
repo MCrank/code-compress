@@ -10,5 +10,6 @@ public enum SymbolKind
     Export,
     Constant,
     Module,
-    Record
+    Record,
+    Enum
 }

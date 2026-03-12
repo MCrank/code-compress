@@ -352,7 +352,7 @@ internal sealed class QueryTools
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
-        [Description("Filter by symbol kind (function, method, class, record, type, interface, export, constant, module)")] string? kind = null,
+        [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
         [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models')")] string? pathFilter = null,
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
