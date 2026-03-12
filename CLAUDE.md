@@ -62,7 +62,7 @@ AI Agent → MCP Protocol (stdio) → Tool Router → Index Engine → File Hash
 
 ### Database
 
-SQLite stored at `~/.codecompress/{repo-hash}.db`. Tables: `repositories`, `files`, `symbols`, `dependencies`, `index_snapshots`. FTS5 virtual tables: `symbols_fts`, `file_content_fts`.
+SQLite stored at `.code-compress/index.db` in the project directory. Tables: `repositories`, `files`, `symbols`, `dependencies`, `index_snapshots`. FTS5 virtual tables: `symbols_fts`, `file_content_fts`.
 
 ### MCP Tools (4 categories)
 

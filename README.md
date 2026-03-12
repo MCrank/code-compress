@@ -149,7 +149,7 @@ AI Agent  <── MCP (stdio) ──>  CodeCompress Server
 
 1. **Index** — CodeCompress walks your source files, hashes each one (SHA-256), and extracts symbols (functions, classes, types, constants) and dependencies (imports/requires) using language-specific parsers.
 
-2. **Store** — Everything goes into a local SQLite database at **`~/.codecompress/`**. Each project gets its own `.db` file, keyed by a hash of the project path. The database uses FTS5 virtual tables for fast full-text search.
+2. **Store** — Everything goes into a local SQLite database at **`.code-compress/index.db`** in the project directory. The database uses FTS5 virtual tables for fast full-text search.
 
 3. **Query** — Agents call MCP tools to get compressed outlines, look up specific symbols by name, search across the codebase, or check what changed since a snapshot.
 
