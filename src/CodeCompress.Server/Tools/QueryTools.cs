@@ -353,7 +353,7 @@ internal sealed class QueryTools
             return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
         }
 
-        if (GlobPattern.IsWildcardOnly(query))
+        if (GlobPattern.IsWildcardOnly(query) && pathFilter is null)
         {
             return SerializeError("Search query is too broad — provide at least one non-wildcard term", "QUERY_TOO_BROAD");
         }
@@ -387,6 +387,12 @@ internal sealed class QueryTools
 
         var clampedLimit = Math.Clamp(limit, 1, 100);
         var glob = Fts5QuerySanitizer.SanitizeAsGlob(query);
+
+        // Wildcard-only query with pathFilter: browse all symbols under that path
+        if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern) && validatedPathFilter is not null)
+        {
+            glob = GlobPattern.CreateSqlLike(string.Empty, "%");
+        }
 
         if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern))
         {

@@ -28,6 +28,9 @@ public sealed class GlobPattern
     public static GlobPattern CreatePrefix(string fts5Query) =>
         new(GlobMatchStrategy.Prefix, fts5Query, null);
 
+    public static GlobPattern CreateSqlLike(string fts5Query, string sqlLikePattern) =>
+        new(GlobMatchStrategy.SqlLike, fts5Query, sqlLikePattern);
+
     public static bool IsWildcardOnly(string query)
     {
         if (string.IsNullOrWhiteSpace(query))
