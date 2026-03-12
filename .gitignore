@@ -57,6 +57,9 @@ Desktop.ini
 # Claude Code
 .claude/settings.local.json
 
+# Local plans / working files
+.local/
+
 # Environment / secrets
 *.env
 appsettings.*.json
