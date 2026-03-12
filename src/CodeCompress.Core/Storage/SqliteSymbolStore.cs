@@ -1021,13 +1021,49 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Aggregation ─────────────────────────────────────────────────────
 
-    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null)
+    public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(groupBy);
 
         var clampedDepth = Math.Min(Math.Max(maxDepth, 1), 10);
 
+        // Build shared WHERE clause
+        var whereClause = new StringBuilder(" WHERE f.repo_id = @repoId");
+        if (!includePrivate)
+        {
+            whereClause.Append(" AND s.visibility != 'Private'");
+        }
+
+        if (pathFilter is not null)
+        {
+            whereClause.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
+        }
+
+        // Step 1: Get total symbol count for truncation detection
+        using var countCommand = _connection.CreateCommand();
+        var countSql = new StringBuilder();
+        countSql.Append("SELECT COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id ");
+        countSql.Append(whereClause);
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        countCommand.CommandText = countSql.ToString();
+#pragma warning restore CA2100
+
+        countCommand.Parameters.AddWithValue("@repoId", repoId);
+        string? normalizedPrefix = null;
+        if (pathFilter is not null)
+        {
+            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedPrefix
+                : normalizedPrefix + Path.DirectorySeparatorChar;
+            countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
+        }
+
+        var totalCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync().ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+
+        // Step 2: Fetch symbols with optional pagination
         using var command = _connection.CreateCommand();
 
         var sql = new StringBuilder();
@@ -1038,20 +1074,14 @@ public sealed class SqliteSymbolStore : ISymbolStore
                    f.relative_path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
-            WHERE f.repo_id = @repoId
             """);
-
-        if (!includePrivate)
-        {
-            sql.Append(" AND s.visibility != 'Private'");
-        }
-
-        if (pathFilter is not null)
-        {
-            sql.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
-        }
-
+        sql.Append(whereClause);
         sql.Append(" ORDER BY f.relative_path, s.line_start");
+
+        if (limit > 0)
+        {
+            sql.Append(" LIMIT @limit OFFSET @offset");
+        }
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
         command.CommandText = sql.ToString();
@@ -1061,12 +1091,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            // Normalize to OS-native separator to match stored relative_path values
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            var prefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
-                ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
-            command.Parameters.AddWithValue("@pathPrefix", prefix);
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix!);
+        }
+
+        if (limit > 0)
+        {
+            command.Parameters.AddWithValue("@limit", limit);
+            command.Parameters.AddWithValue("@offset", offset);
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -1144,7 +1175,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
             }
         }
 
-        return new ProjectOutline(repoId, groups);
+        var fetchedCount = symbolsByKey.Values.Sum(l => l.Count);
+        var isTruncated = limit > 0 && (offset + fetchedCount) < totalCount;
+
+        return new ProjectOutline(repoId, groups, totalCount, isTruncated);
     }
 
     public async Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath)

@@ -49,9 +49,9 @@ internal sealed class QueryToolsTests
         };
         var fileGroup = new OutlineGroup("CombatService.luau", symbols, []);
         var dirGroup = new OutlineGroup("src/services/", [], [fileGroup]);
-        var outline = new ProjectOutline("test-repo-id", [dirGroup]);
+        var outline = new ProjectOutline("test-repo-id", [dirGroup], 2, false);
 
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>()).Returns(outline);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
 
@@ -76,9 +76,9 @@ internal sealed class QueryToolsTests
         var utilFile = new OutlineGroup("MathUtils.luau", utilSymbols, []);
         var servicesDir = new OutlineGroup("src/services/", [], [serviceFile]);
         var utilsDir = new OutlineGroup("src/utils/", [], [utilFile]);
-        var outline = new ProjectOutline("test-repo-id", [servicesDir, utilsDir]);
+        var outline = new ProjectOutline("test-repo-id", [servicesDir, utilsDir], 3, false);
 
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>()).Returns(outline);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline("/valid/path", groupBy: "file").ConfigureAwait(false);
 
@@ -100,9 +100,9 @@ internal sealed class QueryToolsTests
         };
         var classesGroup = new OutlineGroup("Classes", classSymbols, []);
         var methodsGroup = new OutlineGroup("Methods", methodSymbols, []);
-        var outline = new ProjectOutline("test-repo-id", [classesGroup, methodsGroup]);
+        var outline = new ProjectOutline("test-repo-id", [classesGroup, methodsGroup], 2, false);
 
-        _store.GetProjectOutlineAsync("test-repo-id", false, "kind", Arg.Any<int>()).Returns(outline);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "kind", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline("/valid/path", groupBy: "kind").ConfigureAwait(false);
 
@@ -120,9 +120,9 @@ internal sealed class QueryToolsTests
             CreateSymbol(1, 1, "CombatService", "Class", "local CombatService = {} :: CombatService"),
         };
         var dirGroup = new OutlineGroup("src/services/", symbols, []);
-        var outline = new ProjectOutline("test-repo-id", [dirGroup]);
+        var outline = new ProjectOutline("test-repo-id", [dirGroup], 1, false);
 
-        _store.GetProjectOutlineAsync("test-repo-id", false, "directory", Arg.Any<int>()).Returns(outline);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "directory", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline("/valid/path", groupBy: "directory").ConfigureAwait(false);
 
@@ -141,43 +141,43 @@ internal sealed class QueryToolsTests
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_GROUP_BY");
 
         await _store.DidNotReceive().GetProjectOutlineAsync(
-            Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<int>()).ConfigureAwait(false);
+            Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
     public async Task ProjectOutlineIncludePrivateFalseOmitsPrivateSymbols()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>()).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path", includePrivate: false).ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", false, "file", Arg.Any<int>()).ConfigureAwait(false);
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
     public async Task ProjectOutlineIncludePrivateTrueIncludesAllSymbols()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", true, "file", Arg.Any<int>()).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", true, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path", includePrivate: true).ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", true, "file", Arg.Any<int>()).ConfigureAwait(false);
+            "test-repo-id", true, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
     public async Task ProjectOutlineMaxDepthLimitsTraversal()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", 1).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", 1, Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path", maxDepth: 1).ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", false, "file", 1).ConfigureAwait(false);
+            "test-repo-id", false, "file", 1, Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
@@ -198,8 +198,8 @@ internal sealed class QueryToolsTests
     public async Task ProjectOutlineDoesNotEchoRawPath()
     {
         var distinctivePath = "/very/unique/distinctive/test/path/12345";
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>()).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline(distinctivePath).ConfigureAwait(false);
 
@@ -209,25 +209,25 @@ internal sealed class QueryToolsTests
     [Test]
     public async Task ProjectOutlinePathFilterPassesToStore()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), "src/services").Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), "src/services", Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path", pathFilter: "src/services").ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", false, "file", Arg.Any<int>(), "src/services").ConfigureAwait(false);
+            "test-repo-id", false, "file", Arg.Any<int>(), "src/services", Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
     public async Task ProjectOutlinePathFilterNullPassesNullToStore()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), null).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), null, Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", false, "file", Arg.Any<int>(), null).ConfigureAwait(false);
+            "test-repo-id", false, "file", Arg.Any<int>(), null, Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
     [Test]
@@ -265,8 +265,8 @@ internal sealed class QueryToolsTests
     public async Task ProjectOutlinePathFilterDoesNotEchoRawFilter()
     {
         var maliciousFilter = "src/<script>alert(1)</script>";
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>()).Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         var result = await _tools.ProjectOutline("/valid/path", pathFilter: maliciousFilter).ConfigureAwait(false);
 
@@ -276,13 +276,138 @@ internal sealed class QueryToolsTests
     [Test]
     public async Task ProjectOutlinePathFilterCombinesWithGroupBy()
     {
-        var outline = new ProjectOutline("test-repo-id", []);
-        _store.GetProjectOutlineAsync("test-repo-id", false, "kind", Arg.Any<int>(), "src/services").Returns(outline);
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "kind", Arg.Any<int>(), "src/services", Arg.Any<int>(), Arg.Any<int>()).Returns(outline);
 
         await _tools.ProjectOutline("/valid/path", groupBy: "kind", pathFilter: "src/services").ConfigureAwait(false);
 
         await _store.Received(1).GetProjectOutlineAsync(
-            "test-repo-id", false, "kind", Arg.Any<int>(), "src/services").ConfigureAwait(false);
+            "test-repo-id", false, "kind", Arg.Any<int>(), "src/services", Arg.Any<int>(), Arg.Any<int>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineDefaultMaxSymbolsIs500()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineCustomMaxSymbolsPassesToStore()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 100).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", maxSymbols: 100).ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 100).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineOffsetPassesToStore()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 50, 500).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", offset: 50).ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 50, 500).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineMaxSymbolsClampedToUpperBound()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 5000).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", maxSymbols: 99999).ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 5000).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineMaxSymbolsClampedToLowerBound()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 1).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", maxSymbols: -5).ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 1).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineNegativeOffsetClampedToZero()
+    {
+        var outline = new ProjectOutline("test-repo-id", [], 0, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).Returns(outline);
+
+        await _tools.ProjectOutline("/valid/path", offset: -10).ConfigureAwait(false);
+
+        await _store.Received(1).GetProjectOutlineAsync(
+            "test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task ProjectOutlineTruncatedShowsTruncationIndicator()
+    {
+        var symbols = new List<Symbol>
+        {
+            CreateSymbol(1, 1, "CombatService", "Class", "local CombatService = {} :: CombatService"),
+        };
+        var group = new OutlineGroup("src/services/CombatService.luau", symbols, []);
+        var outline = new ProjectOutline("test-repo-id", [group], 100, true);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).Returns(outline);
+
+        var result = await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("showing 1 of 100 symbols");
+        await Assert.That(result).Contains("**Truncated:**");
+        await Assert.That(result).Contains("offset: 1");
+    }
+
+    [Test]
+    public async Task ProjectOutlineNotTruncatedOmitsTruncationIndicator()
+    {
+        var symbols = new List<Symbol>
+        {
+            CreateSymbol(1, 1, "CombatService", "Class", "local CombatService = {} :: CombatService"),
+        };
+        var group = new OutlineGroup("src/services/CombatService.luau", symbols, []);
+        var outline = new ProjectOutline("test-repo-id", [group], 1, false);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 0, 500).Returns(outline);
+
+        var result = await _tools.ProjectOutline("/valid/path").ConfigureAwait(false);
+
+        await Assert.That(result).DoesNotContain("Truncated");
+        await Assert.That(result).DoesNotContain("showing");
+    }
+
+    [Test]
+    public async Task ProjectOutlineTruncatedWithOffsetShowsCorrectContinuation()
+    {
+        var symbols = new List<Symbol>
+        {
+            CreateSymbol(1, 1, "Helper", "Function", "function Helper()"),
+        };
+        var group = new OutlineGroup("src/utils.luau", symbols, []);
+        var outline = new ProjectOutline("test-repo-id", [group], 200, true);
+        _store.GetProjectOutlineAsync("test-repo-id", false, "file", Arg.Any<int>(), Arg.Any<string?>(), 50, 100).Returns(outline);
+
+        var result = await _tools.ProjectOutline("/valid/path", maxSymbols: 100, offset: 50).ConfigureAwait(false);
+
+        await Assert.That(result).Contains("offset 50");
+        await Assert.That(result).Contains("offset: 51");
+        await Assert.That(result).Contains("149 symbols remaining");
     }
 
     [Test]
