@@ -288,6 +288,35 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(processAttack.DocComment!).Contains("Processes an attack");
     }
 
+    [Test]
+    public async Task NestedMethodByteOffsetReturnsOnlyMethodBody()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Get the nested method
+        var method = await _store.GetSymbolByNameAsync(
+            _repoId, "CombatService:ProcessAttackAsync").ConfigureAwait(false);
+
+        // Get the parent class
+        var parentSymbols = await _store.GetSymbolsByNamesAsync(_repoId, ["CombatService"]).ConfigureAwait(false);
+        var parentClass = parentSymbols.First(s => s.Kind == "Class");
+
+        await Assert.That(method).IsNotNull();
+        await Assert.That(method!.ByteLength).IsLessThan(parentClass.ByteLength);
+
+        // Read the method source and verify it contains method content, not entire class
+        var files = await _store.GetFilesByRepoAsync(_repoId).ConfigureAwait(false);
+        var file = files.First(f => f.RelativePath.Contains("CombatService", StringComparison.Ordinal)
+                                    && !f.RelativePath.Contains("ICombat", StringComparison.Ordinal));
+        var fullPath = Path.Combine(_sampleProjectPath, file.RelativePath);
+        var bytes = await File.ReadAllBytesAsync(fullPath).ConfigureAwait(false);
+        var methodSource = System.Text.Encoding.UTF8.GetString(bytes, method.ByteOffset, method.ByteLength);
+
+        await Assert.That(methodSource).Contains("ProcessAttackAsync");
+        // Method source should NOT contain the class declaration
+        await Assert.That(methodSource).DoesNotContain("public class CombatService");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private async Task IndexSampleProjectAsync()
