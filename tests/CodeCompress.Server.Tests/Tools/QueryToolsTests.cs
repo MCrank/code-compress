@@ -1558,6 +1558,150 @@ internal sealed class QueryToolsTests
             "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config").ConfigureAwait(false);
     }
 
+    // ── TopicOutline Tests ────────────────────────────────────────────────
+
+    [Test]
+    public async Task TopicOutlineValidTopicReturnsStructuredOutline()
+    {
+        var outline = new Core.Models.ProjectOutline(
+            "test-repo-id",
+            [
+                new Core.Models.OutlineGroup(
+                    "src/services/Auth.cs",
+                    [CreateSymbol(1, 1, "AuthService", "Class", "public class AuthService")],
+                    []),
+            ],
+            1,
+            false);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(outline);
+
+        var result = await _tools.TopicOutline("/valid/path", "authentication").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("AuthService");
+        await Assert.That(result).Contains("src/services/Auth.cs");
+    }
+
+    [Test]
+    public async Task TopicOutlineEmptyQueryReturnsError()
+    {
+        var result = await _tools.TopicOutline("/valid/path", "").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+    }
+
+    [Test]
+    public async Task TopicOutlineWhitespaceQueryReturnsError()
+    {
+        var result = await _tools.TopicOutline("/valid/path", "   ").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+    }
+
+    [Test]
+    public async Task TopicOutlineInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>()).Throws(new ArgumentException("bad path"));
+
+        var result = await _tools.TopicOutline("/bad/path", "auth").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task TopicOutlineClampsLimitTo200Max()
+    {
+        var outline = new Core.Models.ProjectOutline("test-repo-id", [], 0, false);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(outline);
+
+        await _tools.TopicOutline("/valid/path", "test", maxResults: 999).ConfigureAwait(false);
+
+        await _store.Received(1).SearchTopicOutlineAsync(
+            "test-repo-id", Arg.Any<string>(), 200, Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task TopicOutlineClampsLimitTo1Min()
+    {
+        var outline = new Core.Models.ProjectOutline("test-repo-id", [], 0, false);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(outline);
+
+        await _tools.TopicOutline("/valid/path", "test", maxResults: -5).ConfigureAwait(false);
+
+        await _store.Received(1).SearchTopicOutlineAsync(
+            "test-repo-id", Arg.Any<string>(), 1, Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task TopicOutlinePassesPathFilterToStore()
+    {
+        var outline = new Core.Models.ProjectOutline("test-repo-id", [], 0, false);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), "src/services")
+            .Returns(outline);
+
+        await _tools.TopicOutline("/valid/path", "auth", pathFilter: "src/services/").ConfigureAwait(false);
+
+        await _store.Received(1).SearchTopicOutlineAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<int>(), "src/services").ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task TopicOutlineInvalidPathFilterReturnsError()
+    {
+        var result = await _tools.TopicOutline("/valid/path", "auth", pathFilter: "../../../etc/passwd").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task TopicOutlineShowsTruncationMessage()
+    {
+        var outline = new Core.Models.ProjectOutline(
+            "test-repo-id",
+            [
+                new Core.Models.OutlineGroup(
+                    "src/Auth.cs",
+                    [CreateSymbol(1, 1, "Login", "Method", "public void Login()")],
+                    []),
+            ],
+            100,
+            true);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(outline);
+
+        var result = await _tools.TopicOutline("/valid/path", "auth").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("Truncated");
+        await Assert.That(result).Contains("100");
+    }
+
+    [Test]
+    public async Task TopicOutlineFts5ErrorRetriesWithLiteralPhrase()
+    {
+        var outline = new Core.Models.ProjectOutline("test-repo-id", [], 0, false);
+
+        _store.SearchTopicOutlineAsync("test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(
+                callInfo => throw new Microsoft.Data.Sqlite.SqliteException("fts5 error", 1),
+                callInfo => outline);
+
+        await _tools.TopicOutline("/valid/path", "auth:bad").ConfigureAwait(false);
+
+        await _store.Received(2).SearchTopicOutlineAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
     private static Symbol CreateSymbol(
         long id,
         long fileId,

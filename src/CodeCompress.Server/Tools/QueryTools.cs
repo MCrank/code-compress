@@ -529,6 +529,74 @@ internal sealed class QueryTools
         }
     }
 
+    [McpServerTool(Name = "topic_outline")]
+    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines the search power of search_symbols with the structured presentation of project_outline. Use for questions like 'show me all authentication-related types' or 'find all Kubernetes symbols'.")]
+    public async Task<string> TopicOutline(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Topic or keyword to search for (e.g., 'authentication', 'kubernetes', 'database'). Searches symbol names, signatures, and doc comments via FTS5.")] string topic,
+        [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
+        [Description("Maximum number of symbols to return (1-200, default 50). Limits output to prevent token overflow.")] int maxResults = 50,
+        CancellationToken cancellationToken = default)
+    {
+        _activityTracker.RecordActivity();
+
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            return SerializeError("Topic query cannot be empty", "EMPTY_QUERY");
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
+        }
+
+        var clampedLimit = Math.Clamp(maxResults, 1, 200);
+        var sanitizedQuery = Fts5QuerySanitizer.Sanitize(topic);
+
+        if (string.IsNullOrWhiteSpace(sanitizedQuery))
+        {
+            return SerializeError("Topic query cannot be empty", "EMPTY_QUERY");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            Core.Models.ProjectOutline outline;
+            try
+            {
+                outline = await scope.Store.SearchTopicOutlineAsync(
+                    scope.RepoId, sanitizedQuery, clampedLimit, validatedPathFilter).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // FTS5 syntax error — retry with literal phrase
+                var literalQuery = $"\"{topic.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+                outline = await scope.Store.SearchTopicOutlineAsync(
+                    scope.RepoId, literalQuery, clampedLimit, validatedPathFilter).ConfigureAwait(false);
+            }
+
+            return FormatTopicOutline(outline, sanitizedQuery, clampedLimit);
+        }
+    }
+
     [McpServerTool(Name = "search_text")]
     [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Config' to target configuration).")]
     public async Task<string> SearchText(
@@ -615,6 +683,35 @@ internal sealed class QueryTools
 
             return JsonSerializer.Serialize(response, SerializerOptions);
         }
+    }
+
+    private static string FormatTopicOutline(Core.Models.ProjectOutline outline, string query, int maxResults)
+    {
+        var sb = new StringBuilder();
+        var pageSymbols = CountSymbols(outline.Groups);
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Topic Outline: \"{query}\" (showing {pageSymbols} of {outline.TotalSymbolCount} matches)");
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Topic Outline: \"{query}\" ({pageSymbols} matches)");
+        }
+
+        foreach (var group in outline.Groups)
+        {
+            RenderGroup(sb, group, depth: 0);
+        }
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine();
+            sb.AppendLine("---");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"**Truncated:** {outline.TotalSymbolCount - pageSymbols} more matches. Refine your topic query or use `pathFilter` to narrow results. Max: `maxResults: {maxResults}`.");
+        }
+
+        return sb.ToString();
     }
 
     private static string FormatOutline(Core.Models.ProjectOutline outline, int offset, int maxSymbols)

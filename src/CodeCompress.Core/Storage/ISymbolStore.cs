@@ -51,4 +51,7 @@ public interface ISymbolStore
     public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
     public Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);
+
+    // Topic outline
+    public Task<ProjectOutline> SearchTopicOutlineAsync(string repoId, string query, int limit, string? pathFilter = null);
 }
