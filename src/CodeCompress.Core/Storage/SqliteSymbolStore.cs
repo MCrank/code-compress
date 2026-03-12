@@ -734,7 +734,14 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (kind is not null)
         {
-            sql.Append(" AND s.kind = @kind");
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                sql.Append(" AND s.kind IN (@kind, @kindEnum)");
+            }
+            else
+            {
+                sql.Append(" AND s.kind = @kind");
+            }
         }
 
         if (pathFilter is not null)
@@ -764,6 +771,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
         if (kind is not null)
         {
             command.Parameters.AddWithValue("@kind", kind);
+
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                command.Parameters.AddWithValue("@kindEnum", nameof(SymbolKind.Enum));
+            }
         }
 
         if (pathFilter is not null)

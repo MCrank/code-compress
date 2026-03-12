@@ -89,7 +89,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(allSymbolKinds).Contains("Interface");
         await Assert.That(allSymbolKinds).Contains("Module");
         await Assert.That(allSymbolKinds).Contains("Constant");
-        await Assert.That(allSymbolKinds).Contains("Type");
+        await Assert.That(allSymbolKinds).Contains("Enum");
     }
 
     [Test]
@@ -156,6 +156,30 @@ internal sealed class CSharpEndToEndTests : IDisposable
 
         await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
         await Assert.That(results.All(r => r.Symbol.Kind == "Record")).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindEnumReturnsOnlyEnums()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "GameState", kind: "Enum", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Kind == "Enum")).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindTypeAlsoReturnsEnums()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "GameState", kind: "Type", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.Any(r => r.Symbol.Kind == "Enum")).IsTrue();
     }
 
     [Test]
@@ -240,7 +264,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(symbols).Count().IsGreaterThanOrEqualTo(1);
         var itemRarity = symbols.First(s => s.Name == "ItemRarity");
         await Assert.That(itemRarity.ParentSymbol).IsEqualTo("Inventory");
-        await Assert.That(itemRarity.Kind).IsEqualTo("Type");
+        await Assert.That(itemRarity.Kind).IsEqualTo("Enum");
     }
 
     [Test]

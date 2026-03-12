@@ -295,7 +295,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var en = result.Symbols.First(s => s.Name == "Color");
-        await Assert.That(en.Kind).IsEqualTo(SymbolKind.Type);
+        await Assert.That(en.Kind).IsEqualTo(SymbolKind.Enum);
         await Assert.That(en.Visibility).IsEqualTo(Visibility.Public);
     }
 
@@ -1495,7 +1495,7 @@ internal sealed class CSharpParserTests
         var properties = result.Symbols.Where(s => s.Kind == SymbolKind.Constant).ToList();
         await Assert.That(properties.Count).IsGreaterThanOrEqualTo(2);
 
-        var enums = result.Symbols.Where(s => s.Kind == SymbolKind.Type).ToList();
+        var enums = result.Symbols.Where(s => s.Kind == SymbolKind.Enum).ToList();
         await Assert.That(enums).Count().IsEqualTo(1);
 
         // Dependencies from using statements
