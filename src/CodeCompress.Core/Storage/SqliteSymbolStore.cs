@@ -1647,4 +1647,135 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         return new ChangedFilesResult(added, modified, removed);
     }
+
+    public async Task<ProjectOutline> SearchTopicOutlineAsync(string repoId, string query, int limit, string? pathFilter = null)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (query.Length == 0)
+        {
+            return new ProjectOutline(repoId, [], 0, false);
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 200);
+
+        // Step 1: Count total FTS5 matches for truncation detection
+        using var countCommand = _connection.CreateCommand();
+        var countSql = new StringBuilder();
+        countSql.Append(
+            """
+            SELECT COUNT(*)
+            FROM symbols_fts
+            JOIN symbols s ON s.id = symbols_fts.rowid
+            JOIN files f ON f.id = s.file_id
+            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+            """);
+
+        if (pathFilter is not null)
+        {
+            countSql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        countCommand.CommandText = countSql.ToString();
+#pragma warning restore CA2100
+
+        countCommand.Parameters.AddWithValue("@query", query);
+        countCommand.Parameters.AddWithValue("@repoId", repoId);
+
+        string? normalizedPrefix = null;
+        if (pathFilter is not null)
+        {
+            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
+            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+                ? normalizedPrefix
+                : normalizedPrefix + Path.DirectorySeparatorChar;
+            countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
+        }
+
+        var totalCount = Convert.ToInt32(
+            await countCommand.ExecuteScalarAsync().ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
+
+        if (totalCount == 0)
+        {
+            return new ProjectOutline(repoId, [], 0, false);
+        }
+
+        // Step 2: Fetch symbols with limit, ordered by file then line
+        using var command = _connection.CreateCommand();
+        var sql = new StringBuilder();
+        sql.Append(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   f.relative_path
+            FROM symbols_fts
+            JOIN symbols s ON s.id = symbols_fts.rowid
+            JOIN files f ON f.id = s.file_id
+            WHERE symbols_fts MATCH @query AND f.repo_id = @repoId
+            """);
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" ORDER BY f.relative_path, s.line_start LIMIT @limit");
+
+#pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@query", query);
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        if (pathFilter is not null)
+        {
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix!);
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+
+        var symbolsByFile = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var symbol = new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+
+            var filePath = reader.GetString(12);
+
+            if (!symbolsByFile.TryGetValue(filePath, out var list))
+            {
+                list = [];
+                symbolsByFile[filePath] = list;
+            }
+
+            list.Add(symbol);
+        }
+
+        var groups = symbolsByFile
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .Select(kvp => new OutlineGroup(kvp.Key, kvp.Value, []))
+            .ToList();
+
+        var fetchedCount = symbolsByFile.Values.Sum(l => l.Count);
+        var isTruncated = fetchedCount < totalCount;
+
+        return new ProjectOutline(repoId, groups, totalCount, isTruncated);
+    }
 }
