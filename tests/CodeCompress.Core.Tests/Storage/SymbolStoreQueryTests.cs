@@ -464,6 +464,100 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(outline.Groups).Count().IsEqualTo(0);
     }
 
+    // ── GetProjectOutlineAsync Pagination Tests ────────────────────────
+
+    [Test]
+    public async Task GetProjectOutlineAsyncReturnsTotalSymbolCount()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1).ConfigureAwait(false);
+
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncWithLimitReturnsTruncatedResults()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 2).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(2);
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsTrue();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncWithOffsetSkipsSymbols()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, offset: 2, limit: 10).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(2);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncZeroLimitReturnsAllSymbols()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 0).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsFalse();
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncLimitExceedsTotalReturnsNotTruncated()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, limit: 100).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(4);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPaginationCombinesWithPathFilter()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = await SeedMultiFileDataAsync(connection).ConfigureAwait(false);
+
+        var outline = await store.GetProjectOutlineAsync("repo1", true, "file", 1, "src/services", limit: 1).ConfigureAwait(false);
+
+        var allSymbols = outline.Groups.SelectMany(g => g.Symbols).ToList();
+        await Assert.That(allSymbols).Count().IsEqualTo(1);
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(1);
+        await Assert.That(outline.IsTruncated).IsFalse();
+    }
+
+    [Test]
+    public async Task GetProjectOutlineAsyncPaginationCombinesWithIncludePrivate()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        // Without private: 3 public symbols (Initialize, MyClass, DoWork)
+        var outline = await store.GetProjectOutlineAsync("repo1", false, "file", 1, limit: 2).ConfigureAwait(false);
+
+        await Assert.That(outline.TotalSymbolCount).IsEqualTo(3);
+        await Assert.That(outline.IsTruncated).IsTrue();
+    }
+
     // ── GetModuleApiAsync Tests ──────────────────────────────────────────
 
     [Test]

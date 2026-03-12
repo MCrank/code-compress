@@ -46,13 +46,15 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Requires index_project to have been called first.")]
+    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Supports pagination via offset/maxSymbols for large codebases. Requires index_project to have been called first.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
         [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
         [Description("Filter outline to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
+        [Description("Maximum number of symbols to return (1-5000, default 500). Use with offset to paginate large codebases.")] int maxSymbols = 500,
+        [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
     {
         _activityTracker.RecordActivity();
@@ -85,6 +87,9 @@ internal sealed class QueryTools
             }
         }
 
+        var clampedMaxSymbols = Math.Clamp(maxSymbols, 1, 5000);
+        var clampedOffset = Math.Max(offset, 0);
+
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
@@ -93,9 +98,11 @@ internal sealed class QueryTools
                 includePrivate,
                 groupBy,
                 maxDepth ?? 0,
-                validatedPathFilter).ConfigureAwait(false);
+                validatedPathFilter,
+                clampedOffset,
+                clampedMaxSymbols).ConfigureAwait(false);
 
-            return FormatOutline(outline);
+            return FormatOutline(outline, clampedOffset, clampedMaxSymbols);
         }
     }
 
@@ -540,15 +547,31 @@ internal sealed class QueryTools
         }
     }
 
-    private static string FormatOutline(Core.Models.ProjectOutline outline)
+    private static string FormatOutline(Core.Models.ProjectOutline outline, int offset, int maxSymbols)
     {
         var sb = new StringBuilder();
-        var totalSymbols = CountSymbols(outline.Groups);
-        sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline ({totalSymbols} symbols)");
+        var pageSymbols = CountSymbols(outline.Groups);
+
+        if (outline.IsTruncated)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline (showing {pageSymbols} of {outline.TotalSymbolCount} symbols, offset {offset})");
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"# Project Outline ({pageSymbols} symbols)");
+        }
 
         foreach (var group in outline.Groups)
         {
             RenderGroup(sb, group, depth: 0);
+        }
+
+        if (outline.IsTruncated)
+        {
+            var nextOffset = offset + pageSymbols;
+            sb.AppendLine();
+            sb.AppendLine(CultureInfo.InvariantCulture, $"---");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"**Truncated:** {outline.TotalSymbolCount - nextOffset} symbols remaining. Call again with `offset: {nextOffset}, maxSymbols: {maxSymbols}` to continue.");
         }
 
         return sb.ToString();
