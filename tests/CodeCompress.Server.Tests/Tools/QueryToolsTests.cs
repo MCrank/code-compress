@@ -766,6 +766,178 @@ internal sealed class QueryToolsTests
         }
     }
 
+    // ── ExpandSymbol ─────────────────────────────────────────────
+
+    [Test]
+    public async Task ExpandSymbolNestedMethodReturnsOnlyMethodBody()
+    {
+        var content = "public class PlayerService\n{\n    public int GetHealth()\n    {\n        return 100;\n    }\n}\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var methodSource = "    public int GetHealth()\n    {\n        return 100;\n    }";
+            var byteOffset = Encoding.UTF8.GetByteCount("public class PlayerService\n{\n");
+            var byteLength = Encoding.UTF8.GetByteCount(methodSource);
+
+            var symbol = CreateSymbol(2, 1, "GetHealth", "Method",
+                "public int GetHealth()", parent: "PlayerService",
+                lineStart: 3, docComment: "Gets player health",
+                byteOffset: byteOffset, byteLength: byteLength);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "PlayerService:GetHealth")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 100, 7, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.ExpandSymbol(dir, "PlayerService:GetHealth").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("GetHealth");
+            await Assert.That(root.GetProperty("kind").GetString()).IsEqualTo("Method");
+            await Assert.That(root.GetProperty("parent").GetString()).IsEqualTo("PlayerService");
+            await Assert.That(root.GetProperty("signature").GetString()).IsEqualTo("public int GetHealth()");
+            await Assert.That(root.GetProperty("doc_comment").GetString()).IsEqualTo("Gets player health");
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(methodSource);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task ExpandSymbolTopLevelReturnsFullSource()
+    {
+        var content = "function Initialize()\n  setup()\nend\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var expectedSource = "function Initialize()\n  setup()\nend";
+            var byteLength = Encoding.UTF8.GetByteCount(expectedSource);
+
+            var symbol = CreateSymbol(1, 1, "Initialize", "Function",
+                "function Initialize()", lineStart: 1,
+                byteOffset: 0, byteLength: byteLength);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Initialize")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 50, 3, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.ExpandSymbol(dir, "Initialize").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("Initialize");
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(expectedSource);
+            await Assert.That(root.TryGetProperty("parent", out var parentProp) && parentProp.ValueKind == JsonValueKind.Null).IsTrue();
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task ExpandSymbolNotFoundReturnsError()
+    {
+        _store.GetSymbolByNameAsync("test-repo-id", "NonExistent:Method")
+            .Returns((Symbol?)null);
+
+        var result = await _tools.ExpandSymbol("/valid/path", "NonExistent:Method").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+    }
+
+    [Test]
+    public async Task ExpandSymbolInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.ExpandSymbol("/../../../etc/passwd", "SomeSymbol").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task ExpandSymbolWithContextIncludesThreeLines()
+    {
+        var lines = new StringBuilder();
+        for (var i = 1; i <= 10; i++)
+        {
+            lines.AppendLine(CultureInfo.InvariantCulture, $"line{i}");
+        }
+
+        var content = lines.ToString();
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            // Target line5 and line6
+            var prefix = "line1\nline2\nline3\nline4\n";
+            var target = "line5\nline6";
+            var byteOffset = Encoding.UTF8.GetByteCount(prefix);
+            var byteLength = Encoding.UTF8.GetByteCount(target);
+
+            var symbol = CreateSymbol(1, 1, "Target", "Function",
+                "function Target()", lineStart: 5,
+                byteOffset: byteOffset, byteLength: byteLength);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Target")
+                .Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 100, 10, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.ExpandSymbol(dir, "Target", includeContext: true).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var sourceCode = doc.RootElement.GetProperty("source_code").GetString()!;
+
+            // With 3-line context, should include lines 2-3-4 before and 7-8-9 after
+            await Assert.That(sourceCode).Contains("line2");
+            await Assert.That(sourceCode).Contains("line5");
+            await Assert.That(sourceCode).Contains("line6");
+            await Assert.That(sourceCode).Contains("line8");
+            // line1 should NOT be in context (only 3 lines back from line5 = line2,3,4)
+            await Assert.That(sourceCode).DoesNotContain("line1\n");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     [Test]
     public async Task GetSymbolsAllFoundReturnsAllResults()
     {

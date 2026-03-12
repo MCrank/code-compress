@@ -27,7 +27,7 @@ internal sealed class QueryTools
 
     private static readonly HashSet<string> ValidSymbolKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "function", "method", "type", "class", "interface", "export", "constant", "module", "record",
+        "function", "method", "type", "class", "interface", "export", "constant", "module", "record", "enum",
     };
 
     private readonly IPathValidator _pathValidator;
@@ -231,6 +231,76 @@ internal sealed class QueryTools
                 symbol.LineStart,
                 symbol.LineEnd,
                 symbol.Signature,
+                SourceCode = sourceCode,
+            };
+
+            return JsonSerializer.Serialize(response, SerializerOptions);
+        }
+    }
+
+    [McpServerTool(Name = "expand_symbol")]
+    [Description("Retrieve only the body of a nested symbol (e.g., a single method within a class) without loading the entire parent. Use 'Parent:Child' qualified names to extract just the method you need — saves ~60% tokens vs get_symbol on the parent class. Returns the leaf symbol source code with optional 3-line context.")]
+    public async Task<string> ExpandSymbol(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'PlayerService:GetHealth'). Use search_symbols to discover names.")] string symbolName,
+        [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
+        CancellationToken cancellationToken = default)
+    {
+        _activityTracker.RecordActivity();
+
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                return JsonSerializer.Serialize(
+                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Symbol = SanitizeSymbolName(symbolName) },
+                    SerializerOptions);
+            }
+
+            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+            var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+            if (file is null)
+            {
+                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = _pathValidator.ValidatePath(
+                    Path.Combine(validatedPath, file.RelativePath), validatedPath);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Path validation failed", "INVALID_PATH");
+            }
+
+            var sourceCode = includeContext
+                ? await ReadSourceCodeWithContextAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength, contextLines: 3).ConfigureAwait(false)
+                : await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+            var response = new
+            {
+                symbol.Name,
+                symbol.Kind,
+                Parent = symbol.ParentSymbol,
+                File = file.RelativePath,
+                symbol.LineStart,
+                symbol.LineEnd,
+                symbol.Signature,
+                symbol.DocComment,
                 SourceCode = sourceCode,
             };
 
