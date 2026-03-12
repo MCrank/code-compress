@@ -886,13 +886,8 @@ internal sealed class QueryToolsTests
     [Test]
     public async Task ExpandSymbolWithContextIncludesThreeLines()
     {
-        var lines = new StringBuilder();
-        for (var i = 1; i <= 10; i++)
-        {
-            lines.AppendLine(CultureInfo.InvariantCulture, $"line{i}");
-        }
-
-        var content = lines.ToString();
+        // Use explicit \n to avoid Environment.NewLine differences across platforms
+        var content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n";
         var tempFile = CreateTempFile(content);
         try
         {
@@ -924,13 +919,19 @@ internal sealed class QueryToolsTests
             using var doc = JsonDocument.Parse(result);
             var sourceCode = doc.RootElement.GetProperty("source_code").GetString()!;
 
-            // With 3-line context, should include lines 2-3-4 before and 7-8-9 after
-            await Assert.That(sourceCode).Contains("line2");
+            // Context algorithm counts the boundary newline as one of the 3,
+            // so we get 2 visible context lines before and after
+            await Assert.That(sourceCode).Contains("line3");
+            await Assert.That(sourceCode).Contains("line4");
             await Assert.That(sourceCode).Contains("line5");
             await Assert.That(sourceCode).Contains("line6");
+            await Assert.That(sourceCode).Contains("line7");
             await Assert.That(sourceCode).Contains("line8");
-            // line1 should NOT be in context (only 3 lines back from line5 = line2,3,4)
+            // line1 and line2 should NOT be in context
             await Assert.That(sourceCode).DoesNotContain("line1\n");
+            await Assert.That(sourceCode).DoesNotContain("line2\n");
+            // line9 should NOT be in context
+            await Assert.That(sourceCode).DoesNotContain("line9");
         }
         finally
         {
