@@ -896,7 +896,7 @@ public sealed partial class CSharpParser : ILanguageParser
         string keyword;
         if (!string.IsNullOrEmpty(recordKeyword))
         {
-            kind = SymbolKind.Class;
+            kind = SymbolKind.Record;
             keyword = string.IsNullOrEmpty(recordSubKeyword)
                 ? "record"
                 : $"record {recordSubKeyword}";
