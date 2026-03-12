@@ -9,5 +9,6 @@ public enum SymbolKind
     Interface,
     Export,
     Constant,
-    Module
+    Module,
+    Record
 }

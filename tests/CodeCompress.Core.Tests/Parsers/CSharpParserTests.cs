@@ -260,7 +260,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.Signature).IsEqualTo("public record Foo(int X, string Y);");
     }
 
@@ -274,7 +274,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Point");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.Signature).IsEqualTo("public record struct Point(int X, int Y);");
     }
 
@@ -659,7 +659,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
         await Assert.That(rec.LineEnd).IsEqualTo(4);
     }
 
@@ -1428,7 +1428,7 @@ internal sealed class CSharpParserTests
         var result = Parse(source);
 
         var rec = result.Symbols.First(s => s.Name == "Foo");
-        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Class);
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
 
         var method = result.Symbols.First(s => s.Kind == SymbolKind.Method);
         await Assert.That(method.Name).IsEqualTo("Double");

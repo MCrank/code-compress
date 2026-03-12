@@ -925,7 +925,7 @@ internal sealed class QueryToolsTests
         using var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("error").GetString())
-            .IsEqualTo("Invalid symbol kind. Must be one of: function, method, type, class, interface, export, constant, module");
+            .IsEqualTo("Invalid symbol kind. Must be one of: function, method, type, class, record, interface, export, constant, module");
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_KIND");
 
         await _store.DidNotReceive().SearchSymbolsAsync(

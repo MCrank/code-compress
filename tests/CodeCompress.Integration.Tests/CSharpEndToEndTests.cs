@@ -84,6 +84,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         // Verify some specific symbol kinds appear
         var allSymbolKinds = CollectSymbolKinds(outline.Groups);
         await Assert.That(allSymbolKinds).Contains("Class");
+        await Assert.That(allSymbolKinds).Contains("Record");
         await Assert.That(allSymbolKinds).Contains("Method");
         await Assert.That(allSymbolKinds).Contains("Interface");
         await Assert.That(allSymbolKinds).Contains("Module");
@@ -125,11 +126,36 @@ internal sealed class CSharpEndToEndTests : IDisposable
 
         // The record is stored as a Class kind
         var symbols = await _store.GetSymbolsByNamesAsync(_repoId, ["Player"]).ConfigureAwait(false);
-        var record = symbols.FirstOrDefault(s => s.Kind == "Class" && s.Name == "Player");
+        var record = symbols.FirstOrDefault(s => s.Kind == "Record" && s.Name == "Player");
 
         await Assert.That(record).IsNotNull();
         await Assert.That(record!.Signature).Contains("record");
         await Assert.That(record.Signature).Contains("Player");
+    }
+
+    [Test]
+    public async Task GetSymbolBySimpleNameFindsRecord()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // get_symbol uses GetSymbolByNameAsync — simple name lookup
+        var symbol = await _store.GetSymbolByNameAsync(_repoId, "Player").ConfigureAwait(false);
+
+        await Assert.That(symbol).IsNotNull();
+        await Assert.That(symbol!.Name).IsEqualTo("Player");
+        await Assert.That(symbol.Kind).IsEqualTo("Record");
+    }
+
+    [Test]
+    public async Task SearchSymbolsByKindRecordReturnsOnlyRecords()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "Player", kind: "Record", limit: 10).ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(results.All(r => r.Symbol.Kind == "Record")).IsTrue();
     }
 
     [Test]
