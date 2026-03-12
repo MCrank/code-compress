@@ -1082,6 +1082,21 @@ internal sealed class QueryToolsTests
     }
 
     [Test]
+    public async Task SearchSymbolsWildcardWithPathFilterBrowsesAllSymbols()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%")
+            .Returns(new List<SymbolSearchResult>());
+
+        var result = await _tools.SearchSymbols("/valid/path", "*", pathFilter: "src/Core").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Core", "%").ConfigureAwait(false);
+    }
+
+    [Test]
     public async Task SearchSymbolsPrefixGlobPassesFts5PrefixQuery()
     {
         _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
