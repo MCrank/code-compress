@@ -1,0 +1,59 @@
+@implements IDisposable
+
+@using System.Collections.Generic
+
+@inject HttpClient Http
+
+<div class="data-grid">
+    <div class="grid-header">
+        <h3>Data Grid - @DataSource</h3>
+        <span class="page-info">Page size: @PageSize</span>
+    </div>
+
+    @if (_items == null)
+    {
+        <div class="loading-spinner">
+            <p>Loading data from @DataSource...</p>
+        </div>
+    }
+    else
+    {
+        <table class="table table-striped">
+            <tbody>
+                @foreach (var item in _items)
+                {
+                    <tr><td>@item</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string DataSource { get; set; }
+
+    [Parameter]
+    public int PageSize { get; set; }
+
+    private List<string> _items;
+    private CancellationTokenSource _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cts = new CancellationTokenSource();
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        var response = await Http.GetStringAsync(DataSource, _cts.Token);
+        _items = new List<string> { response };
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

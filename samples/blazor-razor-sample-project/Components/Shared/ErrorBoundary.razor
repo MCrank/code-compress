@@ -1,0 +1,33 @@
+@inherits Microsoft.AspNetCore.Components.ErrorBoundary
+
+@if (_hasError)
+{
+    <div class="alert alert-danger" role="alert">
+        <h4 class="alert-heading">Something went wrong</h4>
+        <p>An unexpected error occurred. Please try again.</p>
+        <hr />
+        <button class="btn btn-outline-danger" @onclick="Recover">
+            Try Again
+        </button>
+    </div>
+}
+else
+{
+    @ChildContent
+}
+
+@code {
+    private bool _hasError;
+
+    protected override Task OnErrorAsync(Exception exception)
+    {
+        _hasError = true;
+        return Task.CompletedTask;
+    }
+
+    private void Recover()
+    {
+        _hasError = false;
+        base.Recover();
+    }
+}

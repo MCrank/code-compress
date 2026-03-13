@@ -1,0 +1,20 @@
+@page "/legacy"
+
+<PageTitle>Legacy Page</PageTitle>
+
+<h1>Legacy Component</h1>
+
+<div class="legacy-content">
+    <p>Current mode: @Mode</p>
+    <button class="btn btn-warning" @onclick="DoWork">Execute</button>
+</div>
+
+@functions {
+    [Parameter]
+    public string Mode { get; set; }
+
+    private void DoWork()
+    {
+        Console.WriteLine("Working in mode: " + Mode);
+    }
+}
