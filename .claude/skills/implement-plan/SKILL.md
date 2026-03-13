@@ -181,7 +181,39 @@ After all implementation is complete:
 4. **Coverage check**: Verify test coverage meets targets from CLAUDE.md (Parsers 95%+, Storage 90%+, IndexEngine 90%+, MCP Tools 85%+)
 5. **Security audit**: Verify no parameterized query violations, no path traversal gaps, no unsanitized output
 
-## Step 6: README Review
+## Step 6: Sample Project & Integration Tests (Parser Features)
+
+When the implementation includes a **new language parser**, create a sample project and end-to-end integration tests to validate the parser against realistic files:
+
+### 6a. Create Sample Project
+
+Create a directory at `samples/{language}-sample-project/` containing realistic source files that exercise **every feature** of the new parser. Follow the existing patterns (see `samples/csharp-sample-project/`, `samples/luau-sample-project/`, `samples/terraform-sample-project/` for reference).
+
+Requirements:
+- Files should look like real-world code — not just test fixtures with bare syntax
+- Cover **all block types, symbol kinds, and edge cases** the parser handles (e.g., nested blocks, comments as doc comments, heredocs, string literals with special chars)
+- Include enough variety to catch brace/block matching issues, comment extraction, dependency tracking, and signature enrichment
+- The sample project should be self-contained (no external dependencies required to parse)
+
+### 6b. Write Integration Tests
+
+Create an end-to-end integration test class at `tests/CodeCompress.Integration.Tests/{Language}EndToEndTests.cs` following the pattern in `CSharpEndToEndTests.cs`:
+
+- Set up: in-memory SQLite, `IndexEngine` with the new parser, sample project path
+- Test indexing: correct file count and symbol count
+- Test outline: all expected `SymbolKind` values appear
+- Test symbol lookup: verify specific symbols exist with correct Kind, Visibility, DocComment
+- Test search: verify symbols are discoverable via `SearchSymbolsAsync`
+- Test dependencies: verify dependency graph has expected edges (if the parser produces `DependencyInfo`)
+- Test edge cases: heredocs, nested blocks, malformed input — verify correct parsing through the full pipeline
+
+**Important:** Terraform-style dotted symbol names (e.g., `aws_instance.web`) conflict with `GetSymbolByNameAsync`'s parent.child splitting logic. Use `GetSymbolsByFileAsync` to find symbols by exact name in those cases.
+
+### 6c. Verify
+
+Run the full test suite to confirm all integration tests pass alongside existing tests.
+
+## Step 7: README Review
 
 After implementation is complete, review `README.md` for any updates needed based on the changes made. Common updates include:
 
@@ -192,7 +224,7 @@ After implementation is complete, review `README.md` for any updates needed base
 
 If updates are needed, make them and include them in the commit.
 
-## Step 7: Summary
+## Step 8: Summary
 
 When complete, provide:
 
