@@ -181,7 +181,18 @@ After all implementation is complete:
 4. **Coverage check**: Verify test coverage meets targets from CLAUDE.md (Parsers 95%+, Storage 90%+, IndexEngine 90%+, MCP Tools 85%+)
 5. **Security audit**: Verify no parameterized query violations, no path traversal gaps, no unsanitized output
 
-## Step 6: Summary
+## Step 6: README Review
+
+After implementation is complete, review `README.md` for any updates needed based on the changes made. Common updates include:
+
+- **Supported Languages table** — if a new language parser was added, add a row to the table
+- **Architecture diagram** — if the parser list in the ASCII art changed
+- **Feature descriptions** — if new MCP tools or capabilities were added
+- **Installation/usage** — if new configuration or setup steps are needed
+
+If updates are needed, make them and include them in the commit.
+
+## Step 7: Summary
 
 When complete, provide:
 
