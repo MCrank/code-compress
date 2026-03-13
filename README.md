@@ -144,7 +144,8 @@ AI Agent  <── MCP (stdio) ──>  CodeCompress Server
                                    /      \
                           Language       SQLite Store
                           Parsers        .code-compress/
-                        (Luau, C#)      index.db
+                    (Luau, C#, Blazor,  index.db
+                   Terraform, JSON, …)
 ```
 
 1. **Index** — CodeCompress walks your source files, hashes each one (SHA-256), and extracts symbols (functions, classes, types, constants) and dependencies (imports/requires) using language-specific parsers.
@@ -251,11 +252,15 @@ The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/
 
 ## Supported Languages
 
-| Language | Status | Parser |
-|----------|--------|--------|
-| Luau (Roblox) | Available | Regex/pattern-based |
-| C# / .NET | Available | Regex/pattern-based |
-| Python, TypeScript, Go, Rust | Planned | — |
+| Language | Extensions | Status | Parser |
+|----------|------------|--------|--------|
+| Luau (Roblox) | `.luau`, `.lua` | Available | Regex/pattern-based |
+| C# / .NET | `.cs` | Available | Regex/pattern-based |
+| Blazor / Razor | `.razor` | Available | Directive extraction + C# delegation |
+| Terraform / HCL | `.tf`, `.tfvars` | Available | Regex/pattern-based |
+| .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
+| JSON Config | `.json` | Available | Structure-based |
+| Python, TypeScript, Go, Rust | — | Planned | — |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
 

@@ -19,6 +19,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILanguageParser, CSharpParser>();
         services.AddSingleton<ILanguageParser, DotNetProjectParser>();
         services.AddSingleton<ILanguageParser, JsonConfigParser>();
+        services.AddSingleton<ILanguageParser, BlazorRazorParser>();
+        services.AddSingleton<ILanguageParser, TerraformParser>();
 
         // Indexing
         services.AddSingleton<IFileHasher, FileHasher>();
