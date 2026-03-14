@@ -5,7 +5,6 @@ using System.Text.Json;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -25,17 +24,14 @@ internal sealed class DependencyTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public DependencyTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public DependencyTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "dependency_graph")]
@@ -47,8 +43,6 @@ internal sealed class DependencyTools
         [Description("Maximum traversal depth (1-50). Omit for unlimited.")] int? depth = null,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -183,8 +177,6 @@ internal sealed class DependencyTools
         [Description("Filter to projects whose name contains this string (case-insensitive). Omit for all projects.")] string? projectFilter = null,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
