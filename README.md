@@ -306,15 +306,36 @@ codecompress get-symbol --path /path/to/project --name MyClass:MyMethod
 # Search raw file contents
 codecompress search-text --path /path/to/project --query "TODO"
 
+# Retrieve a nested method without loading the whole class (~60% token savings)
+codecompress expand-symbol --path /path/to/project --name MyClass:MyMethod
+
+# Batch retrieve multiple symbols at once
+codecompress get-symbols --path /path/to/project --names "Foo,Bar,Baz"
+
+# Get the public API surface of a single file
+codecompress get-module-api --path /path/to/project --module src/Core/Foo.cs
+
+# Search by topic — returns results in outline format
+codecompress topic-outline --path /path/to/project --topic authentication
+
+# Find all references to a symbol across the codebase
+codecompress find-references --path /path/to/project --name ISymbolStore
+
 # View directory structure (no index required)
 codecompress file-tree --path /path/to/project
 
-# Show dependency graph
+# Show file-level dependency graph
 codecompress deps --path /path/to/project
+
+# Show inter-project dependencies (.NET solutions)
+codecompress project-deps --path /path/to/project
 
 # Snapshot + change tracking
 codecompress snapshot --path /path/to/project --label before-refactor
 codecompress changes --path /path/to/project --label before-refactor
+
+# Delete index to force full re-index
+codecompress invalidate-cache --path /path/to/project
 ```
 
 ### JSON Output
@@ -342,12 +363,19 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | `index` | `index_project` | Build/update the symbol database |
 | `outline` | `project_outline` | Compressed codebase overview |
 | `get-symbol` | `get_symbol` | Retrieve symbol source code |
+| `expand-symbol` | `expand_symbol` | Extract nested symbol (~60% fewer tokens) |
+| `get-symbols` | `get_symbols` | Batch retrieve multiple symbols |
+| `get-module-api` | `get_module_api` | Public API surface of a file |
 | `search` | `search_symbols` | FTS5 symbol search |
 | `search-text` | `search_text` | FTS5 raw content search |
+| `topic-outline` | `topic_outline` | Topic-based search in outline format |
+| `find-references` | `find_references` | Find all symbol references |
 | `changes` | `changes_since` | Delta since snapshot |
 | `snapshot` | `snapshot_create` | Create index snapshot |
 | `file-tree` | `file_tree` | Directory tree |
-| `deps` | `dependency_graph` | Dependency graph |
+| `deps` | `dependency_graph` | File-level dependency graph |
+| `project-deps` | `project_dependencies` | Inter-project dependencies (.NET) |
+| `invalidate-cache` | `invalidate_cache` | Force full re-index |
 
 ## License
 
