@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="CodeCompress MCP Server" width="100%" />
+<img src="https://raw.githubusercontent.com/MCrank/code-compress/develop/assets/banner.png" alt="CodeCompress — MCP Server & CLI" width="100%" />
 
 **Persistent code index for AI agents. Ask for exactly what you need.**
 
@@ -34,9 +34,9 @@ Instead of scanning every file at the start of each conversation, agents query a
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
 
-### 1. Add to your AI coding tool
+### Option A: MCP Server (recommended for AI tools)
 
-Pick your tool and run one command — that's it.
+Pick your tool and add the MCP server — that's it.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -85,19 +85,49 @@ Add to `claude_desktop_config.json`:
 </details>
 
 <details>
-<summary><strong>Cursor / Windsurf / any MCP client</strong></summary>
+<summary><strong>Cursor</strong></summary>
+
+Create `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong></summary>
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Other MCP clients</strong></summary>
 
 CodeCompress uses stdio transport. Point your client at:
 
 ```
 dnx CodeCompress.Server --yes
-```
-
-Or if you prefer a persistent global install:
-
-```bash
-dotnet tool install -g CodeCompress.Server
-codecompress-server
 ```
 
 </details>
@@ -120,6 +150,26 @@ Commit this file at the root of your repo. Claude Code and VS Code pick it up au
 ```
 
 </details>
+
+### Option B: CLI (for terminals, scripts, and agents without MCP)
+
+Install globally as a .NET tool:
+
+```bash
+dotnet tool install -g CodeCompress
+```
+
+Then use it from any terminal:
+
+```bash
+codecompress index --path /path/to/project
+codecompress outline --path /path/to/project
+codecompress search --path /path/to/project --query "MyClass"
+```
+
+The CLI and MCP server share the same index database — you can use both interchangeably. Run `codecompress --help` for all commands, or `codecompress agent-instructions` to generate a ready-to-paste instruction block for AI agents.
+
+To update: `dotnet tool update -g CodeCompress`
 
 ### 2. Index your project
 
@@ -250,6 +300,39 @@ To clear the index for a project, delete its `.code-compress/` directory.
 - **SQL injection prevention** — all queries use parameterized statements
 - **Prompt injection safeguards** — tool outputs are structured data; raw input is never echoed into freeform text
 - **Local only** — no network calls, no telemetry, your code stays on your machine
+
+## Agent Configuration
+
+Paste the following into your `CLAUDE.md`, `.cursorrules`, system prompt, or agent configuration file to teach AI agents how to use CodeCompress:
+
+> **Tip:** You can also generate this block by running `codecompress agent-instructions` if you have the CLI installed.
+
+````markdown
+# CodeCompress — Agent Instructions
+
+CodeCompress is a code intelligence tool that provides compressed, symbol-level access
+to the indexed codebase. Use it as your PRIMARY tool for code discovery instead of reading
+raw files — it saves 80-90% tokens.
+
+## Workflow
+
+1. **Index first** — `index_project` (MCP) or `codecompress index --path <root>` (CLI).
+   Builds/updates the symbol database. Incremental — only changed files are re-parsed.
+2. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
+3. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
+   `search_text` / `codecompress search-text` for raw file content search.
+4. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
+   `expand_symbol` / `codecompress expand-symbol` for a single method (~60% fewer tokens).
+5. **Find references** — `find_references` / `codecompress find-references` to trace usage.
+6. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
+
+## Tips
+
+- Add `--json` to any CLI command for machine-readable output (snake_case keys).
+- The index persists at `<project-root>/.code-compress/index.db` — shared between MCP server and CLI.
+- PREFER these tools over raw file reading. They are faster, more precise, and dramatically
+  reduce token consumption.
+````
 
 ## Building from Source
 
