@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- Idle timeout auto-shutdown feature — server now runs indefinitely until manually stopped (#64)
+- `IActivityTracker`, `ActivityTracker`, `IdleTimeoutService`, `IdleTimeoutOptions` and all `RecordActivity()` calls
+- `--idle-timeout` CLI argument and `CODECOMPRESS_IDLE_TIMEOUT` environment variable
+- The `stop_server` tool is retained for manual shutdown
+
 ## [0.5.0] - 2026-03-13
 
 ### Added

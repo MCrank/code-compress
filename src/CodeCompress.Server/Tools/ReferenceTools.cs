@@ -4,7 +4,6 @@ using CodeCompress.Core.Models;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -19,17 +18,14 @@ internal sealed class ReferenceTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public ReferenceTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public ReferenceTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "find_references")]
@@ -41,8 +37,6 @@ internal sealed class ReferenceTools
         [Description("Maximum results to return (1-100, default 20)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {

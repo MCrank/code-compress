@@ -206,47 +206,7 @@ CodeCompress is designed to stay current with minimal effort:
 
 > **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
 
-## Server Lifecycle & Idle Timeout
-
-The CodeCompress server manages its own lifecycle to avoid consuming resources indefinitely.
-
-### Idle Timeout
-
-By default, the server **automatically shuts down after 10 minutes of inactivity** (no MCP tool calls). Every tool call resets the idle timer. The MCP client will restart the server automatically on the next tool call — the restart cost is just process startup (~1–2s), not re-indexing (the SQLite database persists on disk).
-
-| Setting | Value |
-|---|---|
-| **Default timeout** | 600 seconds (10 minutes) |
-| **Disable auto-shutdown** | Set to `0` |
-
-### Configuration
-
-The idle timeout can be configured via **environment variable** or **CLI argument**. If both are set, the CLI argument takes precedence.
-
-**Environment variable** — set `CODECOMPRESS_IDLE_TIMEOUT` (in seconds) in your MCP server config:
-
-```json
-{
-  "mcpServers": {
-    "codecompress": {
-      "type": "stdio",
-      "command": "dnx",
-      "args": ["CodeCompress.Server", "--yes"],
-      "env": {
-        "CODECOMPRESS_IDLE_TIMEOUT": "120"
-      }
-    }
-  }
-}
-```
-
-**CLI argument** — pass `--idle-timeout` (in seconds):
-
-```bash
-codecompress-server --idle-timeout 120
-```
-
-### Stop Server Tool
+## Server Lifecycle
 
 The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/file locks during development without manually killing processes. The server exits gracefully, closing all SQLite connections, and restarts automatically on the next tool call.
 

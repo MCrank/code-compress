@@ -7,7 +7,6 @@ using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -32,17 +31,14 @@ internal sealed class QueryTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "project_outline")]
@@ -57,8 +53,6 @@ internal sealed class QueryTools
         [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -113,8 +107,6 @@ internal sealed class QueryTools
         [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -177,8 +169,6 @@ internal sealed class QueryTools
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -246,8 +236,6 @@ internal sealed class QueryTools
         [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -315,8 +303,6 @@ internal sealed class QueryTools
         [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -427,8 +413,6 @@ internal sealed class QueryTools
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -538,8 +522,6 @@ internal sealed class QueryTools
         [Description("Maximum number of symbols to return (1-200, default 50). Limits output to prevent token overflow.")] int maxResults = 50,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -607,8 +589,6 @@ internal sealed class QueryTools
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
