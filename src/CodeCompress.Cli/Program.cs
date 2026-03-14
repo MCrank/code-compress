@@ -86,11 +86,12 @@ indexCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { result.RepoId, result.FilesIndexed, result.FilesSkipped, result.SymbolsFound, result.DurationMs },
+                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesSkipped, result.SymbolsFound, result.DurationMs },
                 jsonSerializerOptions));
         }
         else
         {
+            Console.WriteLine($"Project root: {scope.ProjectRoot}");
             Console.WriteLine($"Indexed {result.FilesIndexed} files ({result.FilesSkipped} skipped), {result.SymbolsFound} symbols in {result.DurationMs}ms");
         }
     }
@@ -1103,7 +1104,11 @@ return await rootCommand.Parse(args).InvokeAsync().ConfigureAwait(false);
 static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceProvider serviceProvider)
 {
     var pathValidator = serviceProvider.GetRequiredService<IPathValidator>();
-    var validatedPath = pathValidator.ValidatePath(path, path);
+    var rootResolver = serviceProvider.GetRequiredService<IProjectRootResolver>();
+
+    // Resolve to nearest git root (or fall back to given path)
+    var resolvedRoot = rootResolver.ResolveProjectRoot(path);
+    var validatedPath = pathValidator.ValidatePath(resolvedRoot, resolvedRoot);
 
     var connectionFactory = serviceProvider.GetRequiredService<IConnectionFactory>();
     var connection = await connectionFactory.CreateConnectionAsync(validatedPath).ConfigureAwait(false);

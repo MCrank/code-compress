@@ -6,6 +6,7 @@ namespace CodeCompress.Server.Scoping;
 internal interface IProjectScope : IAsyncDisposable
 {
     internal string RepoId { get; }
+    internal string ProjectRoot { get; }
     internal ISymbolStore Store { get; }
     internal IIndexEngine Engine { get; }
 }

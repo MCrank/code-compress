@@ -52,7 +52,7 @@ internal sealed partial class IndexingTools
             await using (scope.ConfigureAwait(false))
             {
                 var result = await scope.Engine.IndexProjectAsync(
-                    validatedPath,
+                    scope.ProjectRoot,
                     language,
                     includePatterns,
                     excludePatterns,
@@ -62,6 +62,7 @@ internal sealed partial class IndexingTools
                     new
                     {
                         result.RepoId,
+                        ProjectRoot = scope.ProjectRoot,
                         result.FilesIndexed,
                         result.FilesSkipped,
                         result.SymbolsFound,

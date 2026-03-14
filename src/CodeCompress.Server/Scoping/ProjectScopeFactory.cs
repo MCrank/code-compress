@@ -13,6 +13,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
     private readonly IChangeTracker _changeTracker;
     private readonly IEnumerable<ILanguageParser> _parsers;
     private readonly IPathValidator _pathValidator;
+    private readonly IProjectRootResolver _rootResolver;
     private readonly ILoggerFactory _loggerFactory;
 
     public ProjectScopeFactory(
@@ -21,6 +22,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         IChangeTracker changeTracker,
         IEnumerable<ILanguageParser> parsers,
         IPathValidator pathValidator,
+        IProjectRootResolver rootResolver,
         ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
@@ -28,6 +30,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         ArgumentNullException.ThrowIfNull(changeTracker);
         ArgumentNullException.ThrowIfNull(parsers);
         ArgumentNullException.ThrowIfNull(pathValidator);
+        ArgumentNullException.ThrowIfNull(rootResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         _connectionFactory = connectionFactory;
@@ -35,6 +38,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         _changeTracker = changeTracker;
         _parsers = parsers;
         _pathValidator = pathValidator;
+        _rootResolver = rootResolver;
         _loggerFactory = loggerFactory;
     }
 
@@ -42,9 +46,12 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
 
-        var connection = await _connectionFactory.CreateConnectionAsync(projectRoot).ConfigureAwait(false);
+        // Resolve to the nearest git root (or fall back to given path)
+        var resolvedRoot = _rootResolver.ResolveProjectRoot(projectRoot);
+
+        var connection = await _connectionFactory.CreateConnectionAsync(resolvedRoot).ConfigureAwait(false);
         var store = new SqliteSymbolStore(connection);
-        var canonicalRoot = _pathValidator.ValidatePath(projectRoot, projectRoot);
+        var canonicalRoot = _pathValidator.ValidatePath(resolvedRoot, resolvedRoot);
         var repoId = IndexEngine.ComputeRepoId(canonicalRoot);
         var engine = new IndexEngine(
             _fileHasher,
@@ -54,6 +61,6 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
             _pathValidator,
             _loggerFactory.CreateLogger<IndexEngine>());
 
-        return new ProjectScope(connection, store, engine, repoId);
+        return new ProjectScope(connection, store, engine, repoId, canonicalRoot);
     }
 }
