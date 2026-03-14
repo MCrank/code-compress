@@ -17,7 +17,7 @@
 
 ## What is CodeCompress?
 
-CodeCompress is an [MCP server](https://modelcontextprotocol.io/) that gives AI coding agents **instant memory of your codebase**.
+CodeCompress is a **code intelligence tool** — available as both an [MCP server](https://modelcontextprotocol.io/) and a **standalone CLI** — that gives AI coding agents **instant memory of your codebase**. Use whichever interface fits your workflow: the MCP server integrates directly with AI tools like Claude Code, while the CLI works anywhere you have a terminal.
 
 Instead of scanning every file at the start of each conversation, agents query a persistent SQLite index to get exactly the symbols, types, and dependencies they need — in a fraction of the tokens.
 
@@ -138,15 +138,19 @@ That's it. Your agent now has instant access to your codebase structure. It will
 ## How It Works
 
 ```
-AI Agent  <── MCP (stdio) ──>  CodeCompress Server
-                                      |
-                                 Index Engine
-                                   /      \
-                          Language       SQLite Store
-                          Parsers        .code-compress/
-                    (Luau, C#, Blazor,  index.db
-                   Terraform, JSON, …)
+AI Agent  <── MCP (stdio) ──>  CodeCompress Server ──┐
+                                                      │
+Developer <── Terminal ────>   CodeCompress CLI ──────┤
+                                                      │
+                                                 Index Engine
+                                                   /      \
+                                          Language       SQLite Store
+                                          Parsers        .code-compress/
+                                    (Luau, C#, Blazor,  index.db
+                                   Terraform, JSON, …)
 ```
+
+Both the MCP server and CLI share the same index database — you can index with one and query with the other.
 
 1. **Index** — CodeCompress walks your source files, hashes each one (SHA-256), and extracts symbols (functions, classes, types, constants) and dependencies (imports/requires) using language-specific parsers.
 
@@ -268,15 +272,82 @@ To configure a client to use your local build:
 claude mcp add --transport stdio codecompress -- dotnet run --project /absolute/path/to/src/CodeCompress.Server
 ```
 
-## CLI Tool (Optional)
+## CLI Tool
 
-A standalone CLI is available for testing and debugging outside of MCP:
+The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `.code-compress/index.db` database.
+
+### Installation
 
 ```bash
 dotnet tool install -g CodeCompress
-codecompress index /path/to/project
-codecompress outline /path/to/project
 ```
+
+To update to the latest version:
+
+```bash
+dotnet tool update -g CodeCompress
+```
+
+### Usage
+
+```bash
+# Index a project (must be run first)
+codecompress index --path /path/to/project
+
+# Get a compressed codebase overview
+codecompress outline --path /path/to/project
+
+# Search for symbols
+codecompress search --path /path/to/project --query "Authentication*"
+
+# Retrieve a specific symbol's source code
+codecompress get-symbol --path /path/to/project --name MyClass:MyMethod
+
+# Search raw file contents
+codecompress search-text --path /path/to/project --query "TODO"
+
+# View directory structure (no index required)
+codecompress file-tree --path /path/to/project
+
+# Show dependency graph
+codecompress deps --path /path/to/project
+
+# Snapshot + change tracking
+codecompress snapshot --path /path/to/project --label before-refactor
+codecompress changes --path /path/to/project --label before-refactor
+```
+
+### JSON Output
+
+Add `--json` to any command for machine-readable JSON output (snake_case keys matching MCP server output):
+
+```bash
+codecompress search --path /path/to/project --query "Parser" --json
+```
+
+### Agent Instructions
+
+Generate a ready-to-paste instruction block for AI agents:
+
+```bash
+codecompress agent-instructions
+```
+
+This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or agent configuration files to teach AI agents how to use the CLI for code discovery.
+
+### CLI-to-MCP Equivalence
+
+| CLI Command | MCP Tool | Description |
+|---|---|---|
+| `index` | `index_project` | Build/update the symbol database |
+| `outline` | `project_outline` | Compressed codebase overview |
+| `get-symbol` | `get_symbol` | Retrieve symbol source code |
+| `search` | `search_symbols` | FTS5 symbol search |
+| `search-text` | `search_text` | FTS5 raw content search |
+| `changes` | `changes_since` | Delta since snapshot |
+| `snapshot` | `snapshot_create` | Create index snapshot |
+| `file-tree` | `file_tree` | Directory tree |
+| `deps` | `dependency_graph` | Dependency graph |
 
 ## License
 
