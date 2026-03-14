@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFileHasher, FileHasher>();
         services.AddSingleton<IChangeTracker, ChangeTracker>();
         services.AddSingleton<IIndexEngine, IndexEngine>();
+        services.AddSingleton<IProjectRootResolver, ProjectRootResolver>();
 
         return services;
     }

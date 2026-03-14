@@ -12,20 +12,24 @@ internal sealed class ProjectScope : IProjectScope
         SqliteConnection connection,
         ISymbolStore store,
         IIndexEngine engine,
-        string repoId)
+        string repoId,
+        string projectRoot)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentException.ThrowIfNullOrWhiteSpace(repoId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
 
         _connection = connection;
         Store = store;
         Engine = engine;
         RepoId = repoId;
+        ProjectRoot = projectRoot;
     }
 
     public string RepoId { get; }
+    public string ProjectRoot { get; }
     public ISymbolStore Store { get; }
     public IIndexEngine Engine { get; }
 
