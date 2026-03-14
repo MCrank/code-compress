@@ -1,3 +1,4 @@
+using System.Reflection;
 using CodeCompress.Server;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -12,11 +13,15 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
+var version = typeof(ServiceCollectionExtensions).Assembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+    ?.InformationalVersion ?? "0.0.0";
+
 builder.Services
     .AddCodeCompressServer()
     .AddMcpServer(options =>
     {
-        options.ServerInfo = new Implementation { Name = "CodeCompress", Version = "0.5.0" };
+        options.ServerInfo = new Implementation { Name = "CodeCompress", Version = version };
         options.ServerInstructions = """
             CodeCompress is a code intelligence server that provides compressed, symbol-level access
             to the indexed codebase. Use it as your PRIMARY tool for code discovery instead of reading
