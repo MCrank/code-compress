@@ -101,23 +101,42 @@ rootCommand.Subcommands.Add(indexCommand);
 // ── outline ─────────────────────────────────────────────────
 
 var outlinePathOption = CreatePathOption();
+var outlineGroupByOption = new Option<string>("--group-by") { Description = "Grouping strategy: file, kind, or directory", DefaultValueFactory = _ => "file" };
+var outlineIncludePrivateOption = new Option<bool>("--include-private") { Description = "Include private/local symbols" };
+var outlineMaxDepthOption = new Option<int?>("--max-depth") { Description = "Limit directory traversal depth (null for unlimited)" };
+var outlinePathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
+var outlineMaxSymbolsOption = new Option<int>("--max-symbols") { Description = "Maximum symbols to return (1-5000)", DefaultValueFactory = _ => 500 };
+var outlineOffsetOption = new Option<int>("--offset") { Description = "Number of symbols to skip for pagination", DefaultValueFactory = _ => 0 };
 
 var outlineCommand = new Command("outline",
     "Show a compressed project outline with symbol signatures. " +
     "Far more efficient than reading files individually. Requires index.")
 {
     outlinePathOption,
+    outlineGroupByOption,
+    outlineIncludePrivateOption,
+    outlineMaxDepthOption,
+    outlinePathFilterOption,
+    outlineMaxSymbolsOption,
+    outlineOffsetOption,
 };
 
 outlineCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(outlinePathOption)!;
+    var groupBy = parseResult.GetValue(outlineGroupByOption)!;
+    var includePrivate = parseResult.GetValue(outlineIncludePrivateOption);
+    var maxDepth = parseResult.GetValue(outlineMaxDepthOption) ?? 0;
+    var pathFilter = parseResult.GetValue(outlinePathFilterOption);
+    var maxSymbols = Math.Clamp(parseResult.GetValue(outlineMaxSymbolsOption), 1, 5000);
+    var offset = Math.Max(0, parseResult.GetValue(outlineOffsetOption));
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var outline = await scope.Store.GetProjectOutlineAsync(scope.RepoId, false, "file", 3).ConfigureAwait(false);
+        var outline = await scope.Store.GetProjectOutlineAsync(
+            scope.RepoId, includePrivate, groupBy, maxDepth, pathFilter, offset, maxSymbols).ConfigureAwait(false);
 
         if (json)
         {
@@ -132,6 +151,11 @@ outlineCommand.SetAction(async parseResult =>
                 {
                     Console.WriteLine($"  {symbol.Kind,-12} {symbol.Visibility,-10} {symbol.Signature}");
                 }
+            }
+
+            if (outline.IsTruncated)
+            {
+                Console.WriteLine($"\n(Showing {outline.Groups.Sum(g => g.Symbols.Count)} of {outline.TotalSymbolCount} symbols. Use --offset and --max-symbols to paginate.)");
             }
         }
     }
@@ -198,6 +222,9 @@ var searchQueryOption = new Option<string>("--query")
     Description = "FTS5 search query (supports AND, OR, NOT, prefix*, *contains*)",
     Required = true,
 };
+var searchKindOption = new Option<string?>("--kind") { Description = "Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)" };
+var searchPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
+var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
 
 var searchCommand = new Command("search",
     "Search the symbol index using FTS5 full-text search. " +
@@ -205,18 +232,24 @@ var searchCommand = new Command("search",
 {
     searchPathOption,
     searchQueryOption,
+    searchKindOption,
+    searchPathFilterOption,
+    searchLimitOption,
 };
 
 searchCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(searchPathOption)!;
     var query = parseResult.GetValue(searchQueryOption)!;
+    var kind = parseResult.GetValue(searchKindOption);
+    var pathFilter = parseResult.GetValue(searchPathFilterOption);
+    var limit = Math.Clamp(parseResult.GetValue(searchLimitOption), 1, 100);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
+        var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
 
         if (json)
         {
@@ -249,6 +282,9 @@ var searchTextQueryOption = new Option<string>("--query")
     Description = "FTS5 search query for raw file contents",
     Required = true,
 };
+var searchTextGlobOption = new Option<string?>("--glob") { Description = "File pattern filter (e.g., *.cs, src/services/*.lua)" };
+var searchTextPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
+var searchTextLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
 
 var searchTextCommand = new Command("search-text",
     "Search raw file contents using FTS5 full-text search. " +
@@ -256,18 +292,24 @@ var searchTextCommand = new Command("search-text",
 {
     searchTextPathOption,
     searchTextQueryOption,
+    searchTextGlobOption,
+    searchTextPathFilterOption,
+    searchTextLimitOption,
 };
 
 searchTextCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(searchTextPathOption)!;
     var query = parseResult.GetValue(searchTextQueryOption)!;
+    var glob = parseResult.GetValue(searchTextGlobOption);
+    var pathFilter = parseResult.GetValue(searchTextPathFilterOption);
+    var limit = Math.Clamp(parseResult.GetValue(searchTextLimitOption), 1, 100);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchTextAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
+        var results = await scope.Store.SearchTextAsync(scope.RepoId, query, glob, limit, pathFilter).ConfigureAwait(false);
 
         if (json)
         {
@@ -453,6 +495,8 @@ rootCommand.Subcommands.Add(fileTreeCommand);
 
 var depsPathOption = CreatePathOption();
 var depsFileOption = new Option<string?>("--file") { Description = "Start from a specific file (relative path)" };
+var depsDirectionOption = new Option<string>("--direction") { Description = "Direction: dependencies (outgoing), dependents (incoming), or both", DefaultValueFactory = _ => "both" };
+var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50)", DefaultValueFactory = _ => 3 };
 
 var depsCommand = new Command("deps",
     "Show the import/require dependency graph. " +
@@ -460,18 +504,22 @@ var depsCommand = new Command("deps",
 {
     depsPathOption,
     depsFileOption,
+    depsDirectionOption,
+    depsDepthOption,
 };
 
 depsCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(depsPathOption)!;
     var rootFile = parseResult.GetValue(depsFileOption);
+    var direction = parseResult.GetValue(depsDirectionOption)!;
+    var depth = Math.Clamp(parseResult.GetValue(depsDepthOption), 1, 50);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, "both", 3).ConfigureAwait(false);
+        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, direction, depth).ConfigureAwait(false);
 
         if (json)
         {
