@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="CodeCompress MCP Server" width="100%" />
+<img src="https://raw.githubusercontent.com/MCrank/code-compress/develop/assets/banner.png" alt="CodeCompress — MCP Server & CLI" width="100%" />
 
 **Persistent code index for AI agents. Ask for exactly what you need.**
 
@@ -17,7 +17,7 @@
 
 ## What is CodeCompress?
 
-CodeCompress is an [MCP server](https://modelcontextprotocol.io/) that gives AI coding agents **instant memory of your codebase**.
+CodeCompress is a **code intelligence tool** — available as both an [MCP server](https://modelcontextprotocol.io/) and a **standalone CLI** — that gives AI coding agents **instant memory of your codebase**. Use whichever interface fits your workflow: the MCP server integrates directly with AI tools like Claude Code, while the CLI works anywhere you have a terminal.
 
 Instead of scanning every file at the start of each conversation, agents query a persistent SQLite index to get exactly the symbols, types, and dependencies they need — in a fraction of the tokens.
 
@@ -34,9 +34,9 @@ Instead of scanning every file at the start of each conversation, agents query a
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
 
-### 1. Add to your AI coding tool
+### Option A: MCP Server (recommended for AI tools)
 
-Pick your tool and run one command — that's it.
+Pick your tool and add the MCP server — that's it.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -85,19 +85,49 @@ Add to `claude_desktop_config.json`:
 </details>
 
 <details>
-<summary><strong>Cursor / Windsurf / any MCP client</strong></summary>
+<summary><strong>Cursor</strong></summary>
+
+Create `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong></summary>
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codecompress": {
+      "command": "dnx",
+      "args": ["CodeCompress.Server", "--yes"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Other MCP clients</strong></summary>
 
 CodeCompress uses stdio transport. Point your client at:
 
 ```
 dnx CodeCompress.Server --yes
-```
-
-Or if you prefer a persistent global install:
-
-```bash
-dotnet tool install -g CodeCompress.Server
-codecompress-server
 ```
 
 </details>
@@ -121,6 +151,26 @@ Commit this file at the root of your repo. Claude Code and VS Code pick it up au
 
 </details>
 
+### Option B: CLI (for terminals, scripts, and agents without MCP)
+
+Install globally as a .NET tool:
+
+```bash
+dotnet tool install -g CodeCompress
+```
+
+Then use it from any terminal:
+
+```bash
+codecompress index --path /path/to/project
+codecompress outline --path /path/to/project
+codecompress search --path /path/to/project --query "MyClass"
+```
+
+The CLI and MCP server share the same index database — you can use both interchangeably. Run `codecompress --help` for all commands, or `codecompress agent-instructions` to generate a ready-to-paste instruction block for AI agents.
+
+To update: `dotnet tool update -g CodeCompress`
+
 ### 2. Index your project
 
 Your AI agent will call `index_project` automatically when it needs codebase context. You can also trigger it explicitly:
@@ -138,15 +188,19 @@ That's it. Your agent now has instant access to your codebase structure. It will
 ## How It Works
 
 ```
-AI Agent  <── MCP (stdio) ──>  CodeCompress Server
-                                      |
-                                 Index Engine
-                                   /      \
-                          Language       SQLite Store
-                          Parsers        .code-compress/
-                    (Luau, C#, Blazor,  index.db
-                   Terraform, JSON, …)
+AI Agent  <── MCP (stdio) ──>  CodeCompress Server ──┐
+                                                      │
+Developer <── Terminal ────>   CodeCompress CLI ──────┤
+                                                      │
+                                                 Index Engine
+                                                   /      \
+                                          Language       SQLite Store
+                                          Parsers        .code-compress/
+                                    (Luau, C#, Blazor,  index.db
+                                   Terraform, JSON, …)
 ```
+
+Both the MCP server and CLI share the same index database — you can index with one and query with the other.
 
 1. **Index** — CodeCompress walks your source files, hashes each one (SHA-256), and extracts symbols (functions, classes, types, constants) and dependencies (imports/requires) using language-specific parsers.
 
@@ -206,47 +260,7 @@ CodeCompress is designed to stay current with minimal effort:
 
 > **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
 
-## Server Lifecycle & Idle Timeout
-
-The CodeCompress server manages its own lifecycle to avoid consuming resources indefinitely.
-
-### Idle Timeout
-
-By default, the server **automatically shuts down after 10 minutes of inactivity** (no MCP tool calls). Every tool call resets the idle timer. The MCP client will restart the server automatically on the next tool call — the restart cost is just process startup (~1–2s), not re-indexing (the SQLite database persists on disk).
-
-| Setting | Value |
-|---|---|
-| **Default timeout** | 600 seconds (10 minutes) |
-| **Disable auto-shutdown** | Set to `0` |
-
-### Configuration
-
-The idle timeout can be configured via **environment variable** or **CLI argument**. If both are set, the CLI argument takes precedence.
-
-**Environment variable** — set `CODECOMPRESS_IDLE_TIMEOUT` (in seconds) in your MCP server config:
-
-```json
-{
-  "mcpServers": {
-    "codecompress": {
-      "type": "stdio",
-      "command": "dnx",
-      "args": ["CodeCompress.Server", "--yes"],
-      "env": {
-        "CODECOMPRESS_IDLE_TIMEOUT": "120"
-      }
-    }
-  }
-}
-```
-
-**CLI argument** — pass `--idle-timeout` (in seconds):
-
-```bash
-codecompress-server --idle-timeout 120
-```
-
-### Stop Server Tool
+## Server Lifecycle
 
 The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/file locks during development without manually killing processes. The server exits gracefully, closing all SQLite connections, and restarts automatically on the next tool call.
 
@@ -287,6 +301,39 @@ To clear the index for a project, delete its `.code-compress/` directory.
 - **Prompt injection safeguards** — tool outputs are structured data; raw input is never echoed into freeform text
 - **Local only** — no network calls, no telemetry, your code stays on your machine
 
+## Agent Configuration
+
+Paste the following into your `CLAUDE.md`, `.cursorrules`, system prompt, or agent configuration file to teach AI agents how to use CodeCompress:
+
+> **Tip:** You can also generate this block by running `codecompress agent-instructions` if you have the CLI installed.
+
+````markdown
+# CodeCompress — Agent Instructions
+
+CodeCompress is a code intelligence tool that provides compressed, symbol-level access
+to the indexed codebase. Use it as your PRIMARY tool for code discovery instead of reading
+raw files — it saves 80-90% tokens.
+
+## Workflow
+
+1. **Index first** — `index_project` (MCP) or `codecompress index --path <root>` (CLI).
+   Builds/updates the symbol database. Incremental — only changed files are re-parsed.
+2. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
+3. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
+   `search_text` / `codecompress search-text` for raw file content search.
+4. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
+   `expand_symbol` / `codecompress expand-symbol` for a single method (~60% fewer tokens).
+5. **Find references** — `find_references` / `codecompress find-references` to trace usage.
+6. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
+
+## Tips
+
+- Add `--json` to any CLI command for machine-readable output (snake_case keys).
+- The index persists at `<project-root>/.code-compress/index.db` — shared between MCP server and CLI.
+- PREFER these tools over raw file reading. They are faster, more precise, and dramatically
+  reduce token consumption.
+````
+
 ## Building from Source
 
 ```bash
@@ -308,15 +355,110 @@ To configure a client to use your local build:
 claude mcp add --transport stdio codecompress -- dotnet run --project /absolute/path/to/src/CodeCompress.Server
 ```
 
-## CLI Tool (Optional)
+## CLI Tool
 
-A standalone CLI is available for testing and debugging outside of MCP:
+The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `.code-compress/index.db` database.
+
+### Installation
 
 ```bash
 dotnet tool install -g CodeCompress
-codecompress index /path/to/project
-codecompress outline /path/to/project
 ```
+
+To update to the latest version:
+
+```bash
+dotnet tool update -g CodeCompress
+```
+
+### Usage
+
+```bash
+# Index a project (must be run first)
+codecompress index --path /path/to/project
+
+# Get a compressed codebase overview
+codecompress outline --path /path/to/project
+
+# Search for symbols
+codecompress search --path /path/to/project --query "Authentication*"
+
+# Retrieve a specific symbol's source code
+codecompress get-symbol --path /path/to/project --name MyClass:MyMethod
+
+# Search raw file contents
+codecompress search-text --path /path/to/project --query "TODO"
+
+# Retrieve a nested method without loading the whole class (~60% token savings)
+codecompress expand-symbol --path /path/to/project --name MyClass:MyMethod
+
+# Batch retrieve multiple symbols at once
+codecompress get-symbols --path /path/to/project --names "Foo,Bar,Baz"
+
+# Get the public API surface of a single file
+codecompress get-module-api --path /path/to/project --module src/Core/Foo.cs
+
+# Search by topic — returns results in outline format
+codecompress topic-outline --path /path/to/project --topic authentication
+
+# Find all references to a symbol across the codebase
+codecompress find-references --path /path/to/project --name ISymbolStore
+
+# View directory structure (no index required)
+codecompress file-tree --path /path/to/project
+
+# Show file-level dependency graph
+codecompress deps --path /path/to/project
+
+# Show inter-project dependencies (.NET solutions)
+codecompress project-deps --path /path/to/project
+
+# Snapshot + change tracking
+codecompress snapshot --path /path/to/project --label before-refactor
+codecompress changes --path /path/to/project --label before-refactor
+
+# Delete index to force full re-index
+codecompress invalidate-cache --path /path/to/project
+```
+
+### JSON Output
+
+Add `--json` to any command for machine-readable JSON output (snake_case keys matching MCP server output):
+
+```bash
+codecompress search --path /path/to/project --query "Parser" --json
+```
+
+### Agent Instructions
+
+Generate a ready-to-paste instruction block for AI agents:
+
+```bash
+codecompress agent-instructions
+```
+
+This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or agent configuration files to teach AI agents how to use the CLI for code discovery.
+
+### CLI-to-MCP Equivalence
+
+| CLI Command | MCP Tool | Description |
+|---|---|---|
+| `index` | `index_project` | Build/update the symbol database |
+| `outline` | `project_outline` | Compressed codebase overview |
+| `get-symbol` | `get_symbol` | Retrieve symbol source code |
+| `expand-symbol` | `expand_symbol` | Extract nested symbol (~60% fewer tokens) |
+| `get-symbols` | `get_symbols` | Batch retrieve multiple symbols |
+| `get-module-api` | `get_module_api` | Public API surface of a file |
+| `search` | `search_symbols` | FTS5 symbol search |
+| `search-text` | `search_text` | FTS5 raw content search |
+| `topic-outline` | `topic_outline` | Topic-based search in outline format |
+| `find-references` | `find_references` | Find all symbol references |
+| `changes` | `changes_since` | Delta since snapshot |
+| `snapshot` | `snapshot_create` | Create index snapshot |
+| `file-tree` | `file_tree` | Directory tree |
+| `deps` | `dependency_graph` | File-level dependency graph |
+| `project-deps` | `project_dependencies` | Inter-project dependencies (.NET) |
+| `invalidate-cache` | `invalidate_cache` | Force full re-index |
 
 ## License
 

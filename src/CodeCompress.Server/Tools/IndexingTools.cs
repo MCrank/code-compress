@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -18,21 +17,18 @@ internal sealed partial class IndexingTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "index_project")]
-    [Description("Index a codebase to build a searchable symbol database. Must be called before any query tools. Re-running performs an incremental update — only changed files are re-parsed.")]
+    [Description("Index a codebase to build a searchable symbol database — MUST be called before any query tools. Scans source files, extracts symbols (classes, methods, functions, types), and stores them in a SQLite index. Re-running performs an incremental update (only changed files are re-parsed), so it's fast after the initial index. This enables all other CodeCompress tools to provide compressed, symbol-level code access.")]
     public async Task<string> IndexProject(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to a specific language (e.g., 'luau')")] string? language = null,
@@ -40,8 +36,6 @@ internal sealed partial class IndexingTools
         [Description("Glob patterns for files to exclude")] string[]? excludePatterns = null,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -58,7 +52,7 @@ internal sealed partial class IndexingTools
             await using (scope.ConfigureAwait(false))
             {
                 var result = await scope.Engine.IndexProjectAsync(
-                    validatedPath,
+                    scope.ProjectRoot,
                     language,
                     includePatterns,
                     excludePatterns,
@@ -68,6 +62,7 @@ internal sealed partial class IndexingTools
                     new
                     {
                         result.RepoId,
+                        ProjectRoot = scope.ProjectRoot,
                         result.FilesIndexed,
                         result.FilesSkipped,
                         result.SymbolsFound,
@@ -83,14 +78,12 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "snapshot_create")]
-    [Description("Create a named snapshot of the current index state. Use before making changes, then call changes_since to see a symbol-level diff.")]
+    [Description("Create a named snapshot of the current index state. Use before making code changes, then call changes_since with the snapshot label to see a precise symbol-level diff of what changed. Requires index_project to have been called first.")]
     public async Task<string> SnapshotCreate(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Human-readable snapshot label")] string label,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -132,13 +125,11 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "invalidate_cache")]
-    [Description("Delete the entire index for a project, forcing a full re-index on the next index_project call.")]
+    [Description("Delete the entire index for a project, forcing a full re-index on the next index_project call. Use when the index appears corrupted or out of sync.")]
     public async Task<string> InvalidateCache(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {

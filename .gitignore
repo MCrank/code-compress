@@ -45,9 +45,8 @@ launchSettings.json
 *.coveragexml
 coverage/
 
-# CodeCompress index — commit index.db, ignore WAL files
-.code-compress/index.db-wal
-.code-compress/index.db-shm
+# CodeCompress index — local per-project databases, not committed
+**/.code-compress/
 
 # OS files
 Thumbs.db

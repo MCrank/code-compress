@@ -7,7 +7,6 @@ using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -32,21 +31,18 @@ internal sealed class QueryTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public QueryTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed overview of the indexed codebase showing symbol signatures grouped by file, kind, or directory. Supports pagination via offset/maxSymbols for large codebases. Use pathFilter to scope results to a subdirectory (e.g., pathFilter='src/' to exclude test files). Requires index_project to have been called first.")]
+    [Description("Get a compressed overview of the entire indexed codebase — all symbol signatures grouped by file, kind, or directory in a single response. Far more efficient than reading files individually (saves 90%+ tokens). Supports pagination via offset/maxSymbols for large codebases. Use pathFilter to scope to a subdirectory. Requires index_project to have been called first.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
@@ -57,8 +53,6 @@ internal sealed class QueryTools
         [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -107,14 +101,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_module_api")]
-    [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies.")]
+    [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies in one call. Use instead of reading the file to see only the public interface without implementation details. Requires index_project to have been called first.")]
     public async Task<string> GetModuleApi(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -170,15 +162,13 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbol")]
-    [Description("Retrieve the full source code of a specific symbol by its qualified name using byte-offset seeking.")]
+    [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). Uses byte-offset seeking for instant retrieval. Use search_symbols to discover symbol names first. Requires index_project to have been called first.")]
     public async Task<string> GetSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'CombatService:ProcessAttack') or just the name for top-level symbols. Use search_symbols to discover names.")] string symbolName,
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -239,15 +229,13 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "expand_symbol")]
-    [Description("Retrieve only the body of a nested symbol (e.g., a single method within a class) without loading the entire parent. Use 'Parent:Child' qualified names to extract just the method you need — saves ~60% tokens vs get_symbol on the parent class. Returns the leaf symbol source code with optional 3-line context.")]
+    [Description("Retrieve only the body of a nested symbol (e.g., a single method) without loading the entire parent class — saves ~60% tokens vs get_symbol on the parent. Use 'Parent:Child' qualified names to extract exactly the method you need. Ideal for reading individual methods in large classes. Requires index_project to have been called first.")]
     public async Task<string> ExpandSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'PlayerService:GetHealth'). Use search_symbols to discover names.")] string symbolName,
         [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -309,14 +297,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbols")]
-    [Description("Batch retrieve source code for multiple symbols in one call. More efficient than calling get_symbol repeatedly. Maximum 50 names per call.")]
+    [Description("Batch retrieve source code for multiple symbols in one call — significantly more efficient than calling get_symbol repeatedly (single round-trip vs N). Maximum 50 names per call. Requires index_project to have been called first.")]
     public async Task<string> GetSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -418,7 +404,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Core/Models' to target a module).")]
+    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Requires index_project to have been called first.")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
@@ -427,8 +413,6 @@ internal sealed class QueryTools
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -530,7 +514,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "topic_outline")]
-    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines the search power of search_symbols with the structured presentation of project_outline. Use for questions like 'show me all authentication-related types' or 'find all Kubernetes symbols'.")]
+    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines search_symbols with project_outline presentation — ideal for exploring a concept across the codebase (e.g., 'show me all authentication-related types'). Requires index_project to have been called first.")]
     public async Task<string> TopicOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Topic or keyword to search for (e.g., 'authentication', 'kubernetes', 'database'). Searches symbol names, signatures, and doc comments via FTS5.")] string topic,
@@ -538,8 +522,6 @@ internal sealed class QueryTools
         [Description("Maximum number of symbols to return (1-200, default 50). Limits output to prevent token overflow.")] int maxResults = 50,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
@@ -598,7 +580,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search. Use for string literals, comments, or non-symbol patterns. Use pathFilter to scope results to a specific directory (e.g., pathFilter='src/' to exclude test files, pathFilter='src/Config' to target configuration).")]
+    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. Use pathFilter to scope results. Requires index_project to have been called first.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
@@ -607,8 +589,6 @@ internal sealed class QueryTools
         [Description("Maximum results to return (1-100)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {

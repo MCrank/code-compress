@@ -12,7 +12,12 @@
     <RepositoryUrl>https://github.com/MCrank/code-compress</RepositoryUrl>
     <PackageTags>code-index;mcp;ai;codebase;symbols</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CodeCompress.Core\CodeCompress.Core.csproj" />
@@ -20,6 +25,7 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

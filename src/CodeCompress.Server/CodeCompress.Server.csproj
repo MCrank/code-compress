@@ -13,6 +13,7 @@
     <RepositoryUrl>https://github.com/MCrank/code-compress</RepositoryUrl>
     <PackageTags>mcp;mcp-server;code-index;ai;codebase;symbols</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +24,7 @@
   <ItemGroup>
     <None Include=".mcp\server.json" Pack="true" PackagePath=".mcp\" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>

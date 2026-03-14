@@ -150,26 +150,52 @@ For **every** file you create or modify, verify these requirements. Delegate to 
 
 ## Step 4: Agent Delegation
 
-Use specialized agents for complex subtasks. Launch agents in parallel when their work is independent.
+Use specialized skill-backed agents for complex subtasks. Launch agents in parallel when their work is independent.
 
-### When to delegate:
+### Available Skills
 
-- **Security-critical code** (PathValidator, SQL queries, FTS5 sanitization, output sanitization): Use the security expert agent for review after implementation.
-- **Complex .NET patterns** (DI registration, GenericHost setup, async pipelines, Span-based parsing): Use the .NET expert agent for implementation guidance when unsure.
-- **MCP SDK integration** (tool registration, [McpServerToolType], stdio transport, protocol compliance): Use the MCP expert agent to verify correct SDK usage. Fetch latest docs from context7 or ref tools.
-- **Test infrastructure** (TUnit setup, Verify snapshot configuration, NSubstitute patterns): Delegate test scaffolding to agents when setting up new test projects.
-- **Parallel implementation**: When the plan has independent components (e.g., multiple CRUD methods, multiple test classes), launch agents in parallel to implement them.
+The project has dedicated expert skills. When delegating to an agent, reference the relevant skill to provide domain expertise:
 
-### Agent instructions pattern:
+| Skill | When to Use | Slash Command |
+|-------|------------|---------------|
+| **tdd-expert** | Writing tests, test infrastructure, TUnit patterns, NSubstitute mocking, Verify snapshots | `/tdd-expert` |
+| **security-expert** | Security review, OWASP compliance, prompt injection prevention, path/SQL/FTS5 validation | `/security-expert` |
+| **cli-expert** | CLI command implementation, System.CommandLine, help text, output formatting, exit codes | `/cli-expert` |
+| **parser-expert** | Language parser development, regex symbol extraction, sample projects, integration tests | `/parser-expert` |
+
+All skills reference the shared [dotnet-reference.md](../../references/dotnet-reference.md) for .NET conventions.
+
+### Delegation Rules
+
+| Task Type | Delegate To | Mode |
+|-----------|-------------|------|
+| Security-critical code (PathValidator, SQL, FTS5, output sanitization) | **security-expert** (enforce mode) | During implementation |
+| Security review after implementation | **security-expert** (review mode) | Post-implementation |
+| Test writing, test scaffolding, TUnit patterns | **tdd-expert** | Before implementation (TDD) |
+| New language parser | **parser-expert** | During implementation |
+| CLI commands, help text, output formatting | **cli-expert** | During implementation |
+| Complex .NET patterns (DI, GenericHost, async, Span) | Reference **dotnet-reference.md** | Inline |
+| MCP SDK integration (tool registration, protocol) | Fetch docs via Context7/Ref MCP | Inline |
+| Parallel implementation of independent components | Launch multiple agents with relevant skills | Parallel |
+
+### Agent Instructions Pattern
 
 When delegating, always include:
 
 1. The specific files to create/modify
 2. The exact interfaces/types to implement
-3. The project conventions from CLAUDE.md
+3. The project conventions — reference [dotnet-reference.md](../../references/dotnet-reference.md) and include key sections
 4. The security requirements relevant to that component
 5. The TDD requirement — tests first, then implementation
 6. **Relevant documentation snippets** — look up the APIs the agent will need via Context7/Ref MCPs and include the key patterns in the agent prompt. Agents cannot call MCP tools, so they depend on you providing accurate API references.
+7. **The relevant skill content** — if delegating a security task, include the security-expert skill's checklist in the agent prompt so it has the full threat model
+
+### Critical Reminder
+
+**Sub-agents cannot call MCP tools.** Before delegating:
+- Fetch any needed codebase context via CodeCompress MCP tools
+- Fetch any needed library documentation via Context7/Ref MCP
+- Include all of this in the agent prompt — the agent has no way to look it up itself
 
 ## Step 5: Verification
 

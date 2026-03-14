@@ -5,7 +5,6 @@ using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using CodeCompress.Server.Tools;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -18,7 +17,6 @@ internal sealed class QueryToolsTests
     private IProjectScopeFactory _scopeFactory = null!;
     private IProjectScope _scope = null!;
     private ISymbolStore _store = null!;
-    private IActivityTracker _activityTracker = null!;
     private QueryTools _tools = null!;
 
     [Before(Test)]
@@ -28,15 +26,13 @@ internal sealed class QueryToolsTests
         _scopeFactory = Substitute.For<IProjectScopeFactory>();
         _scope = Substitute.For<IProjectScope>();
         _store = Substitute.For<ISymbolStore>();
-        _activityTracker = Substitute.For<IActivityTracker>();
-
         _scope.Store.Returns(_store);
         _scope.RepoId.Returns("test-repo-id");
         _scopeFactory.CreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_scope);
         _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>()).Returns(callInfo => callInfo.ArgAt<string>(0));
         _pathValidator.ValidateRelativePath(Arg.Any<string>(), Arg.Any<string>()).Returns(callInfo => callInfo.ArgAt<string>(0));
 
-        _tools = new QueryTools(_pathValidator, _scopeFactory, _activityTracker);
+        _tools = new QueryTools(_pathValidator, _scopeFactory);
     }
 
     [Test]

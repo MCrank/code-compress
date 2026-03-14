@@ -4,7 +4,6 @@ using CodeCompress.Core.Models;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
-using CodeCompress.Server.Services;
 using ModelContextProtocol.Server;
 
 namespace CodeCompress.Server.Tools;
@@ -19,21 +18,18 @@ internal sealed class ReferenceTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
-    private readonly IActivityTracker _activityTracker;
 
-    public ReferenceTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IActivityTracker activityTracker)
+    public ReferenceTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(activityTracker);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
-        _activityTracker = activityTracker;
     }
 
     [McpServerTool(Name = "find_references")]
-    [Description("Find all locations where a symbol is referenced across the indexed codebase. Returns file paths, line numbers, and 3-line context snippets (1 line before + matching line + 1 line after). Works for functions, types, interfaces, DI registrations, and any text pattern. Requires index_project to have been called first.")]
+    [Description("Find all locations where a symbol is referenced across the indexed codebase — far faster than grep since content is pre-indexed. Returns file paths, line numbers, and 3-line context snippets. Works for functions, types, interfaces, DI registrations, and any text pattern. Use to trace usage before refactoring. Requires index_project to have been called first.")]
     public async Task<string> FindReferences(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Symbol name to search for references (e.g., 'ProcessAttack', 'ISymbolStore'). Does not need to exist in the symbol table — text search is used.")] string symbolName,
@@ -41,8 +37,6 @@ internal sealed class ReferenceTools
         [Description("Maximum results to return (1-100, default 20)")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
-        _activityTracker.RecordActivity();
-
         string validatedPath;
         try
         {
