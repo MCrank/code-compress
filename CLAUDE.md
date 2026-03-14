@@ -82,7 +82,7 @@ Every feature must be developed test-first using **TUnit** (source-generated, AO
 
 **TUnit assertion style** — all assertions are async/fluent:
 ```csharp
-await Assert.That(result.Symbols).HasCount(1);
+await Assert.That(result.Symbols).Count().IsEqualTo(1);
 await Assert.That(result.Symbols[0].Name).IsEqualTo("expected");
 ```
 
@@ -94,7 +94,7 @@ Use `[Arguments(...)]` attribute for parameterized tests. Use **NSubstitute** fo
 
 | Layer | Target |
 |-------|--------|
-| Parsers (Luau, C#) | 95%+ |
+| Parsers (all languages) | 95%+ |
 | Storage (SQLite) | 90%+ |
 | Index Engine | 90%+ |
 | MCP Tools | 85%+ |
@@ -135,9 +135,8 @@ Enforced via `.editorconfig`:
 
 ## Target Languages
 
-**Phase 1 (MVP):** Luau (Roblox) — regex/pattern-based parser
-**Phase 2:** C# / .NET — regex/pattern-based parser
-**Future:** Python, TypeScript/JavaScript, Go, Rust
+**Available:** Luau, C#, Terraform, Blazor Razor, .NET Project Files, JSON Config
+**Planned:** Python, TypeScript/JavaScript, Go, Rust
 
 ## Key NuGet Packages
 
@@ -151,3 +150,33 @@ Enforced via `.editorconfig`:
 | `NSubstitute` | Mocking |
 | `Verify` | Snapshot testing |
 | `SonarAnalyzer.CSharp` | Static analysis |
+
+## Project Skills & References
+
+Specialized Claude Code skills live in `.claude/skills/`. A shared .NET reference lives in `.claude/references/`.
+
+### Available Skills
+
+| Skill | Slash Command | Purpose |
+|-------|--------------|---------|
+| **implement-plan** | `/implement-plan` | Orchestrates feature implementation with TDD, security enforcement, and agent delegation |
+| **tdd-expert** | `/tdd-expert` | TUnit testing patterns, NSubstitute mocking, Verify snapshots, coverage targets |
+| **security-expert** | `/security-expert` | OWASP Top 10 + MCP-specific threats (prompt injection, data exfil, tool poisoning) |
+| **cli-expert** | `/cli-expert` | Production CLI patterns, System.CommandLine, POSIX conventions, output formatting |
+| **parser-expert** | `/parser-expert` | Language parser development, regex symbol extraction, sample projects, integration tests |
+
+### Shared Reference
+
+- **`.claude/references/dotnet-reference.md`** — Comprehensive .NET 10 / C# 14 knowledge base (naming, code style, DI patterns, async conventions, analyzer rules). All skills link to this file.
+
+### Skill Invocation
+
+Skills can be used in two ways:
+1. **Standalone:** `/security-expert review src/CodeCompress.Server/Tools/` — invoke directly as a slash command
+2. **Sub-agent delegation:** `implement-plan` delegates to skills via the Agent tool when implementing features (see Step 4 in implement-plan)
+
+**Note:** Sub-agents cannot call MCP tools. When delegating, the parent must fetch codebase context and documentation first, then pass it into the agent prompt.
+
+### Security Skill is Mandatory
+
+The **security-expert** skill must be invoked on **every** implementation task — either in review mode (post-implementation audit) or enforce mode (during implementation). This is not optional. If a task doesn't explicitly mention security, run `/security-expert review` on all modified files before considering the work complete. Security is a first-class concern for this project given that MCP tool parameters are untrusted agent inputs and tool outputs can be weaponized via prompt injection.
