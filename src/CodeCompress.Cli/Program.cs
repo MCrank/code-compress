@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CodeCompress.Cli;
 using CodeCompress.Core;
@@ -489,6 +490,513 @@ depsCommand.SetAction(async parseResult =>
 
 rootCommand.Subcommands.Add(depsCommand);
 
+// ── invalidate-cache ────────────────────────────────────────
+
+var invalidateCachePathOption = CreatePathOption();
+
+var invalidateCacheCommand = new Command("invalidate-cache",
+    "Delete the entire index for a project, forcing a full re-index on the next index command.")
+{
+    invalidateCachePathOption,
+};
+
+invalidateCacheCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(invalidateCachePathOption)!;
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var fileIds = files.Select(f => f.Id).ToList();
+
+        foreach (var fileId in fileIds)
+        {
+            await scope.Store.DeleteSymbolsByFileAsync(fileId).ConfigureAwait(false);
+            await scope.Store.DeleteDependenciesByFileAsync(fileId).ConfigureAwait(false);
+            await scope.Store.DeleteFileAsync(fileId).ConfigureAwait(false);
+        }
+
+        await scope.Store.DeleteRepositoryAsync(scope.RepoId).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Status = "invalidated", Path = path },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine("Index invalidated. Next index command will perform a full reparse.");
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(invalidateCacheCommand);
+
+// ── get-module-api ──────────────────────────────────────────
+
+var getModuleApiPathOption = CreatePathOption();
+var getModuleApiModuleOption = new Option<string>("--module")
+{
+    Description = "Relative path to the module file (e.g., src/Core/Foo.cs). Forward slashes only.",
+    Required = true,
+};
+
+var getModuleApiCommand = new Command("get-module-api",
+    "Get the full public API surface of a single file — symbols, signatures, and dependencies. Requires index.")
+{
+    getModuleApiPathOption,
+    getModuleApiModuleOption,
+};
+
+getModuleApiCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(getModuleApiPathOption)!;
+    var modulePath = parseResult.GetValue(getModuleApiModuleOption)!;
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        ModuleApi moduleApi;
+        try
+        {
+            moduleApi = await scope.Store.GetModuleApiAsync(scope.RepoId, modulePath).ConfigureAwait(false);
+        }
+        catch (FileNotFoundException)
+        {
+            await Console.Error.WriteLineAsync($"Error: Module not found: {modulePath}").ConfigureAwait(false);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new
+                {
+                    Module = moduleApi.File.RelativePath,
+                    Symbols = moduleApi.Symbols.Select(s => new
+                    {
+                        s.Name, s.Kind, Parent = s.ParentSymbol, s.Signature, Line = s.LineStart, s.DocComment,
+                    }),
+                    Dependencies = moduleApi.Dependencies.Select(d => new { d.RequiresPath, d.Alias }),
+                },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine($"## {moduleApi.File.RelativePath}");
+            Console.WriteLine();
+            foreach (var s in moduleApi.Symbols)
+            {
+                Console.WriteLine($"  {s.Kind,-12} {s.Visibility,-10} {s.Signature}");
+            }
+
+            if (moduleApi.Dependencies.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Dependencies:");
+                foreach (var d in moduleApi.Dependencies)
+                {
+                    Console.WriteLine($"  → {d.RequiresPath}" + (d.Alias is not null ? $" (as {d.Alias})" : ""));
+                }
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(getModuleApiCommand);
+
+// ── expand-symbol ───────────────────────────────────────────
+
+var expandSymbolPathOption = CreatePathOption();
+var expandSymbolNameOption = new Option<string>("--name")
+{
+    Description = "Qualified symbol name (e.g., MyClass:MyMethod). Use search to discover names.",
+    Required = true,
+};
+var expandSymbolContextOption = new Option<bool>("--context")
+{
+    Description = "Include 3 lines of context before and after the symbol",
+};
+
+var expandSymbolCommand = new Command("expand-symbol",
+    "Retrieve only a nested symbol's body without loading the parent class — saves ~60% tokens. Requires index.")
+{
+    expandSymbolPathOption,
+    expandSymbolNameOption,
+    expandSymbolContextOption,
+};
+
+expandSymbolCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(expandSymbolPathOption)!;
+    var name = parseResult.GetValue(expandSymbolNameOption)!;
+    _ = parseResult.GetValue(expandSymbolContextOption); // Reserved for future context-with-lines support
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+        if (symbol is null)
+        {
+            await Console.Error.WriteLineAsync($"Error: Symbol not found: {name}").ConfigureAwait(false);
+            await Console.Error.WriteLineAsync("  Hint: Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+        if (file is null)
+        {
+            await Console.Error.WriteLineAsync("Error: File not found for symbol.").ConfigureAwait(false);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var pathValidator = provider.GetRequiredService<IPathValidator>();
+        var resolvedPath = pathValidator.ValidatePath(
+            Path.Combine(path, file.RelativePath), path);
+
+        var sourceCode = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new
+                {
+                    symbol.Name, symbol.Kind, Parent = symbol.ParentSymbol,
+                    File = file.RelativePath, symbol.LineStart, symbol.LineEnd,
+                    symbol.Signature, symbol.DocComment, SourceCode = sourceCode,
+                },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine($"// {symbol.Name} ({symbol.Kind}, {symbol.Visibility})");
+            Console.WriteLine($"// {file.RelativePath}:{symbol.LineStart}-{symbol.LineEnd}");
+            Console.WriteLine(sourceCode);
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(expandSymbolCommand);
+
+// ── get-symbols (batch) ─────────────────────────────────────
+
+var getSymbolsPathOption = CreatePathOption();
+var getSymbolsNamesOption = new Option<string>("--names")
+{
+    Description = "Comma-separated list of qualified symbol names (max 50). Same format as get-symbol.",
+    Required = true,
+};
+
+var getSymbolsCommand = new Command("get-symbols",
+    "Batch retrieve source code for multiple symbols in one call. More efficient than repeated get-symbol. Requires index.")
+{
+    getSymbolsPathOption,
+    getSymbolsNamesOption,
+};
+
+getSymbolsCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(getSymbolsPathOption)!;
+    var namesRaw = parseResult.GetValue(getSymbolsNamesOption)!;
+    var json = parseResult.GetValue(jsonOption);
+
+    var symbolNames = namesRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    if (symbolNames.Length == 0)
+    {
+        await Console.Error.WriteLineAsync("Error: No symbol names provided.").ConfigureAwait(false);
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    if (symbolNames.Length > 50)
+    {
+        await Console.Error.WriteLineAsync("Error: Too many symbols. Maximum is 50.").ConfigureAwait(false);
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var foundSymbols = await scope.Store.GetSymbolsByNamesAsync(scope.RepoId, symbolNames).ConfigureAwait(false);
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var fileMap = files.ToDictionary(f => f.Id);
+
+        var foundNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in foundSymbols)
+        {
+            var qn = s.ParentSymbol is not null ? $"{s.ParentSymbol}:{s.Name}" : s.Name;
+            foundNames.Add(qn);
+        }
+
+        var pathValidator = provider.GetRequiredService<IPathValidator>();
+        var results = new List<object>();
+
+        foreach (var s in foundSymbols)
+        {
+            if (!fileMap.TryGetValue(s.FileId, out var file))
+            {
+                continue;
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = pathValidator.ValidatePath(Path.Combine(path, file.RelativePath), path);
+            }
+            catch (ArgumentException)
+            {
+                continue;
+            }
+
+            var sourceCode = await ReadSourceCodeAsync(resolvedPath, s.ByteOffset, s.ByteLength).ConfigureAwait(false);
+            results.Add(new
+            {
+                s.Name, s.Kind, Parent = s.ParentSymbol,
+                File = file.RelativePath, s.LineStart, s.LineEnd,
+                s.Signature, SourceCode = sourceCode,
+            });
+        }
+
+        var errors = symbolNames
+            .Where(n => !foundNames.Contains(n))
+            .Select(n => new { Symbol = n, Error = "Symbol not found" })
+            .ToList();
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Results = results, Errors = errors },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            foreach (var r in results)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(r, jsonSerializerOptions));
+                Console.WriteLine();
+            }
+
+            if (errors.Count > 0)
+            {
+                await Console.Error.WriteLineAsync($"Not found: {string.Join(", ", errors.Select(e => e.Symbol))}").ConfigureAwait(false);
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(getSymbolsCommand);
+
+// ── topic-outline ───────────────────────────────────────────
+
+var topicOutlinePathOption = CreatePathOption();
+var topicOutlineTopicOption = new Option<string>("--topic")
+{
+    Description = "Topic or keyword to search for (e.g., 'authentication', 'database')",
+    Required = true,
+};
+var topicOutlinePathFilterOption = new Option<string?>("--path-filter")
+{
+    Description = "Filter results to files under this directory (e.g., 'src/Core/')",
+};
+var topicOutlineMaxResultsOption = new Option<int>("--max-results")
+{
+    Description = "Maximum symbols to return (1-200)",
+    DefaultValueFactory = _ => 50,
+};
+
+var topicOutlineCommand = new Command("topic-outline",
+    "Search for symbols related to a topic and return results in outline format. Requires index.")
+{
+    topicOutlinePathOption,
+    topicOutlineTopicOption,
+    topicOutlinePathFilterOption,
+    topicOutlineMaxResultsOption,
+};
+
+topicOutlineCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(topicOutlinePathOption)!;
+    var topic = parseResult.GetValue(topicOutlineTopicOption)!;
+    var pathFilter = parseResult.GetValue(topicOutlinePathFilterOption);
+    var maxResults = Math.Clamp(parseResult.GetValue(topicOutlineMaxResultsOption), 1, 200);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var outline = await scope.Store.SearchTopicOutlineAsync(
+            scope.RepoId, topic, maxResults, pathFilter).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(outline, jsonSerializerOptions));
+        }
+        else
+        {
+            if (outline.TotalSymbolCount == 0)
+            {
+                Console.WriteLine($"No symbols found for topic \"{topic}\".");
+                return;
+            }
+
+            Console.WriteLine($"Found {outline.TotalSymbolCount} symbol(s) for \"{topic}\":");
+            foreach (var group in outline.Groups)
+            {
+                Console.WriteLine($"## {group.Name}");
+                foreach (var s in group.Symbols)
+                {
+                    Console.WriteLine($"  {s.Kind,-12} {s.Visibility,-10} {s.Signature}");
+                }
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(topicOutlineCommand);
+
+// ── project-deps ────────────────────────────────────────────
+
+var projectDepsPathOption = CreatePathOption();
+var projectDepsFilterOption = new Option<string?>("--filter")
+{
+    Description = "Filter to projects whose name contains this string (case-insensitive)",
+};
+
+var projectDepsCommand = new Command("project-deps",
+    "Show inter-project dependency relationships in a .NET solution. Requires index.")
+{
+    projectDepsPathOption,
+    projectDepsFilterOption,
+};
+
+projectDepsCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(projectDepsPathOption)!;
+    var filter = parseResult.GetValue(projectDepsFilterOption);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var result = await scope.Store.GetProjectDependencyGraphAsync(scope.RepoId, filter).ConfigureAwait(false);
+
+        if (result.Projects.Count == 0)
+        {
+            await Console.Error.WriteLineAsync("Error: No project files found in index. Run 'codecompress index' first.").ConfigureAwait(false);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine($"Projects ({result.Projects.Count}):");
+            foreach (var p in result.Projects)
+            {
+                Console.WriteLine($"  {p.Name} ({p.RelativePath})");
+            }
+
+            if (result.Edges.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Dependencies:");
+                foreach (var e in result.Edges)
+                {
+                    Console.WriteLine($"  {e.FromProject} → {e.ToProject}");
+                    if (e.SharedTypes.Count > 0)
+                    {
+                        Console.WriteLine($"    Shared types: {string.Join(", ", e.SharedTypes.Take(5))}{(e.SharedTypes.Count > 5 ? "..." : "")}");
+                    }
+                }
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(projectDepsCommand);
+
+// ── find-references ─────────────────────────────────────────
+
+var findRefsPathOption = CreatePathOption();
+var findRefsNameOption = new Option<string>("--name")
+{
+    Description = "Symbol name to search for references (e.g., 'ISymbolStore')",
+    Required = true,
+};
+var findRefsPathFilterOption = new Option<string?>("--path-filter")
+{
+    Description = "Filter results to files under this directory (e.g., 'src/')",
+};
+var findRefsLimitOption = new Option<int>("--limit")
+{
+    Description = "Maximum results to return (1-100)",
+    DefaultValueFactory = _ => 20,
+};
+
+var findRefsCommand = new Command("find-references",
+    "Find all locations where a symbol is referenced across the codebase. Faster than grep. Requires index.")
+{
+    findRefsPathOption,
+    findRefsNameOption,
+    findRefsPathFilterOption,
+    findRefsLimitOption,
+};
+
+findRefsCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(findRefsPathOption)!;
+    var symbolName = parseResult.GetValue(findRefsNameOption)!;
+    var pathFilter = parseResult.GetValue(findRefsPathFilterOption);
+    var limit = Math.Clamp(parseResult.GetValue(findRefsLimitOption), 1, 100);
+    var json = parseResult.GetValue(jsonOption);
+
+    var pathValidator = provider.GetRequiredService<IPathValidator>();
+    var validatedPath = pathValidator.ValidatePath(path, path);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var results = await scope.Store.FindReferencesAsync(
+            scope.RepoId, symbolName, validatedPath, limit, pathFilter).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+        }
+        else
+        {
+            if (results.Count == 0)
+            {
+                Console.WriteLine($"No references found for \"{symbolName}\".");
+                return;
+            }
+
+            Console.WriteLine($"Found {results.Count} reference(s) for \"{symbolName}\":");
+            foreach (var r in results)
+            {
+                Console.WriteLine($"  {r.FilePath}:{r.Line}");
+                Console.WriteLine($"    {r.ContextSnippet.Trim()}");
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(findRefsCommand);
+
 // ── agent-instructions ──────────────────────────────────────
 
 var agentInstructionsCommand = new Command("agent-instructions",
@@ -564,6 +1072,31 @@ static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceP
         serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<IndexEngine>());
 
     return new CliProjectScope(connection, store, engine, repoId, validatedPath);
+}
+
+static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)
+{
+    var stream = new FileStream(
+        filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+        bufferSize: 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+    await using (stream.ConfigureAwait(false))
+    {
+        stream.Seek(byteOffset, SeekOrigin.Begin);
+        var buffer = new byte[byteLength];
+        var bytesRead = 0;
+        while (bytesRead < byteLength)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(bytesRead, byteLength - bytesRead)).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            bytesRead += read;
+        }
+
+        return Encoding.UTF8.GetString(buffer, 0, bytesRead);
+    }
 }
 
 static async Task PrintDirectoryTreeAsync(string rootPath, string currentPath, int maxDepth, int currentDepth)
