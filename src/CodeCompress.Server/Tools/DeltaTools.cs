@@ -408,8 +408,10 @@ internal sealed partial class DeltaTools
             ?? new Dictionary<string, List<SymbolSummary>>(StringComparer.Ordinal);
     }
 
-    private static string SerializeError(string error, string code) =>
-        JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
+    private static string SerializeError(string error, string code, string? guidance = null) =>
+        guidance is null
+            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
 
     [GeneratedRegex(@"[^a-zA-Z0-9 _.\-]")]
     private static partial Regex SafeLabelPattern();

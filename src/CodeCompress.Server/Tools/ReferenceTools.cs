@@ -117,6 +117,8 @@ internal sealed class ReferenceTools
         return result.Length > 256 ? result[..256] : result;
     }
 
-    private static string SerializeError(string error, string code) =>
-        JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
+    private static string SerializeError(string error, string code, string? guidance = null) =>
+        guidance is null
+            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
 }

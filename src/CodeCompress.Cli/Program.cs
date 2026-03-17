@@ -86,13 +86,23 @@ indexCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesUnchanged, result.TotalFiles, result.SymbolsFound, result.DurationMs },
+                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesUnchanged, result.FilesErrored, result.TotalFiles, result.SymbolsFound, result.DurationMs },
                 jsonSerializerOptions));
         }
         else
         {
             Console.WriteLine($"Project root: {scope.ProjectRoot}");
-            Console.WriteLine($"Indexed {result.FilesIndexed} files, {result.FilesUnchanged} unchanged, {result.SymbolsFound} symbols in {result.DurationMs}ms");
+            var errorSuffix = result.FilesErrored > 0 ? $", {result.FilesErrored} failed" : "";
+            Console.WriteLine($"Indexed {result.FilesIndexed} files, {result.FilesUnchanged} unchanged{errorSuffix}, {result.SymbolsFound} symbols in {result.DurationMs}ms");
+
+            if (result.ParseFailures is { Count: > 0 })
+            {
+                Console.WriteLine($"  Parse failures (see .code-compress/ log for details):");
+                foreach (var failure in result.ParseFailures)
+                {
+                    Console.WriteLine($"    - {failure.FilePath}: {failure.Reason}");
+                }
+            }
         }
     }
 });
