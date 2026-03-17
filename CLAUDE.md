@@ -172,11 +172,9 @@ Specialized Claude Code skills live in `.claude/skills/`. A shared .NET referenc
 ### Skill Invocation
 
 Skills can be used in two ways:
-1. **Standalone:** `/security-expert review src/CodeCompress.Server/Tools/` — invoke directly as a slash command
-2. **Sub-agent delegation:** `implement-plan` delegates to skills via the Agent tool when implementing features (see Step 4 in implement-plan)
-
-**Note:** Sub-agents cannot call MCP tools. When delegating, the parent must fetch codebase context and documentation first, then pass it into the agent prompt.
+1. **User-invoked:** `/security-expert review src/CodeCompress.Server/Tools/` — the user types the slash command directly, which loads the SKILL.md content into the conversation
+2. **Agent delegation:** Read the skill's SKILL.md file, then launch an Agent with the full skill content and all relevant source code inlined in the prompt. Sub-agents cannot call MCP tools or read files — everything they need must be in the prompt. See Step 4 in implement-plan for the detailed delegation procedure.
 
 ### Security Skill is Mandatory
 
-The **security-expert** skill must be invoked on **every** implementation task — either in review mode (post-implementation audit) or enforce mode (during implementation). This is not optional. If a task doesn't explicitly mention security, run `/security-expert review` on all modified files before considering the work complete. Security is a first-class concern for this project given that MCP tool parameters are untrusted agent inputs and tool outputs can be weaponized via prompt injection.
+The **security-expert** skill must be engaged on **every** implementation task — either in review mode (post-implementation audit) or enforce mode (during implementation). This is not optional. To engage the skill: read `.claude/skills/security-expert/SKILL.md`, then delegate to an Agent with the full skill content and all modified source code inlined in the prompt. Security is a first-class concern for this project given that MCP tool parameters are untrusted agent inputs and tool outputs can be weaponized via prompt injection.

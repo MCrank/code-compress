@@ -41,7 +41,7 @@ Use the **Ref MCP** (`ref_search_documentation` / `ref_read_url`) as a secondary
 
 **Do NOT guess at API signatures, attribute names, or SDK patterns.** A 30-second doc lookup prevents hours of debugging wrong APIs.
 
-## Step 0: Codebase Discovery via CodeCompress MCP (Mandatory)
+## Step 0: Codebase Discovery via CodeCompress MCP **(Mandatory)**
 
 Before reading any plan or writing any code, bootstrap your understanding of the codebase using the **CodeCompress MCP server**. This is mandatory — do not skip this step or substitute manual file browsing.
 
@@ -156,46 +156,66 @@ Use specialized skill-backed agents for complex subtasks. Launch agents in paral
 
 The project has dedicated expert skills. When delegating to an agent, reference the relevant skill to provide domain expertise:
 
-| Skill | When to Use | Slash Command |
-|-------|------------|---------------|
-| **tdd-expert** | Writing tests, test infrastructure, TUnit patterns, NSubstitute mocking, Verify snapshots | `/tdd-expert` |
-| **security-expert** | Security review, OWASP compliance, prompt injection prevention, path/SQL/FTS5 validation | `/security-expert` |
-| **cli-expert** | CLI command implementation, System.CommandLine, help text, output formatting, exit codes | `/cli-expert` |
-| **parser-expert** | Language parser development, regex symbol extraction, sample projects, integration tests | `/parser-expert` |
+| Skill               | When to Use                                                                               | Slash Command      |
+| ------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
+| **tdd-expert**      | Writing tests, test infrastructure, TUnit patterns, NSubstitute mocking, Verify snapshots | `/tdd-expert`      |
+| **security-expert** | Security review, OWASP compliance, prompt injection prevention, path/SQL/FTS5 validation  | `/security-expert` |
+| **cli-expert**      | CLI command implementation, System.CommandLine, help text, output formatting, exit codes  | `/cli-expert`      |
+| **parser-expert**   | Language parser development, regex symbol extraction, sample projects, integration tests  | `/parser-expert`   |
 
 All skills reference the shared [dotnet-reference.md](../../references/dotnet-reference.md) for .NET conventions.
 
 ### Delegation Rules
 
-| Task Type | Delegate To | Mode |
-|-----------|-------------|------|
-| Security-critical code (PathValidator, SQL, FTS5, output sanitization) | **security-expert** (enforce mode) | During implementation |
-| Security review after implementation | **security-expert** (review mode) | Post-implementation |
-| Test writing, test scaffolding, TUnit patterns | **tdd-expert** | Before implementation (TDD) |
-| New language parser | **parser-expert** | During implementation |
-| CLI commands, help text, output formatting | **cli-expert** | During implementation |
-| Complex .NET patterns (DI, GenericHost, async, Span) | Reference **dotnet-reference.md** | Inline |
-| MCP SDK integration (tool registration, protocol) | Fetch docs via Context7/Ref MCP | Inline |
-| Parallel implementation of independent components | Launch multiple agents with relevant skills | Parallel |
+| Task Type                                                              | Delegate To                                 | Mode                        |
+| ---------------------------------------------------------------------- | ------------------------------------------- | --------------------------- |
+| Security-critical code (PathValidator, SQL, FTS5, output sanitization) | **security-expert** (enforce mode)          | During implementation       |
+| Security review after implementation                                   | **security-expert** (review mode)           | Post-implementation         |
+| Test writing, test scaffolding, TUnit patterns                         | **tdd-expert**                              | Before implementation (TDD) |
+| New language parser                                                    | **parser-expert**                           | During implementation       |
+| CLI commands, help text, output formatting                             | **cli-expert**                              | During implementation       |
+| Complex .NET patterns (DI, GenericHost, async, Span)                   | Reference **dotnet-reference.md**           | Inline                      |
+| MCP SDK integration (tool registration, protocol)                      | Fetch docs via Context7/Ref MCP             | Inline                      |
+| Parallel implementation of independent components                      | Launch multiple agents with relevant skills | Parallel                    |
 
-### Agent Instructions Pattern
+### How to Delegate to a Skill-Backed Agent
 
-When delegating, always include:
+Skills have `disable-model-invocation: true`, so they cannot be invoked via the Skill tool or automatically. Instead, you must **read the skill file and inject its full content into the agent prompt**. This is the only way to engage the skill's expertise.
 
-1. The specific files to create/modify
-2. The exact interfaces/types to implement
-3. The project conventions — reference [dotnet-reference.md](../../references/dotnet-reference.md) and include key sections
-4. The security requirements relevant to that component
-5. The TDD requirement — tests first, then implementation
-6. **Relevant documentation snippets** — look up the APIs the agent will need via Context7/Ref MCPs and include the key patterns in the agent prompt. Agents cannot call MCP tools, so they depend on you providing accurate API references.
-7. **The relevant skill content** — if delegating a security task, include the security-expert skill's checklist in the agent prompt so it has the full threat model
+**Mandatory steps for every delegation:**
+
+1. **Read the skill SKILL.md file** — use the Read tool to load the full content of the relevant skill file:
+    - Security: `.claude/skills/security-expert/SKILL.md`
+    - TDD: `.claude/skills/tdd-expert/SKILL.md`
+    - CLI: `.claude/skills/cli-expert/SKILL.md`
+    - Parser: `.claude/skills/parser-expert/SKILL.md`
+2. **Include the entire skill content in the agent prompt** — paste the full SKILL.md body (everything after the frontmatter) as the agent's operating instructions. Do not summarize or paraphrase — the skill contains specific checklists, code patterns, and threat models that the agent needs verbatim.
+3. **Include the source code to review/implement** — agents cannot read files or call MCP tools, so you must inline all relevant source code in the prompt.
+4. **Include relevant documentation snippets** — look up any library APIs the agent will need via Context7/Ref MCPs and include the key patterns.
+5. **Include project conventions** — reference [dotnet-reference.md](../../references/dotnet-reference.md) and include key sections relevant to the task.
+6. **Specify the mode and scope** — e.g., "review mode on these 3 files" or "enforce mode while implementing PathValidator".
+
+**Example — security review delegation:**
+
+```
+1. Read `.claude/skills/security-expert/SKILL.md`
+2. Read the changed source files
+3. Launch Agent with prompt:
+   - "You are the security expert for CodeCompress. Follow these instructions:"
+   - [paste full SKILL.md content]
+   - "## Mode: Review"
+   - "## Files to Review"
+   - [paste each file's source code]
+```
 
 ### Critical Reminder
 
-**Sub-agents cannot call MCP tools.** Before delegating:
-- Fetch any needed codebase context via CodeCompress MCP tools
-- Fetch any needed library documentation via Context7/Ref MCP
-- Include all of this in the agent prompt — the agent has no way to look it up itself
+**Sub-agents cannot call MCP tools or read files.** Before delegating:
+
+- Read the skill's SKILL.md file and include its full content in the agent prompt
+- Fetch any needed codebase context via CodeCompress MCP tools and inline it
+- Fetch any needed library documentation via Context7/Ref MCP and inline it
+- The agent has no way to look up anything itself — everything it needs must be in the prompt
 
 ## Step 5: Verification
 
@@ -205,7 +225,7 @@ After all implementation is complete:
 2. **Zero warnings**: `dotnet build CodeCompress.slnx` — clean build
 3. **Acceptance criteria**: Go through every checkbox in the plan's **Acceptance Criteria** section and verify each one is met
 4. **Coverage check**: Verify test coverage meets targets from CLAUDE.md (Parsers 95%+, Storage 90%+, IndexEngine 90%+, MCP Tools 85%+)
-5. **Security audit**: Verify no parameterized query violations, no path traversal gaps, no unsanitized output
+5. **Security audit (mandatory)**: Delegate to the **security-expert** skill in review mode on all modified files. Read `.claude/skills/security-expert/SKILL.md`, include its full content and all changed source code in the agent prompt. This is not optional — every implementation must have a skill-backed security review before completion.
 
 ## Step 6: Sample Project & Integration Tests (Parser Features)
 
@@ -216,6 +236,7 @@ When the implementation includes a **new language parser**, create a sample proj
 Create a directory at `samples/{language}-sample-project/` containing realistic source files that exercise **every feature** of the new parser. Follow the existing patterns (see `samples/csharp-sample-project/`, `samples/luau-sample-project/`, `samples/terraform-sample-project/` for reference).
 
 Requirements:
+
 - Files should look like real-world code — not just test fixtures with bare syntax
 - Cover **all block types, symbol kinds, and edge cases** the parser handles (e.g., nested blocks, comments as doc comments, heredocs, string literals with special chars)
 - Include enough variety to catch brace/block matching issues, comment extraction, dependency tracking, and signature enrichment
