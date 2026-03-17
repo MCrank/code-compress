@@ -254,4 +254,42 @@ internal sealed class Fts5QuerySanitizerTests
         await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Prefix);
         await Assert.That(result.Fts5Query).IsEqualTo("Add*");
     }
+
+    // ── Compound query sanitization tests ────────────────────────────
+
+    [Test]
+    public async Task SanitizeAsGlobCompoundOrPrefixReturnsFts5()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("Claude* OR Agent*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR Agent*");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobCompoundPrefixAndExactReturnsFts5()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("Claude* OR AgentRunner");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR AgentRunner");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobCompoundWithColumnFilterSanitized()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("name:Claude* OR Agent*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR Agent*");
+    }
+
+    [Test]
+    public async Task SanitizeAsGlobMixedStrategyPassesThrough()
+    {
+        var result = Fts5QuerySanitizer.SanitizeAsGlob("Claude* OR *Service");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
+        await Assert.That(result.ErrorDetail).IsNotNull();
+    }
 }

@@ -463,6 +463,18 @@ internal sealed class QueryTools
         var clampedLimit = Math.Clamp(limit, 1, 100);
         var glob = Fts5QuerySanitizer.SanitizeAsGlob(query);
 
+        if (glob.Strategy == GlobMatchStrategy.MixedStrategy)
+        {
+            return JsonSerializer.Serialize(
+                new
+                {
+                    Error = glob.ErrorDetail,
+                    Code = "MIXED_PATTERN",
+                    Suggestion = "Split into separate queries: run one query for prefix patterns (e.g., 'Claude*') and another for suffix/contains patterns (e.g., '*Service').",
+                },
+                SerializerOptions);
+        }
+
         // Wildcard-only query with pathFilter: browse all symbols under that path
         if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern) && validatedPathFilter is not null)
         {
