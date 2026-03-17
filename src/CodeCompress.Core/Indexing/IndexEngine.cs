@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using CodeCompress.Core.Diagnostics;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Parsers;
 using CodeCompress.Core.Storage;
@@ -140,6 +141,7 @@ public sealed partial class IndexEngine : IIndexEngine
 
         var parseResults = new ConcurrentDictionary<string, ParseResult>(StringComparer.OrdinalIgnoreCase);
         var fileContents = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var parseFailures = new ConcurrentBag<ParseFailure>();
         var totalSymbols = 0;
 
         await Parallel.ForEachAsync(
@@ -178,6 +180,10 @@ public sealed partial class IndexEngine : IIndexEngine
 #pragma warning restore CA1031
                 {
                     LogParseWarning(ex, relPath);
+                    parseFailures.Add(new ParseFailure(relPath, ex.GetType().Name));
+
+                    var codeCompressDir = Path.Combine(canonicalRoot, ".code-compress");
+                    DiagnosticLog.WriteWarning(codeCompressDir, "IndexEngine", $"Failed to parse file: {relPath}", ex);
                 }
             }).ConfigureAwait(false);
 
@@ -293,7 +299,8 @@ public sealed partial class IndexEngine : IIndexEngine
             changeSet.UnchangedFiles.Count,
             changeSet.DeletedFiles.Count,
             totalSymbols,
-            sw.ElapsedMilliseconds);
+            sw.ElapsedMilliseconds,
+            parseFailures.IsEmpty ? null : [.. parseFailures]);
     }
 
     private List<string> DiscoverFiles(

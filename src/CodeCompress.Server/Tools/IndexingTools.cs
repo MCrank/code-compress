@@ -58,18 +58,20 @@ internal sealed partial class IndexingTools
                     excludePatterns,
                     cancellationToken).ConfigureAwait(false);
 
-                return JsonSerializer.Serialize(
-                    new
-                    {
-                        result.RepoId,
-                        ProjectRoot = scope.ProjectRoot,
-                        result.FilesIndexed,
-                        result.FilesUnchanged,
-                        result.TotalFiles,
-                        result.SymbolsFound,
-                        result.DurationMs,
-                    },
-                    SerializerOptions);
+                var response = new
+                {
+                    result.RepoId,
+                    ProjectRoot = scope.ProjectRoot,
+                    result.FilesIndexed,
+                    result.FilesUnchanged,
+                    result.FilesErrored,
+                    result.TotalFiles,
+                    result.SymbolsFound,
+                    result.DurationMs,
+                    ParseErrors = result.ParseFailures?.Select(f => new { f.FilePath, f.Reason }),
+                };
+
+                return JsonSerializer.Serialize(response, SerializerOptions);
             }
         }
         catch (DirectoryNotFoundException)
@@ -183,8 +185,10 @@ internal sealed partial class IndexingTools
         return sanitized.Trim();
     }
 
-    private static string SerializeError(string error, string code) =>
-        JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
+    private static string SerializeError(string error, string code, string? guidance = null) =>
+        guidance is null
+            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
 
     [GeneratedRegex(@"[^a-zA-Z0-9 _.\-]")]
     private static partial Regex SafeLabelPattern();

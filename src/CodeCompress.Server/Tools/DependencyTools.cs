@@ -288,6 +288,8 @@ internal sealed class DependencyTools
         return sb.ToString();
     }
 
-    private static string SerializeError(string error, string code) =>
-        JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
+    private static string SerializeError(string error, string code, string? guidance = null) =>
+        guidance is null
+            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
 }
