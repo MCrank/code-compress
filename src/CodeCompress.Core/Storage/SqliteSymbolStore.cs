@@ -1157,6 +1157,48 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return results;
     }
 
+    public async Task<IReadOnlyList<Symbol>> GetChildSymbolsAsync(string repoId, string parentSymbolName)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(parentSymbolName);
+
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.parent_symbol = @parent AND f.repo_id = @repoId
+            ORDER BY s.line_start
+            """;
+
+        command.Parameters.AddWithValue("@parent", parentSymbolName);
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<Symbol>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+        }
+
+        return results;
+    }
+
     // ── Aggregation ─────────────────────────────────────────────────────
 
     public async Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0)

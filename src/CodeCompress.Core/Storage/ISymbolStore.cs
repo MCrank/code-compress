@@ -44,6 +44,7 @@ public interface ISymbolStore
     // Lookups
     public Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName);
     public Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames);
+    public Task<IReadOnlyList<Symbol>> GetChildSymbolsAsync(string repoId, string parentSymbolName);
 
     // Aggregation
     public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0);
