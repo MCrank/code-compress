@@ -991,4 +991,98 @@ internal sealed class SymbolStoreQueryTests
             }
         }
     }
+
+    // ── Kind-based ranking tests ─────────────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsSqlLikeRanksClassAboveConfigKey()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+
+        var repo = new Repository("repo1", "/test", "Test", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/test.cs", "hash1", 1024, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/test.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ClaudeConfig", "ConfigKey", "ClaudeConfig: \"value\"", null, 0, 50, 1, 1, "Public", null),
+            new(0, insertedFile.Id, "ClaudeService", "Class", "class ClaudeService", null, 100, 200, 5, 20, "Public", null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // SQL LIKE path (nameLikePattern, empty FTS5 query)
+        var results = await store.SearchSymbolsAsync("repo1", "", null, 10, null, "%Claude%").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(2);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("ClaudeService"); // Class = tier 1
+        await Assert.That(results[1].Symbol.Name).IsEqualTo("ClaudeConfig");  // ConfigKey = tier 3
+    }
+
+    [Test]
+    public async Task SearchSymbolsSqlLikeRanksStructuralAboveMemberAboveOther()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+
+        var repo = new Repository("repo1", "/test", "Test", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/test.cs", "hash1", 1024, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/test.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "CLAUDE_KEY", "Constant", "const CLAUDE_KEY", null, 0, 30, 1, 1, "Public", null),
+            new(0, insertedFile.Id, "HandleClaude", "Method", "void HandleClaude()", null, 50, 80, 5, 10, "Public", null),
+            new(0, insertedFile.Id, "IClaudeClient", "Interface", "interface IClaudeClient", null, 150, 100, 15, 25, "Public", null),
+            new(0, insertedFile.Id, "ClaudeRecord", "Record", "record ClaudeRecord", null, 300, 50, 30, 35, "Public", null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "", null, 10, null, "%Claude%").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(4);
+        // Tier 1 (Structural): ClaudeRecord, IClaudeClient (alphabetical within tier)
+        await Assert.That(results[0].Symbol.Kind).IsEqualTo("Record");
+        await Assert.That(results[1].Symbol.Kind).IsEqualTo("Interface");
+        // Tier 2 (Member): HandleClaude
+        await Assert.That(results[2].Symbol.Kind).IsEqualTo("Method");
+        // Tier 3 (Other): CLAUDE_KEY
+        await Assert.That(results[3].Symbol.Kind).IsEqualTo("Constant");
+    }
+
+    [Test]
+    public async Task SearchSymbolsSameTierOrdersAlphabetically()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+
+        var repo = new Repository("repo1", "/test", "Test", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/test.cs", "hash1", 1024, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/test.cs").ConfigureAwait(false);
+
+        // Insert in reverse alphabetical order to prove sorting works
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ZService", "Class", "class ZService", null, 0, 50, 1, 5, "Public", null),
+            new(0, insertedFile.Id, "AService", "Class", "class AService", null, 100, 50, 10, 15, "Public", null),
+            new(0, insertedFile.Id, "MService", "Class", "class MService", null, 200, 50, 20, 25, "Public", null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "", null, 10, null, "%Service%").ConfigureAwait(false);
+
+        await Assert.That(results).Count().IsEqualTo(3);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("AService");
+        await Assert.That(results[1].Symbol.Name).IsEqualTo("MService");
+        await Assert.That(results[2].Symbol.Name).IsEqualTo("ZService");
+    }
 }

@@ -141,7 +141,7 @@ internal sealed class IndexEngineTests
         var result = await _engine.IndexProjectAsync(_tempDir).ConfigureAwait(false);
 
         await Assert.That(result.FilesIndexed).IsEqualTo(1);
-        await Assert.That(result.FilesSkipped).IsEqualTo(1);
+        await Assert.That(result.FilesUnchanged).IsEqualTo(1);
     }
 
     // ── Test 3: Incremental — no changes ─────────────────────────────
@@ -167,7 +167,7 @@ internal sealed class IndexEngineTests
         var result = await _engine.IndexProjectAsync(_tempDir).ConfigureAwait(false);
 
         await Assert.That(result.FilesIndexed).IsEqualTo(0);
-        await Assert.That(result.FilesSkipped).IsEqualTo(1);
+        await Assert.That(result.FilesUnchanged).IsEqualTo(1);
     }
 
     // ── Test 4: Deleted file ─────────────────────────────────────────

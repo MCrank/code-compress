@@ -1718,4 +1718,171 @@ internal sealed class QueryToolsTests
         File.WriteAllText(tempPath, content, new UTF8Encoding(false));
         return tempPath;
     }
+
+    // ── Mixed strategy error tests ───────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsMixedPatternReturnsLlmFriendlyError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "Claude* OR *Service").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("MIXED_PATTERN");
+        await Assert.That(root.GetProperty("suggestion").GetString()).Contains("separate queries");
+    }
+
+    [Test]
+    public async Task SearchSymbolsCompoundPrefixRoutesFts5()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", "Claude* OR Agent*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "Claude* OR Agent*").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", "Claude* OR Agent*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    // ── Size guard tests ────────────────────────────────────────────────
+
+    [Test]
+    public async Task GetSymbolLargeSymbolWithChildrenReturnsGuidedSummary()
+    {
+        // Create a large source file (>16KB)
+        var largeContent = new string('x', 20_000);
+        var tempFile = CreateTempFile(largeContent);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbol = CreateSymbol(1, 1, "BigClass", "Class",
+                "public class BigClass", lineStart: 1, byteOffset: 0, byteLength: 20_000);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "BigClass").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 20_000, 100, 1000, 2000) });
+            _store.GetChildSymbolsAsync("test-repo-id", "BigClass")
+                .Returns(new List<Symbol>
+                {
+                    CreateSymbol(2, 1, "MethodA", "Method", "void MethodA()", parent: "BigClass", lineStart: 5),
+                    CreateSymbol(3, 1, "MethodB", "Method", "void MethodB()", parent: "BigClass", lineStart: 15),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "BigClass").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("truncated").GetBoolean()).IsTrue();
+            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("BigClass");
+            await Assert.That(root.GetProperty("guidance").GetString()).Contains("expand_symbol");
+            await Assert.That(root.GetProperty("children").GetArrayLength()).IsEqualTo(2);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolLargeSymbolWithForceReturnsFullSource()
+    {
+        var largeContent = new string('y', 20_000);
+        var tempFile = CreateTempFile(largeContent);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbol = CreateSymbol(1, 1, "BigClass", "Class",
+                "public class BigClass", lineStart: 1, byteOffset: 0, byteLength: 20_000);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "BigClass").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 20_000, 100, 1000, 2000) });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "BigClass", force: true).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(largeContent);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolLargeSymbolWithNoChildrenReturnsFullSource()
+    {
+        var largeContent = new string('z', 20_000);
+        var tempFile = CreateTempFile(largeContent);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbol = CreateSymbol(1, 1, "BigFunction", "Function",
+                "function BigFunction()", lineStart: 1, byteOffset: 0, byteLength: 20_000);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "BigFunction").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 20_000, 100, 1000, 2000) });
+            _store.GetChildSymbolsAsync("test-repo-id", "BigFunction")
+                .Returns(new List<Symbol>());
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "BigFunction").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(largeContent);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetSymbolSmallSymbolReturnsFullSource()
+    {
+        var smallContent = "public class SmallClass { }";
+        var tempFile = CreateTempFile(smallContent);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var symbol = CreateSymbol(1, 1, "SmallClass", "Class",
+                "public class SmallClass", lineStart: 1, byteOffset: 0,
+                byteLength: Encoding.UTF8.GetByteCount(smallContent));
+
+            _store.GetSymbolByNameAsync("test-repo-id", "SmallClass").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 1, 1000, 2000) });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.GetSymbol(dir, "SmallClass").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
+            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(smallContent);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
 }

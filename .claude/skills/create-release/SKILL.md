@@ -347,8 +347,12 @@ Use `AskUserQuestion` to ask:
 **If executing now:**
 1. Check if the PR is merged: `gh pr view {pr_number} --json state`
 2. If not merged, tell the user to merge the PR first and re-run
-3. If merged, execute steps 1-4 above
-4. **Skip GitHub Release creation** — CI/CD pipeline creates the release automatically when the tag is pushed
+3. If merged, execute steps 1-5 above (resolve merge conflicts if needed — take main's version for `Directory.Build.props` and `CHANGELOG.md`)
+4. **Update GitHub Release notes** — CI/CD creates the release but with minimal auto-generated notes. Replace them with the full changelog content:
+   ```bash
+   gh release edit v{new_version} --notes "{full_release_notes_with_changelog}" --repo MCrank/code-compress
+   ```
+   The release notes should include: a "What's New" header, the changelog entries rewritten for a release audience (grouped by theme, not just raw commit messages), and install instructions at the bottom.
 5. Execute step 5 (clean up release branch)
 
 ## Step 10: Exit Summary

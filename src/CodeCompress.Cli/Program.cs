@@ -86,13 +86,23 @@ indexCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesSkipped, result.SymbolsFound, result.DurationMs },
+                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesUnchanged, result.FilesErrored, result.TotalFiles, result.SymbolsFound, result.DurationMs },
                 jsonSerializerOptions));
         }
         else
         {
             Console.WriteLine($"Project root: {scope.ProjectRoot}");
-            Console.WriteLine($"Indexed {result.FilesIndexed} files ({result.FilesSkipped} skipped), {result.SymbolsFound} symbols in {result.DurationMs}ms");
+            var errorSuffix = result.FilesErrored > 0 ? $", {result.FilesErrored} failed" : "";
+            Console.WriteLine($"Indexed {result.FilesIndexed} files, {result.FilesUnchanged} unchanged{errorSuffix}, {result.SymbolsFound} symbols in {result.DurationMs}ms");
+
+            if (result.ParseFailures is { Count: > 0 })
+            {
+                Console.WriteLine($"  Parse failures (see .code-compress/ log for details):");
+                foreach (var failure in result.ParseFailures)
+                {
+                    Console.WriteLine($"    - {failure.FilePath}: {failure.Reason}");
+                }
+            }
         }
     }
 });
@@ -307,10 +317,34 @@ searchTextCommand.SetAction(async parseResult =>
     var limit = Math.Clamp(parseResult.GetValue(searchTextLimitOption), 1, 100);
     var json = parseResult.GetValue(jsonOption);
 
+    var sanitizedQuery = Fts5QuerySanitizer.Sanitize(query);
+    var sanitizedGlob = glob is not null ? Fts5QuerySanitizer.SanitizeGlob(glob) : null;
+
+    if (string.IsNullOrWhiteSpace(sanitizedQuery))
+    {
+        await Console.Error.WriteLineAsync("Error: search query is empty after sanitization.").ConfigureAwait(false);
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(sanitizedGlob))
+    {
+        sanitizedGlob = null;
+    }
+
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchTextAsync(scope.RepoId, query, glob, limit, pathFilter).ConfigureAwait(false);
+        IReadOnlyList<TextSearchResult> results;
+        try
+        {
+            results = await scope.Store.SearchTextAsync(scope.RepoId, sanitizedQuery, sanitizedGlob, limit, pathFilter).ConfigureAwait(false);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // FTS5 syntax error — retry with query as a quoted literal phrase
+            var literalQuery = $"\"{sanitizedQuery.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+            results = await scope.Store.SearchTextAsync(scope.RepoId, literalQuery, sanitizedGlob, limit, pathFilter).ConfigureAwait(false);
+        }
 
         if (json)
         {

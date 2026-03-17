@@ -60,15 +60,15 @@ public sealed class JsonConfigParser : ILanguageParser
                 ? property.Name
                 : $"{parentQualifiedName}:{property.Name}";
 
-            var keyByteOffset = FindPropertyKeyOffset(text, property.Name, searchStart);
+            var (keyByteOffset, keyCharIndex) = FindPropertyKeyOffset(text, property.Name, searchStart);
             var lineStart = FindLineForByteOffset(keyByteOffset, lineByteOffsets);
             var signature = BuildSignature(qualifiedName, property.Value);
             var byteLength = EstimateByteLength(property, contentLength, keyByteOffset);
 
-            // Advance searchStart past this property key so next search finds the next occurrence
-            if (keyByteOffset > searchStart)
+            // Advance searchStart (char index) past this property key so next search finds the next occurrence
+            if (keyCharIndex > searchStart)
             {
-                searchStart = keyByteOffset + Encoding.UTF8.GetByteCount(property.Name);
+                searchStart = keyCharIndex + property.Name.Length;
             }
 
             symbols.Add(new SymbolInfo(
@@ -90,11 +90,11 @@ public sealed class JsonConfigParser : ILanguageParser
         }
     }
 
-    private static int FindPropertyKeyOffset(string text, string propertyName, int searchStart)
+    private static (int ByteOffset, int CharIndex) FindPropertyKeyOffset(string text, string propertyName, int searchStartChar)
     {
-        // Search for "propertyName" pattern in the JSON text starting from searchStart
+        // Search for "propertyName" pattern in the JSON text starting from searchStartChar (char index)
         var needle = $"\"{propertyName}\"";
-        var charIndex = text.IndexOf(needle, searchStart, StringComparison.Ordinal);
+        var charIndex = text.IndexOf(needle, searchStartChar, StringComparison.Ordinal);
         if (charIndex < 0)
         {
             // Fallback: search from beginning
@@ -103,11 +103,12 @@ public sealed class JsonConfigParser : ILanguageParser
 
         if (charIndex < 0)
         {
-            return 0;
+            return (0, 0);
         }
 
-        // Convert char index to byte offset
-        return Encoding.UTF8.GetByteCount(text.AsSpan(0, charIndex));
+        // Convert char index to byte offset for symbol storage
+        var byteOffset = Encoding.UTF8.GetByteCount(text.AsSpan(0, charIndex));
+        return (byteOffset, charIndex);
     }
 
     private static int FindLineForByteOffset(int byteOffset, int[] lineByteOffsets)

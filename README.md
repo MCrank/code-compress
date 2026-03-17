@@ -1,6 +1,4 @@
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/MCrank/code-compress/develop/assets/banner.png" alt="CodeCompress — MCP Server & CLI" width="100%" />
+![CodeCompress — MCP Server & CLI](https://raw.githubusercontent.com/MCrank/code-compress/develop/assets/banner.png)
 
 **Persistent code index for AI agents. Ask for exactly what you need.**
 
@@ -10,8 +8,6 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/CodeCompress.Server?label=downloads)](https://www.nuget.org/packages/CodeCompress.Server)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
-
-</div>
 
 ---
 

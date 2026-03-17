@@ -138,4 +138,132 @@ internal sealed class GlobPatternTests
     {
         await Assert.That(GlobPattern.IsWildcardOnly("  *  ")).IsTrue();
     }
+
+    // ── Compound query tests ─────────────────────────────────────────
+
+    [Test]
+    public async Task ParseCompoundOrWithPrefixesReturnsFts5Strategy()
+    {
+        var result = GlobPattern.Parse("Claude* OR Agent*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR Agent*");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task ParseCompoundAndWithPrefixesReturnsFts5Strategy()
+    {
+        var result = GlobPattern.Parse("Claude* AND Agent*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* AND Agent*");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task ParseCompoundNotWithPrefixReturnsFts5Strategy()
+    {
+        var result = GlobPattern.Parse("Claude* NOT Client*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* NOT Client*");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task ParseCompoundPrefixAndExactReturnsFts5Strategy()
+    {
+        var result = GlobPattern.Parse("Claude* OR AgentRunner");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR AgentRunner");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task ParseParenthesizedCompoundReturnsFts5Strategy()
+    {
+        var result = GlobPattern.Parse("(Claude* OR Agent*) AND Service*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("(Claude* OR Agent*) AND Service*");
+        await Assert.That(result.SqlLikePattern).IsNull();
+    }
+
+    [Test]
+    public async Task ParseMixedPrefixAndSuffixReturnsMixedStrategy()
+    {
+        var result = GlobPattern.Parse("Claude* OR *Service");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
+        await Assert.That(result.ErrorDetail).IsNotNull();
+    }
+
+    [Test]
+    public async Task ParseMixedPrefixAndContainsReturnsMixedStrategy()
+    {
+        var result = GlobPattern.Parse("Claude* OR *Claude*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
+        await Assert.That(result.ErrorDetail).IsNotNull();
+    }
+
+    [Test]
+    public async Task ParsePlainTextWithOrStillReturnsFts5()
+    {
+        var result = GlobPattern.Parse("damage OR health");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("damage OR health");
+    }
+
+    [Test]
+    public async Task ParseMixedStrategyErrorDetailMentionsIncompatibleTerms()
+    {
+        var result = GlobPattern.Parse("Claude* OR *Service");
+
+        await Assert.That(result.ErrorDetail!).Contains("*Service");
+    }
+
+    [Test]
+    public async Task ParseCompoundAllExactTermsReturnsFts5()
+    {
+        var result = GlobPattern.Parse("Claude OR Agent AND Service");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude OR Agent AND Service");
+    }
+
+    [Test]
+    public async Task ParseTabSeparatedCompoundReturnsFts5()
+    {
+        var result = GlobPattern.Parse("Claude*\tOR\tAgent*");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.Fts5);
+        await Assert.That(result.Fts5Query).IsEqualTo("Claude* OR Agent*");
+    }
+
+    [Test]
+    public async Task ParseMixedStrategyErrorDetailSanitizesSpecialChars()
+    {
+        var result = GlobPattern.Parse("Claude* OR *<script>alert('xss')</script>");
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
+        await Assert.That(result.ErrorDetail!).DoesNotContain("<script>");
+        await Assert.That(result.ErrorDetail!).DoesNotContain("'");
+        await Assert.That(result.ErrorDetail!).DoesNotContain("<");
+        await Assert.That(result.ErrorDetail!).DoesNotContain(">");
+    }
+
+    [Test]
+    public async Task ParseMixedStrategyErrorDetailTruncatesLongTerms()
+    {
+        var longTerm = "*" + new string('a', 200);
+        var result = GlobPattern.Parse("Claude* OR " + longTerm);
+
+        await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
+        // ErrorDetail should contain a truncated version, not the full 200-char term
+        await Assert.That(result.ErrorDetail!.Length).IsLessThan(300);
+    }
 }

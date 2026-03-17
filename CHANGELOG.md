@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-17
+
+### Added
+- Size guard on `get_symbol`: large symbols (>16KB) with children return a guided summary with child method signatures and `expand_symbol` instructions instead of full source. Use `force=true` to bypass (#93)
+- Kind-based ranking boost for symbol search: structural types (Class, Interface, Record) rank above members (Method, Function) above config keys. SQL LIKE path now has deterministic ordering (#92)
+- Structured error handling with diagnostic file logging to `.code-compress/codecompress-YYYY-MM-DD.log` with 10-file retention and copy-paste GitHub bug report template (#94)
+- Compound FTS5 queries (`Claude* OR Agent*`) now route correctly to FTS5 instead of SQL LIKE. Mixed-strategy queries return LLM-friendly error with workaround suggestion (#89)
+- `total_files` and `files_errored` fields in index output for clearer incremental indexing and parse failure visibility (#88, #94)
+- `guidance` field added to all MCP tool error responses for actionable agent-facing messages (#94)
+- `Fts5QuerySanitizer` moved from Server to Core for shared access by MCP server and CLI (#90)
+
+### Fixed
+- JSON config parser crashes on files with multi-byte UTF-8 characters (accented names, emoji, CJK) due to byte vs char offset confusion (#91)
+- CLI `search-text` crashes on queries with FTS5 special characters (dots, colons, parentheses) — now sanitized with try/catch fallback (#90)
+- Compound FTS5 prefix wildcard queries (`Claude* OR Agent*`) returning zero results — misrouted to SQL LIKE where OR was treated as literal text (#89)
+- `files_skipped` renamed to `files_unchanged` in index output to prevent AI agents from misinterpreting healthy incremental behavior as failures (#88)
+- NuGet README rendering: switched to markdown image syntax for compatibility (#80)
+
+### Changed
+- Skill delegation documentation clarified in CLAUDE.md and implement-plan skill — explicit instructions for reading SKILL.md files and inlining into agent prompts (#88)
+
 ## [0.6.0] - 2026-03-14
 
 ### Added

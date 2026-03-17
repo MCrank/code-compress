@@ -5,7 +5,6 @@ using System.Text.Json;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
-using CodeCompress.Server.Sanitization;
 using CodeCompress.Server.Scoping;
 using ModelContextProtocol.Server;
 
@@ -28,6 +27,8 @@ internal sealed class QueryTools
     {
         "function", "method", "type", "class", "interface", "export", "constant", "module", "record", "enum",
     };
+
+    private const int SymbolSizeThresholdBytes = 16_384;
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
@@ -162,11 +163,12 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbol")]
-    [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). Uses byte-offset seeking for instant retrieval. Use search_symbols to discover symbol names first. Requires index_project to have been called first.")]
+    [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). For large symbols (>16KB), returns a guided summary with child method signatures and instructions to use expand_symbol for individual methods. Use force=true to bypass the size guard. Requires index_project to have been called first.")]
     public async Task<string> GetSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'CombatService:ProcessAttack') or just the name for top-level symbols. Use search_symbols to discover names.")] string symbolName,
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
+        [Description("Bypass size guard and return full source code even for large symbols")] bool force = false,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -211,6 +213,15 @@ internal sealed class QueryTools
             var sourceCode = includeContext
                 ? await ReadSourceCodeWithContextAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false)
                 : await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+            if (!force && Encoding.UTF8.GetByteCount(sourceCode) > SymbolSizeThresholdBytes)
+            {
+                var children = await scope.Store.GetChildSymbolsAsync(scope.RepoId, symbol.Name).ConfigureAwait(false);
+                if (children.Count > 0)
+                {
+                    return FormatGuidedSummary(symbol, file.RelativePath, children);
+                }
+            }
 
             var response = new
             {
@@ -368,6 +379,36 @@ internal sealed class QueryTools
                 foreach (var symbol in fileSymbols)
                 {
                     var sourceCode = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+                    if (Encoding.UTF8.GetByteCount(sourceCode) > SymbolSizeThresholdBytes)
+                    {
+                        var children = await scope.Store.GetChildSymbolsAsync(scope.RepoId, symbol.Name).ConfigureAwait(false);
+                        if (children.Count > 0)
+                        {
+                            var parentName = symbol.ParentSymbol is not null ? $"{symbol.ParentSymbol}:{symbol.Name}" : symbol.Name;
+                            results.Add(new
+                            {
+                                symbol.Name,
+                                symbol.Kind,
+                                Parent = symbol.ParentSymbol,
+                                File = file.RelativePath,
+                                symbol.LineStart,
+                                symbol.LineEnd,
+                                symbol.Signature,
+                                Truncated = true,
+                                SourceSizeBytes = symbol.ByteLength,
+                                Children = children.Select(c => new
+                                {
+                                    c.Name,
+                                    c.Signature,
+                                    ExpandWith = $"{parentName}:{c.Name}",
+                                }),
+                                Guidance = $"This symbol is large ({symbol.ByteLength:N0} bytes). Use expand_symbol to retrieve individual methods.",
+                            });
+                            continue;
+                        }
+                    }
+
                     results.Add(new
                     {
                         symbol.Name,
@@ -462,6 +503,18 @@ internal sealed class QueryTools
 
         var clampedLimit = Math.Clamp(limit, 1, 100);
         var glob = Fts5QuerySanitizer.SanitizeAsGlob(query);
+
+        if (glob.Strategy == GlobMatchStrategy.MixedStrategy)
+        {
+            return JsonSerializer.Serialize(
+                new
+                {
+                    Error = glob.ErrorDetail,
+                    Code = "MIXED_PATTERN",
+                    Suggestion = "Split into separate queries: run one query for prefix patterns (e.g., 'Claude*') and another for suffix/contains patterns (e.g., '*Service').",
+                },
+                SerializerOptions);
+        }
 
         // Wildcard-only query with pathFilter: browse all symbols under that path
         if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern) && validatedPathFilter is not null)
@@ -902,6 +955,34 @@ internal sealed class QueryTools
         return result.Length > 256 ? result[..256] : result;
     }
 
-    private static string SerializeError(string error, string code) =>
-        JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions);
+    private static string FormatGuidedSummary(Symbol symbol, string filePath, IReadOnlyList<Symbol> children)
+    {
+        var parentName = symbol.ParentSymbol is not null ? $"{symbol.ParentSymbol}:{symbol.Name}" : symbol.Name;
+        var response = new
+        {
+            symbol.Name,
+            symbol.Kind,
+            Parent = symbol.ParentSymbol,
+            File = filePath,
+            symbol.LineStart,
+            symbol.LineEnd,
+            symbol.Signature,
+            Truncated = true,
+            SourceSizeBytes = symbol.ByteLength,
+            Children = children.Select(c => new
+            {
+                c.Name,
+                c.Signature,
+                ExpandWith = $"{parentName}:{c.Name}",
+            }),
+            Guidance = $"This symbol is large ({symbol.ByteLength:N0} bytes). Use expand_symbol with '{parentName}:<method_name>' to retrieve individual methods. Use force=true to bypass this guard.",
+        };
+
+        return JsonSerializer.Serialize(response, SerializerOptions);
+    }
+
+    private static string SerializeError(string error, string code, string? guidance = null) =>
+        guidance is null
+            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
 }
