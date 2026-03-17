@@ -749,7 +749,19 @@ public sealed class SqliteSymbolStore : ISymbolStore
             sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
         }
 
-        sql.Append(" ORDER BY rank LIMIT @limit");
+        sql.Append(
+            """
+             ORDER BY rank,
+                CASE s.kind
+                    WHEN 'Class' THEN 1 WHEN 'Interface' THEN 1 WHEN 'Record' THEN 1
+                    WHEN 'Enum' THEN 1 WHEN 'Type' THEN 1
+                    WHEN 'Method' THEN 2 WHEN 'Function' THEN 2 WHEN 'Export' THEN 2
+                    WHEN 'Module' THEN 2
+                    ELSE 3
+                END,
+                s.name
+            LIMIT @limit
+            """);
 
 #pragma warning disable CA2100 // SQL is built from static literals and parameterized placeholders only
         command.CommandText = sql.ToString();
