@@ -1718,4 +1718,29 @@ internal sealed class QueryToolsTests
         File.WriteAllText(tempPath, content, new UTF8Encoding(false));
         return tempPath;
     }
+
+    // ── Mixed strategy error tests ───────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsMixedPatternReturnsLlmFriendlyError()
+    {
+        var result = await _tools.SearchSymbols("/valid/path", "Claude* OR *Service").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("MIXED_PATTERN");
+        await Assert.That(root.GetProperty("suggestion").GetString()).Contains("separate queries");
+    }
+
+    [Test]
+    public async Task SearchSymbolsCompoundPrefixRoutesFts5()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", "Claude* OR Agent*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        await _tools.SearchSymbols("/valid/path", "Claude* OR Agent*").ConfigureAwait(false);
+
+        await _store.Received(1).SearchSymbolsAsync(
+            "test-repo-id", "Claude* OR Agent*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>()).ConfigureAwait(false);
+    }
 }
