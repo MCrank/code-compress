@@ -1,7 +1,6 @@
 using CodeCompress.Core.Storage;
-using CodeCompress.Server.Sanitization;
 
-namespace CodeCompress.Server.Tests.Sanitization;
+namespace CodeCompress.Core.Tests.Storage;
 
 internal sealed class Fts5QuerySanitizerTests
 {
