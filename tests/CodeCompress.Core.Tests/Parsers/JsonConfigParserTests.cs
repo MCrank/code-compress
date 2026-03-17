@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Parsers;
@@ -366,5 +367,138 @@ internal sealed class JsonConfigParserTests
 
         var section = result.Symbols.First(s => s.Name == "Section");
         await Assert.That(section.Signature).IsEqualTo("Section: { ... } (3 keys)");
+    }
+
+    // ── Multi-byte UTF-8 character handling ──────────────────────
+
+    [Test]
+    public async Task JsonWithMultiByteValuesDoesNotCrash()
+    {
+        var source = """
+            {
+              "name": "José García",
+              "city": "München",
+              "greeting": "こんにちは"
+            }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Symbols).Count().IsEqualTo(3);
+        await Assert.That(result.Symbols[0].Name).IsEqualTo("name");
+        await Assert.That(result.Symbols[1].Name).IsEqualTo("city");
+        await Assert.That(result.Symbols[2].Name).IsEqualTo("greeting");
+    }
+
+    [Test]
+    public async Task JsonWithMultiBytePropertyKeysParses()
+    {
+        var source = """
+            {
+              "名前": "太郎",
+              "都市": "東京"
+            }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Symbols).Count().IsEqualTo(2);
+        await Assert.That(result.Symbols[0].Name).IsEqualTo("名前");
+        await Assert.That(result.Symbols[1].Name).IsEqualTo("都市");
+    }
+
+    [Test]
+    public async Task JsonWithEmojiValuesParses()
+    {
+        var source = """
+            {
+              "status": "✅ Active",
+              "icon": "🎮",
+              "label": "Player 1"
+            }
+            """;
+
+        var result = Parse(source);
+
+        await Assert.That(result.Symbols).Count().IsEqualTo(3);
+        await Assert.That(result.Symbols[2].Name).IsEqualTo("label");
+    }
+
+    [Test]
+    public async Task DeeplyNestedJsonWithMultiByteCharsParsesAllKeys()
+    {
+        var source = """
+            {
+              "config": {
+                "display": {
+                  "title": "Ölüm Vadisi",
+                  "subtitle": "Spëcîäl Çhàrs"
+                }
+              }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var names = result.Symbols.Select(s => s.Name).ToList();
+        await Assert.That(names).Contains("config:display:title");
+        await Assert.That(names).Contains("config:display:subtitle");
+    }
+
+    [Test]
+    public async Task DuplicateKeyNamesWithMultiByteContentResolveCorrectly()
+    {
+        var source = """
+            {
+              "parent": {
+                "name": "José"
+              },
+              "child": {
+                "name": "María"
+              }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var nameSymbols = result.Symbols.Where(s => s.Name.EndsWith("name", StringComparison.Ordinal)).ToList();
+        await Assert.That(nameSymbols).Count().IsEqualTo(2);
+        await Assert.That(nameSymbols[0].Name).IsEqualTo("parent:name");
+        await Assert.That(nameSymbols[1].Name).IsEqualTo("child:name");
+        // The two "name" keys should have different byte offsets
+        await Assert.That(nameSymbols[0].ByteOffset).IsNotEqualTo(nameSymbols[1].ByteOffset);
+    }
+
+    [Test]
+    public async Task ByteOffsetsAreCorrectForMultiByteContent()
+    {
+        var source = "{\"key\": \"café\", \"next\": \"value\"}";
+        var bytes = Encoding.UTF8.GetBytes(source);
+
+        var result = _parser.Parse("test.json", bytes);
+
+        await Assert.That(result.Symbols).Count().IsEqualTo(2);
+        // "next" key should have a byte offset that points to the right location
+        var nextSym = result.Symbols.First(s => s.Name == "next");
+        var byteSlice = Encoding.UTF8.GetString(bytes.AsSpan(nextSym.ByteOffset, 6));
+        await Assert.That(byteSlice).IsEqualTo("\"next\"");
+    }
+
+    [Test]
+    public async Task ManyPropertiesWithScatteredMultiByteCharsAllParse()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("{");
+        for (var i = 0; i < 50; i++)
+        {
+            var comma = i < 49 ? "," : "";
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  \"key{i}\": \"value{i} — entrée №{i}\"{comma}");
+        }
+
+        sb.AppendLine("}");
+
+        var result = Parse(sb.ToString());
+
+        await Assert.That(result.Symbols).Count().IsEqualTo(50);
     }
 }
