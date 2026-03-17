@@ -86,13 +86,13 @@ indexCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesSkipped, result.SymbolsFound, result.DurationMs },
+                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesUnchanged, result.TotalFiles, result.SymbolsFound, result.DurationMs },
                 jsonSerializerOptions));
         }
         else
         {
             Console.WriteLine($"Project root: {scope.ProjectRoot}");
-            Console.WriteLine($"Indexed {result.FilesIndexed} files ({result.FilesSkipped} skipped), {result.SymbolsFound} symbols in {result.DurationMs}ms");
+            Console.WriteLine($"Indexed {result.FilesIndexed} files, {result.FilesUnchanged} unchanged, {result.SymbolsFound} symbols in {result.DurationMs}ms");
         }
     }
 });

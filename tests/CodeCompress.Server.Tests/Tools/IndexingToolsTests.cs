@@ -53,7 +53,8 @@ internal sealed class IndexingToolsTests
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("repo_id").GetString()).IsEqualTo("repo1");
         await Assert.That(root.GetProperty("files_indexed").GetInt32()).IsEqualTo(42);
-        await Assert.That(root.GetProperty("files_skipped").GetInt32()).IsEqualTo(3);
+        await Assert.That(root.GetProperty("files_unchanged").GetInt32()).IsEqualTo(3);
+        await Assert.That(root.GetProperty("total_files").GetInt32()).IsEqualTo(45);
         await Assert.That(root.GetProperty("symbols_found").GetInt32()).IsEqualTo(187);
         await Assert.That(root.GetProperty("duration_ms").GetInt64()).IsEqualTo(1250);
     }

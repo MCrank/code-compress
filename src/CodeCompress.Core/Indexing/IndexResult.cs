@@ -3,7 +3,10 @@ namespace CodeCompress.Core.Indexing;
 public sealed record IndexResult(
     string RepoId,
     int FilesIndexed,
-    int FilesSkipped,
+    int FilesUnchanged,
     int FilesDeleted,
     int SymbolsFound,
-    long DurationMs);
+    long DurationMs)
+{
+    public int TotalFiles => FilesIndexed + FilesUnchanged + FilesDeleted;
+}
