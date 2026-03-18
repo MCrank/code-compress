@@ -962,6 +962,10 @@ public sealed partial class CSharpParser : ILanguageParser
         var visibility = DeriveVisibility(modifiers, isNested);
         var currentDepth = GetCurrentBraceDepth(parentStack);
 
+        // Extract primary constructor parameters as child symbols
+        ExtractPrimaryConstructorParameters(
+            rest, name, lineNumber, byteOffset, trimmed, symbols);
+
         var isSemicolonTerminated = trimmed.EndsWith(';');
 
         if (isSemicolonTerminated)
@@ -995,6 +999,162 @@ public sealed partial class CSharpParser : ILanguageParser
         }
 
         return true;
+    }
+
+    private static void ExtractPrimaryConstructorParameters(
+        string rest, string typeName, int lineNumber, int lineByteOffset,
+        string fullLine, List<SymbolInfo> symbols)
+    {
+        if (string.IsNullOrEmpty(rest) || rest[0] != '(')
+        {
+            return;
+        }
+
+        // Find matching close paren at depth 0
+        var closeIdx = FindMatchingCloseParenInParams(rest);
+        if (closeIdx < 0)
+        {
+            return;
+        }
+
+        var paramsText = rest[1..closeIdx]; // content between ( and )
+        if (string.IsNullOrWhiteSpace(paramsText))
+        {
+            return;
+        }
+
+        // Split on commas at depth 0 (respecting <>, [], ())
+        var parameters = SplitParametersAtDepthZero(paramsText);
+
+        foreach (var param in parameters)
+        {
+            var trimmedParam = param.Trim();
+            if (string.IsNullOrEmpty(trimmedParam))
+            {
+                continue;
+            }
+
+            var paramName = ExtractParameterName(trimmedParam);
+            if (string.IsNullOrEmpty(paramName))
+            {
+                continue;
+            }
+
+            // Calculate byte offset of this parameter within the line
+            var paramStartInLine = fullLine.IndexOf(trimmedParam, StringComparison.Ordinal);
+            var paramByteOffset = paramStartInLine >= 0
+                ? lineByteOffset + Encoding.UTF8.GetByteCount(fullLine[..paramStartInLine])
+                : lineByteOffset;
+
+            symbols.Add(new SymbolInfo(
+                Name: paramName,
+                Kind: SymbolKind.Constant,
+                Signature: trimmedParam,
+                ParentSymbol: typeName,
+                ByteOffset: paramByteOffset,
+                ByteLength: Encoding.UTF8.GetByteCount(trimmedParam),
+                LineStart: lineNumber,
+                LineEnd: lineNumber,
+                Visibility: Visibility.Public,
+                DocComment: null));
+        }
+    }
+
+    private static int FindMatchingCloseParenInParams(string text)
+    {
+        var depth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '(':
+                    depth++;
+                    break;
+                case ')':
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return i;
+                    }
+
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static List<string> SplitParametersAtDepthZero(string paramsText)
+    {
+        var result = new List<string>();
+        var depth = 0; // tracks <>, [], ()
+        var start = 0;
+
+        for (var i = 0; i < paramsText.Length; i++)
+        {
+            switch (paramsText[i])
+            {
+                case '<' or '[' or '(':
+                    depth++;
+                    break;
+                case '>' or ']' or ')':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    result.Add(paramsText[start..i]);
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        // Add the last parameter
+        if (start < paramsText.Length)
+        {
+            result.Add(paramsText[start..]);
+        }
+
+        return result;
+    }
+
+    private static string ExtractParameterName(string paramText)
+    {
+        // Parameter name is the last word token before any `=` default value
+        // Handle: "string Name", "[Required] string Name", "int X = 5",
+        //         "ILogger<T> logger", "params string[] tags"
+
+        var text = paramText;
+
+        // Strip default value for name extraction
+        var equalsIdx = FindEqualsOutsideBrackets(text);
+        if (equalsIdx >= 0)
+        {
+            text = text[..equalsIdx].TrimEnd();
+        }
+
+        // The name is the last whitespace-delimited token
+        var lastSpace = text.LastIndexOf(' ');
+        return lastSpace >= 0 ? text[(lastSpace + 1)..] : text;
+    }
+
+    private static int FindEqualsOutsideBrackets(string text)
+    {
+        var depth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<' or '[' or '(':
+                    depth++;
+                    break;
+                case '>' or ']' or ')':
+                    depth--;
+                    break;
+                case '=' when depth == 0:
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private static void UpdateBraceDepth(

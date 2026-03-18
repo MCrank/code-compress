@@ -63,7 +63,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
 
         await Assert.That(result.RepoId).IsEqualTo(_repoId);
         await Assert.That(result.FilesIndexed).IsEqualTo(15);
-        await Assert.That(result.SymbolsFound).IsEqualTo(92);
+        await Assert.That(result.SymbolsFound).IsEqualTo(99);
     }
 
     // ── Query Tests ──────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(outline.Groups).Count().IsGreaterThanOrEqualTo(1);
 
         var totalSymbols = CountOutlineSymbols(outline.Groups);
-        await Assert.That(totalSymbols).IsEqualTo(92);
+        await Assert.That(totalSymbols).IsEqualTo(99);
 
         // Verify some specific symbol kinds appear
         var allSymbolKinds = CollectSymbolKinds(outline.Groups);
@@ -466,6 +466,53 @@ internal sealed class CSharpEndToEndTests : IDisposable
         var namespaceSymbol = symbols.FirstOrDefault(s => s.Kind == "Module");
         await Assert.That(namespaceSymbol).IsNotNull();
         await Assert.That(namespaceSymbol!.Name).IsEqualTo("GameProject.Models");
+    }
+
+    // ── Record Primary Constructor Parameter Tests ────────────────────
+
+    [Test]
+    public async Task RecordPrimaryConstructorParamsSearchable()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Player record has params: Name, Level, Health
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "Name", kind: "Constant", limit: 20).ConfigureAwait(false);
+
+        var playerName = results.FirstOrDefault(r =>
+            r.Symbol.Name == "Name" && r.Symbol.ParentSymbol == "Player");
+
+        await Assert.That(playerName).IsNotNull();
+        await Assert.That(playerName!.Symbol.Kind).IsEqualTo("Constant");
+    }
+
+    [Test]
+    public async Task RecordPrimaryConstructorParamsExpandable()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // Point record struct has params: X, Y
+        var symbol = await _store.GetSymbolByNameAsync(
+            _repoId, "Point:X").ConfigureAwait(false);
+
+        await Assert.That(symbol).IsNotNull();
+        await Assert.That(symbol!.Kind).IsEqualTo("Constant");
+        await Assert.That(symbol.ParentSymbol).IsEqualTo("Point");
+    }
+
+    [Test]
+    public async Task ClassPrimaryConstructorParamsSearchableInSample()
+    {
+        await IndexSampleProjectAsync().ConfigureAwait(false);
+
+        // GameEngine has primary constructor params: combat, inventory
+        var results = await _store.SearchSymbolsAsync(
+            _repoId, "combat", kind: "Constant", limit: 20).ConfigureAwait(false);
+
+        var param = results.FirstOrDefault(r =>
+            r.Symbol.Name == "combat" && r.Symbol.ParentSymbol == "GameEngine");
+
+        await Assert.That(param).IsNotNull();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
