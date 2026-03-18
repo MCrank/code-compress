@@ -6,7 +6,7 @@ namespace GameProject.Models;
 /// <summary>
 /// Represents a player in the game.
 /// </summary>
-public record Player(string Name, int Level, int Health)
+public partial record Player(string Name, int Level, int Health)
 {
     /// <summary>
     /// Gets or sets the player's score.

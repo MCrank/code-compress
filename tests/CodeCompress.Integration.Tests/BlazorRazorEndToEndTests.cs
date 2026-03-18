@@ -62,7 +62,7 @@ internal sealed class BlazorRazorEndToEndTests : IDisposable
         var result = await _engine.IndexProjectAsync(_sampleProjectPath, "blazor").ConfigureAwait(false);
 
         await Assert.That(result.RepoId).IsEqualTo(_repoId);
-        await Assert.That(result.FilesIndexed).IsEqualTo(7);
+        await Assert.That(result.FilesIndexed).IsEqualTo(9);
         await Assert.That(result.SymbolsFound).IsGreaterThanOrEqualTo(30);
     }
 

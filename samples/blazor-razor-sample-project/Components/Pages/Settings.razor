@@ -1,0 +1,50 @@
+@page "/settings"
+
+@using Alias = Microsoft.AspNetCore.Components.Web
+@using System.Collections.Generic
+
+@inject IOptions<AppSettings> Options
+@inject ILogger<Settings> Logger
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Application Settings</h1>
+
+@if (_loaded)
+{
+    <div class="settings-panel">
+        <p>Theme: @_theme</p>
+        <p>Language: @_language</p>
+    </div>
+}
+else
+{
+    <p>Loading settings...</p>
+}
+
+@code
+{
+    private bool _loaded;
+    private string _theme = "dark";
+    private string _language = "en";
+
+    protected override void OnInitialized()
+    {
+        _loaded = true;
+        Logger.LogInformation("Settings loaded");
+    }
+
+    private void UpdateTheme(string theme)
+    {
+        _theme = theme;
+    }
+}
+
+@code {
+    private Dictionary<string, string> _extraSettings = new();
+
+    private void AddSetting(string key, string value)
+    {
+        _extraSettings[key] = value;
+    }
+}

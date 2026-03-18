@@ -36,4 +36,18 @@ locals {
     ManagedBy   = "terraform"
   }
   name_prefix = "${var.project_name}-${var.environment}"
+
+  // Region-specific configuration using nested maps
+  region_config = {
+    "us-east-1" = {
+      ami           = "ami-0c55b159cbfafe1f0"
+      instance_type = "t3.medium"
+      az_count      = 3
+    }
+    "eu-west-1" = {
+      ami           = "ami-0d71ea30463e0ff8d"
+      instance_type = "t3.small"
+      az_count      = 2
+    }
+  }
 }

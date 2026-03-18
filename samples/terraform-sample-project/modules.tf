@@ -6,11 +6,24 @@ module "vpc" {
   name_prefix = local.name_prefix
 }
 
+/*
+ * Monitoring module for CloudWatch alarms and dashboards.
+ * Uses the official AWS CloudWatch module from the Terraform registry.
+ */
 module "monitoring" {
   source  = "terraform-aws-modules/cloudwatch/aws"
   version = "~> 4.0"
 
-  dashboard_name = "${local.name_prefix}-dashboard"
+  alarm_name          = "${local.name_prefix}-cpu-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+
+  tags = local.common_tags
 }
 
 module "s3_bucket" {

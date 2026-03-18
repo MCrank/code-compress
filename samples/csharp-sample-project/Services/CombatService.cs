@@ -26,7 +26,7 @@ public class CombatService : ICombatService
         return damage;
     }
 
-    public int CalculateDamage(Player attacker)
+    public virtual int CalculateDamage(Player attacker)
     {
         return attacker.Level * _random.Next(1, 10);
     }
@@ -39,5 +39,10 @@ public class CombatService : ICombatService
     private int CalculateCriticalHit(int baseDamage)
     {
         return baseDamage * 2;
+    }
+
+    ~CombatService()
+    {
+        // Cleanup resources
     }
 }

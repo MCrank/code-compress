@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-17
+
+### Added
+- C# record and class primary constructor parameters indexed as individual child symbols (`SymbolKind.Constant`), making them independently searchable via FTS5 and expandable via qualified name e.g. `expand_symbol("Order:Id")` (#96)
+- JSON Config sample project created from scratch with integration tests covering all value types, nested sections, and UTF-8 multi-byte characters (#97)
+- COVERAGE.md added to each of the 6 sample directories documenting exercised parser constructs (#97)
+- 15 new unit tests for record/class parameter extraction and 12 new JSON Config integration tests (#96, #97)
+
+### Changed
+- All 6 language sample projects expanded to 90%+ parser construct coverage (#97)
+- C# sample: added struct, record struct, sealed class, partial record, class primary constructor, operators, indexer, finalizer, virtual/override, file-scoped type, block-scoped namespace (#97)
+- Luau sample: added while/do, repeat/until, do/end blocks, nested local functions (#97)
+- Blazor Razor sample: added @using alias, multiple @code blocks, empty @code block (#97)
+- .NET Project sample: added multi-target project, nested Version element, AssemblyName (#97)
+- `/implement-plan` skill Step 6 updated with guidance for updating existing sample projects on parser enhancements (#97)
+
+### Fixed
+- Terraform sample `modules.tf` invalid `dashboard_name` attribute replaced with valid CloudWatch alarm attributes (#97)
+
 ## [0.7.0] - 2026-03-17
 
 ### Added
