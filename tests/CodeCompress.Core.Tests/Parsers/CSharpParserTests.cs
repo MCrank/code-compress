@@ -644,6 +644,221 @@ internal sealed class CSharpParserTests
         await Assert.That(cls.ByteOffset).IsEqualTo(expectedOffset);
     }
 
+    // ── Record primary constructor parameters ─────────────────────
+
+    [Test]
+    public async Task RecordPrimaryConstructorParamsIndexedAsChildren()
+    {
+        var source = """
+            public record Order(string Id, decimal Total, DateTime CreatedAt);
+            """;
+
+        var result = Parse(source);
+
+        var rec = result.Symbols.First(s => s.Name == "Order");
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Order" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(3);
+
+        var id = children.First(s => s.Name == "Id");
+        await Assert.That(id.Signature).IsEqualTo("string Id");
+        await Assert.That(id.Visibility).IsEqualTo(Visibility.Public);
+
+        var total = children.First(s => s.Name == "Total");
+        await Assert.That(total.Signature).IsEqualTo("decimal Total");
+
+        var createdAt = children.First(s => s.Name == "CreatedAt");
+        await Assert.That(createdAt.Signature).IsEqualTo("DateTime CreatedAt");
+    }
+
+    [Test]
+    public async Task RecordParamWithDefaultValuePreservesDefault()
+    {
+        var source = """
+            public record Config(string Name, int Retries = 3);
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Config" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+
+        var retries = children.First(s => s.Name == "Retries");
+        await Assert.That(retries.Signature).IsEqualTo("int Retries = 3");
+    }
+
+    [Test]
+    public async Task RecordStructParamsIndexed()
+    {
+        var source = """
+            public record struct Point(double X, double Y);
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Point" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+        await Assert.That(children[0].Name).IsEqualTo("X");
+        await Assert.That(children[1].Name).IsEqualTo("Y");
+    }
+
+    [Test]
+    public async Task ClassPrimaryConstructorParamsIndexed()
+    {
+        var source = """
+            public class OrderService(IOrderRepo repo, ILogger<OrderService> logger)
+            {
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Name == "OrderService");
+        await Assert.That(cls.Kind).IsEqualTo(SymbolKind.Class);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "OrderService" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+
+        var repo = children.First(s => s.Name == "repo");
+        await Assert.That(repo.Signature).IsEqualTo("IOrderRepo repo");
+
+        var logger = children.First(s => s.Name == "logger");
+        await Assert.That(logger.Signature).IsEqualTo("ILogger<OrderService> logger");
+    }
+
+    [Test]
+    public async Task GenericRecordParamsHandled()
+    {
+        var source = """
+            public record Result<T>(T Value, string? Error) where T : notnull;
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Result" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+        await Assert.That(children.First(s => s.Name == "Value").Signature).IsEqualTo("T Value");
+        await Assert.That(children.First(s => s.Name == "Error").Signature).IsEqualTo("string? Error");
+    }
+
+    [Test]
+    public async Task RecordWithNoParamsProducesNoChildren()
+    {
+        var source = """
+            public record EmptyMarker { }
+            """;
+
+        var result = Parse(source);
+
+        var rec = result.Symbols.First(s => s.Name == "EmptyMarker");
+        await Assert.That(rec.Kind).IsEqualTo(SymbolKind.Record);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "EmptyMarker" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RecordWithEmptyParensProducesNoChildren()
+    {
+        var source = """
+            public record Marker();
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Marker" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RecordSingleParamProducesOneChild()
+    {
+        var source = """
+            public record Wrapper(string Value);
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Wrapper" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(1);
+        await Assert.That(children[0].Name).IsEqualTo("Value");
+    }
+
+    [Test]
+    public async Task NestedRecordParamsUseCorrectParentChain()
+    {
+        var source = """
+            public class Outer
+            {
+                public record Inner(int X);
+            }
+            """;
+
+        var result = Parse(source);
+
+        var inner = result.Symbols.First(s => s.Name == "Inner");
+        await Assert.That(inner.ParentSymbol).IsEqualTo("Outer");
+
+        var x = result.Symbols.First(s => s.Name == "X" && s.Kind == SymbolKind.Constant);
+        await Assert.That(x.ParentSymbol).IsEqualTo("Inner");
+    }
+
+    [Test]
+    public async Task RecordParamsWithAttributesIncludeAttributes()
+    {
+        var source = """
+            public record Cmd([Required] string Name, [Range(1, 100)] int Count);
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Cmd" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+
+        var name = children.First(s => s.Name == "Name");
+        await Assert.That(name.Signature).IsEqualTo("[Required] string Name");
+
+        var count = children.First(s => s.Name == "Count");
+        await Assert.That(count.Signature).IsEqualTo("[Range(1, 100)] int Count");
+    }
+
+    [Test]
+    public async Task RecordWithBodyParamsIndexed()
+    {
+        var source = """
+            public record Foo(int X, string Y)
+            {
+                public int Z { get; init; }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "Foo" && s.Kind == SymbolKind.Constant).ToList();
+        // X and Y from primary constructor + Z from body property
+        await Assert.That(children.Count).IsGreaterThanOrEqualTo(2);
+
+        var x = children.First(s => s.Name == "X");
+        await Assert.That(x.Signature).IsEqualTo("int X");
+    }
+
+    [Test]
+    public async Task RecordParamWithParamsKeyword()
+    {
+        var source = """
+            public record TaggedItem(string Name, params string[] Tags);
+            """;
+
+        var result = Parse(source);
+
+        var children = result.Symbols.Where(s => s.ParentSymbol == "TaggedItem" && s.Kind == SymbolKind.Constant).ToList();
+        await Assert.That(children).Count().IsEqualTo(2);
+
+        var tags = children.First(s => s.Name == "Tags");
+        await Assert.That(tags.Signature).IsEqualTo("params string[] Tags");
+    }
+
     // ── Record with body ─────────────────────────────────────────
 
     [Test]

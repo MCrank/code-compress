@@ -21,6 +21,7 @@ Constructs exercised by this sample project against `CSharpParser`.
 - [x] Methods (public, private, async, expression-bodied, virtual, override)
 - [x] Constructors (regular, primary)
 - [x] Properties (auto-prop, expression-bodied, init-only)
+- [x] Primary constructor parameters (indexed as Constant children of record/class)
 - [x] Indexer (`this[]`)
 - [x] Finalizer (`~ClassName`)
 - [x] Operator overloads (single-line expression-bodied)
