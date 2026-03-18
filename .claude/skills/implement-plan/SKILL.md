@@ -229,11 +229,15 @@ After all implementation is complete:
 
 ## Step 6: Sample Project & Integration Tests (Parser Features)
 
-When the implementation includes a **new language parser**, create a sample project and end-to-end integration tests to validate the parser against realistic files:
+When the implementation includes a **new language parser** or **enhances an existing parser**, ensure the sample project and integration tests reflect the full parser capability:
 
-### 6a. Create Sample Project
+### 6a. Create or Update Sample Project
 
-Create a directory at `samples/{language}-sample-project/` containing realistic source files that exercise **every feature** of the new parser. Follow the existing patterns (see `samples/csharp-sample-project/`, `samples/luau-sample-project/`, `samples/terraform-sample-project/` for reference).
+**For new parsers:** Create a directory at `samples/{language}-sample-project/` containing realistic source files.
+
+**For existing parser enhancements:** Audit the existing sample project at `samples/{language}-sample-project/` for coverage of the new/changed constructs. Add missing constructs to existing sample files or create new ones as needed. Each sample directory has a `COVERAGE.md` checklist — update it when adding new constructs.
+
+Follow the existing patterns (see `samples/csharp-sample-project/`, `samples/luau-sample-project/`, `samples/terraform-sample-project/` for reference).
 
 Requirements:
 
@@ -241,10 +245,15 @@ Requirements:
 - Cover **all block types, symbol kinds, and edge cases** the parser handles (e.g., nested blocks, comments as doc comments, heredocs, string literals with special chars)
 - Include enough variety to catch brace/block matching issues, comment extraction, dependency tracking, and signature enrichment
 - The sample project should be self-contained (no external dependencies required to parse)
+- Update `COVERAGE.md` in the sample directory to reflect any new constructs added
 
-### 6b. Write Integration Tests
+### 6b. Write or Update Integration Tests
 
-Create an end-to-end integration test class at `tests/CodeCompress.Integration.Tests/{Language}EndToEndTests.cs` following the pattern in `CSharpEndToEndTests.cs`:
+**For new parsers:** Create an end-to-end integration test class at `tests/CodeCompress.Integration.Tests/{Language}EndToEndTests.cs` following the pattern in `CSharpEndToEndTests.cs`.
+
+**For existing parser enhancements:** Update the existing integration test class to cover the new constructs. This typically means updating file/symbol count assertions and adding new specific symbol lookups that verify the enhanced parsing.
+
+Integration test pattern (same for new and updated):
 
 - Set up: in-memory SQLite, `IndexEngine` with the new parser, sample project path
 - Test indexing: correct file count and symbol count

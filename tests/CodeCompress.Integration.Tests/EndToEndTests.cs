@@ -62,8 +62,8 @@ internal sealed class EndToEndTests : IDisposable
         var result = await _engine.IndexProjectAsync(_sampleProjectPath, "luau").ConfigureAwait(false);
 
         await Assert.That(result.RepoId).IsEqualTo(_repoId);
-        await Assert.That(result.FilesIndexed).IsEqualTo(8);
-        // 8 files with classes, methods, functions, exports across the sample project
+        await Assert.That(result.FilesIndexed).IsEqualTo(9);
+        // 9 files with classes, methods, functions, exports across the sample project
         await Assert.That(result.SymbolsFound).IsGreaterThanOrEqualTo(50);
     }
 
@@ -236,7 +236,7 @@ internal sealed class EndToEndTests : IDisposable
 
                 // First index builds initial state
                 var firstResult = await tempEngine.IndexProjectAsync(tempDir, "luau").ConfigureAwait(false);
-                await Assert.That(firstResult.FilesIndexed).IsEqualTo(8);
+                await Assert.That(firstResult.FilesIndexed).IsEqualTo(9);
 
                 // Create snapshot of current state
                 var tempSnapshot = new IndexSnapshot(0, tempRepoId, "before-change", DateTimeOffset.UtcNow.ToUnixTimeSeconds(), string.Empty);
@@ -289,7 +289,7 @@ internal sealed class EndToEndTests : IDisposable
 
         // LuauParser does not extract require() dependencies yet,
         // so nodes are the indexed files and edges are empty
-        await Assert.That(graph.Nodes).Count().IsEqualTo(8);
+        await Assert.That(graph.Nodes).Count().IsEqualTo(9);
         await Assert.That(graph.Edges).Count().IsEqualTo(0);
     }
 
@@ -322,7 +322,7 @@ internal sealed class EndToEndTests : IDisposable
         await Assert.That(Directory.Exists(sharedDir)).IsTrue();
 
         var luauFiles = Directory.GetFiles(_sampleProjectPath, "*.luau", SearchOption.AllDirectories);
-        await Assert.That(luauFiles).Count().IsEqualTo(8);
+        await Assert.That(luauFiles).Count().IsEqualTo(9);
     }
 
     [Test]
@@ -341,7 +341,7 @@ internal sealed class EndToEndTests : IDisposable
     public async Task InvalidateCacheForcesFullReindex()
     {
         var firstResult = await _engine.IndexProjectAsync(_sampleProjectPath, "luau").ConfigureAwait(false);
-        await Assert.That(firstResult.FilesIndexed).IsEqualTo(8);
+        await Assert.That(firstResult.FilesIndexed).IsEqualTo(9);
         var expectedSymbols = firstResult.SymbolsFound;
 
         // Second index should skip all (no changes)
@@ -362,7 +362,7 @@ internal sealed class EndToEndTests : IDisposable
 
         // Third index should re-process all files
         var thirdResult = await _engine.IndexProjectAsync(_sampleProjectPath, "luau").ConfigureAwait(false);
-        await Assert.That(thirdResult.FilesIndexed).IsEqualTo(8);
+        await Assert.That(thirdResult.FilesIndexed).IsEqualTo(9);
         await Assert.That(thirdResult.SymbolsFound).IsEqualTo(expectedSymbols);
     }
 
@@ -373,7 +373,7 @@ internal sealed class EndToEndTests : IDisposable
     {
         // 1. Index the sample project
         var indexResult = await _engine.IndexProjectAsync(_sampleProjectPath, "luau").ConfigureAwait(false);
-        await Assert.That(indexResult.FilesIndexed).IsEqualTo(8);
+        await Assert.That(indexResult.FilesIndexed).IsEqualTo(9);
         await Assert.That(indexResult.SymbolsFound).IsGreaterThanOrEqualTo(50);
 
         // 2. Query: verify outline
