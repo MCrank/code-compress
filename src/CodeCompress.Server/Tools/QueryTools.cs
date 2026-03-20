@@ -151,6 +151,7 @@ internal sealed class QueryTools
                         d.RequiresPath,
                         d.Alias,
                     }),
+                    Hint = "Use get_symbol or expand_symbol with a symbol's name to retrieve its full source code.",
                 };
 
                 return JsonSerializer.Serialize(response, SerializerOptions);
@@ -547,6 +548,9 @@ internal sealed class QueryTools
             }
 
             var displayQuery = !string.IsNullOrEmpty(glob.Fts5Query) ? glob.Fts5Query : glob.SqlLikePattern ?? query;
+            var hint = results.Count > 0
+                ? "Use get_symbol with a result's name (or parent:name for nested symbols) to retrieve full source code."
+                : (string?)null;
             var response = new
             {
                 Query = displayQuery,
@@ -562,6 +566,7 @@ internal sealed class QueryTools
                     Snippet = r.Symbol.DocComment ?? string.Empty,
                     Rank = index + 1,
                 }),
+                Hint = hint,
             };
 
             return JsonSerializer.Serialize(response, SerializerOptions);
@@ -704,6 +709,9 @@ internal sealed class QueryTools
                     scope.RepoId, literalQuery, sanitizedGlob, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
+            var hint = results.Count > 0
+                ? "Use search_symbols for structured symbol results, or get_symbol to retrieve source code for a specific symbol."
+                : (string?)null;
             var response = new
             {
                 Query = sanitizedQuery,
@@ -714,6 +722,7 @@ internal sealed class QueryTools
                     r.Snippet,
                     Rank = index + 1,
                 }),
+                Hint = hint,
             };
 
             return JsonSerializer.Serialize(response, SerializerOptions);

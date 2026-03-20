@@ -82,6 +82,9 @@ internal sealed class ReferenceTools
                 results = [];
             }
 
+            var hint = results.Count > 0
+                ? "Use get_symbol to view the full source code of referenced symbols."
+                : (string?)null;
             var response = new
             {
                 Symbol = SanitizeSymbolName(symbolName),
@@ -93,6 +96,7 @@ internal sealed class ReferenceTools
                     ContextSnippet = r.ContextSnippet,
                     Rank = index + 1,
                 }),
+                Hint = hint,
             };
 
             return JsonSerializer.Serialize(response, SerializerOptions);
