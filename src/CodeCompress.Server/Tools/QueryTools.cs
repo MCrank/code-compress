@@ -43,7 +43,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "project_outline")]
-    [Description("Get a compressed overview of the entire indexed codebase — all symbol signatures grouped by file, kind, or directory in a single response. Far more efficient than reading files individually (saves 90%+ tokens). Use pathFilter to scope to a subdirectory — much faster than retrieving the full outline and filtering client-side. Supports pagination via offset/maxSymbols for large codebases. Requires index_project to have been called first. Returns Markdown: heading hierarchy with symbol signatures (visibility, kind, signature per line). When truncated, includes a footer with the next offset/maxSymbols values to continue pagination. Errors return JSON {error, code}. Codes: INVALID_PATH, INVALID_GROUP_BY (use 'file', 'kind', or 'directory'), INVALID_PATH_FILTER.")]
+    [Description("Get a compressed overview of the entire indexed codebase — all symbol signatures grouped by file, kind, or directory in a single response. Far more efficient than reading files individually (saves 90%+ tokens). Use pathFilter to scope to a subdirectory — much faster than retrieving the full outline and filtering client-side. Supports pagination via offset/maxSymbols for large codebases. Requires index_project to have been called first. Returns Markdown: heading hierarchy with symbol signatures (visibility, kind, signature per line). When truncated, includes a footer with the next offset/maxSymbols values to continue pagination. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_GROUP_BY (use 'file', 'kind', or 'directory'), INVALID_PATH_FILTER.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
@@ -102,7 +102,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_module_api")]
-    [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies in one call. Use instead of reading the file to see only the public interface without implementation details. Requires index_project to have been called first. Returns JSON: {module, symbols: [{name, kind, parent, signature, line, doc_comment}], dependencies: [{requires_path, alias}]}. Errors return JSON {error, code}. Codes: INVALID_PATH, MODULE_NOT_FOUND (file not in index — verify modulePath and run index_project).")]
+    [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies in one call. Use instead of reading the file to see only the public interface without implementation details. Requires index_project to have been called first. Returns JSON: {module, symbols: [{name, kind, parent, signature, line, doc_comment}], dependencies: [{requires_path, alias}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, MODULE_NOT_FOUND (file not in index — verify modulePath and run index_project).")]
     public async Task<string> GetModuleApi(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
@@ -163,7 +163,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbol")]
-    [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). For multiple symbols, prefer get_symbols (single round-trip). For a single method in a large class, prefer expand_symbol (saves ~60% more tokens). For large symbols (>16KB), returns a guided summary with child method signatures and instructions to use expand_symbol for individual methods. Use force=true to bypass the size guard. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, source_code}. For large symbols (>16KB): {name, kind, parent, file, line_start, line_end, signature, truncated: true, source_size_bytes, children: [{name, signature, expand_with}], guidance}. Errors return JSON {error, code}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
+    [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). For multiple symbols, prefer get_symbols (single round-trip). For a single method in a large class, prefer expand_symbol (saves ~60% more tokens). For large symbols (>16KB), returns a guided summary with child method signatures and instructions to use expand_symbol for individual methods. Use force=true to bypass the size guard. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, source_code}. For large symbols (>16KB): {name, kind, parent, file, line_start, line_end, signature, truncated: true, source_size_bytes, children: [{name, signature, expand_with}], guidance}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
     public async Task<string> GetSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'CombatService:ProcessAttack') or just the name for top-level symbols. Use search_symbols to discover names.")] string symbolName,
@@ -188,7 +188,7 @@ internal sealed class QueryTools
             if (symbol is null)
             {
                 return JsonSerializer.Serialize(
-                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Symbol = SanitizeSymbolName(symbolName) },
+                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
                     SerializerOptions);
             }
 
@@ -240,7 +240,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "expand_symbol")]
-    [Description("Retrieve only the body of a nested symbol (e.g., a single method) without loading the entire parent class — saves ~60% tokens vs get_symbol on the parent. Use 'Parent:Child' qualified names to extract exactly the method you need. Ideal for reading individual methods in large classes. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, doc_comment, source_code}. Errors return JSON {error, code}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
+    [Description("Retrieve only the body of a nested symbol (e.g., a single method) without loading the entire parent class — saves ~60% tokens vs get_symbol on the parent. Use 'Parent:Child' qualified names to extract exactly the method you need. Ideal for reading individual methods in large classes. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, doc_comment, source_code}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
     public async Task<string> ExpandSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'PlayerService:GetHealth'). Use search_symbols to discover names.")] string symbolName,
@@ -264,7 +264,7 @@ internal sealed class QueryTools
             if (symbol is null)
             {
                 return JsonSerializer.Serialize(
-                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Symbol = SanitizeSymbolName(symbolName) },
+                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
                     SerializerOptions);
             }
 
@@ -308,7 +308,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "get_symbols")]
-    [Description("Batch retrieve source code for multiple symbols in one call — significantly more efficient than calling get_symbol repeatedly (single round-trip vs N). Maximum 50 names per call. Requires index_project to have been called first. Returns JSON: {results: [{name, kind, parent, file, line_start, line_end, signature, source_code}], errors: [{symbol, error, code}]}. Large symbols return truncated format with children array (same as get_symbol). Errors return JSON {error, code}. Codes: INVALID_PATH, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED (max 50). Per-symbol errors in 'errors' array: SYMBOL_NOT_FOUND (includes 'symbol' field).")]
+    [Description("Batch retrieve source code for multiple symbols in one call — significantly more efficient than calling get_symbol repeatedly (single round-trip vs N). Maximum 50 names per call. Requires index_project to have been called first. Returns JSON: {results: [{name, kind, parent, file, line_start, line_end, signature, source_code}], errors: [{symbol, error, code}]}. Large symbols return truncated format with children array (same as get_symbol). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED (max 50). Per-symbol errors in 'errors' array: SYMBOL_NOT_FOUND (includes 'symbol' field).")]
     public async Task<string> GetSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
@@ -431,6 +431,7 @@ internal sealed class QueryTools
                     Symbol = SanitizeSymbolName(name),
                     Error = "Symbol not found",
                     Code = "SYMBOL_NOT_FOUND",
+                    Retryable = false,
                 })
                 .ToList();
 
@@ -445,7 +446,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestion' — split into separate queries).")]
+    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestion' — split into separate queries).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
@@ -511,6 +512,7 @@ internal sealed class QueryTools
                 {
                     Error = glob.ErrorDetail,
                     Code = "MIXED_PATTERN",
+                    Retryable = false,
                     Suggestion = "Split into separate queries: run one query for prefix patterns (e.g., 'Claude*') and another for suffix/contains patterns (e.g., '*Service').",
                 },
                 SerializerOptions);
@@ -567,7 +569,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "topic_outline")]
-    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines search_symbols with project_outline presentation — ideal for exploring a concept across the codebase (e.g., 'show me all authentication-related types'). Requires index_project to have been called first. Returns Markdown: heading hierarchy with matching symbol signatures grouped by file. When truncated, includes a footer with remaining match count. Errors return JSON {error, code}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
+    [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines search_symbols with project_outline presentation — ideal for exploring a concept across the codebase (e.g., 'show me all authentication-related types'). Requires index_project to have been called first. Returns Markdown: heading hierarchy with matching symbol signatures grouped by file. When truncated, includes a footer with remaining match count. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
     public async Task<string> TopicOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Topic or keyword to search for (e.g., 'authentication', 'kubernetes', 'database'). Searches symbol names, signatures, and doc comments via FTS5.")] string topic,
@@ -633,7 +635,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. For symbol-specific searches (classes, functions, types), prefer search_symbols which is faster and returns structured metadata with direct chaining to get_symbol. Use pathFilter to scope results. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{file_path, snippet, rank}]}. Errors return JSON {error, code}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. For symbol-specific searches (classes, functions, types), prefer search_symbols which is faster and returns structured metadata with direct chaining to get_symbol. Use pathFilter to scope results. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{file_path, snippet, rank}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
@@ -983,6 +985,6 @@ internal sealed class QueryTools
 
     private static string SerializeError(string error, string code, string? guidance = null) =>
         guidance is null
-            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
-            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
+            ? JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false, Guidance = guidance }, SerializerOptions);
 }
