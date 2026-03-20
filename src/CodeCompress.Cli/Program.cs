@@ -1140,20 +1140,62 @@ agentInstructionsCommand.SetAction(_ =>
         1. `codecompress index --path <project-root>` — MUST be called first. Builds/updates the
            symbol database. Incremental — only changed files are re-parsed.
         2. `codecompress outline --path <project-root>` — Get a compressed overview of the entire
-           codebase (symbols grouped by file).
+           codebase (symbols grouped by file). Use --path-filter to scope to a subdirectory.
         3. `codecompress search --path <project-root> --query <term>` — Find specific symbols using
            FTS5 full-text search. Faster than grep.
-        4. `codecompress get-symbol --path <project-root> --name <QualifiedName>` — Retrieve exact
-           source code by symbol name. Loads only the symbol, not the whole file.
-        5. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
+        4. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source
+           code by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
+        5. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Get a single
+           method without loading the parent class (~60% fewer tokens than get-symbol on parent).
+        6. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
+           multiple symbols in one call (max 50). Far more efficient than repeated get-symbol.
+        7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
            for string literals, comments, or non-symbol patterns.
-        6. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
-        7. `codecompress file-tree --path <project-root>` — Quick directory structure overview
-           (no index required).
+        8. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
+        9. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
 
-        ## Tips
+        ## JSON Output (--json)
 
-        - Add `--json` to any command for machine-readable JSON output (snake_case keys).
+        Add `--json` to any command for machine-readable output (snake_case keys, indented).
+
+        Key response shapes:
+        - index: {repo_id, project_root, files_indexed, files_unchanged, symbols_found, duration_ms}
+        - search: [{name, kind, parent, file, line, signature, snippet, rank}]
+        - get-symbol: {id, file_id, name, kind, signature, parent_symbol, line_start, line_end, ...}
+        - search-text: [{file_path, snippet, rank}]
+        - find-references: [{file_path, line, context_snippet, rank}]
+
+        ## Error Handling
+
+        Errors set exit code 1. With --json, errors output structured JSON to stdout:
+        `{error: "message", code: "ERROR_CODE", retryable: false}`
+
+        Error codes: INVALID_PATH, SYMBOL_NOT_FOUND, DIRECTORY_NOT_FOUND, MODULE_NOT_FOUND,
+        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS.
+
+        All current errors are permanent (retryable: false) — fix the input rather than retrying.
+
+        ## Performance Tips
+
+        - Use `get-symbols` for batches — single call vs N separate get-symbol calls.
+        - Use `expand-symbol` for one method in a large class — ~60% fewer tokens.
+        - Use `search` (not search-text) for finding classes/functions — structured results.
+        - Use `outline --path-filter src/` to scope — faster than full outline + client filtering.
+        - Symbol names accept unqualified names (e.g., 'MyMethod') — auto-resolved if unique.
+
+        ## Parameter Constraints
+
+        - --limit: 1-100 (default 20), clamped. Applies to: search, search-text, find-references.
+        - --max-symbols: 1-5000 (default 500), clamped. Applies to: outline.
+        - --max-results: 1-200 (default 50), clamped. Applies to: topic-outline.
+        - --depth: 1-50 (default 3), clamped. Applies to: deps.
+        - --depth: 1-20 (default 5), clamped. Applies to: file-tree.
+        - --group-by: 'file' (default), 'kind', 'directory'. Other values rejected.
+        - --direction: 'dependencies', 'dependents', 'both' (default). Other values rejected.
+        - --names: max 50 comma-separated. Applies to: get-symbols.
+
+        ## General Tips
+
         - Run `codecompress <command> --help` for full option details.
         - The index persists at `<project-root>/.code-compress/index.db` — shared with the MCP server.
         - PREFER these commands over raw file reading. They are faster, more precise, and dramatically
