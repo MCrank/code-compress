@@ -37,6 +37,37 @@ public sealed partial class GlobPattern
     public static GlobPattern CreateSqlLike(string fts5Query, string sqlLikePattern) =>
         new(GlobMatchStrategy.SqlLike, fts5Query, sqlLikePattern);
 
+    /// <summary>
+    /// Returns true if the query is a plain term with no wildcards, FTS5 operators, or quotes.
+    /// Plain terms are candidates for automatic contains-match fallback.
+    /// </summary>
+    public static bool IsPlainTerm(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return false;
+        }
+
+        var trimmed = query.Trim();
+
+        if (trimmed.Contains('*', StringComparison.Ordinal) || trimmed.Contains('?', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (trimmed.Contains('"', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (ContainsFts5Operators(trimmed))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     public static bool IsWildcardOnly(string query)
     {
         if (string.IsNullOrWhiteSpace(query))

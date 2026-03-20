@@ -279,6 +279,16 @@ searchCommand.SetAction(async parseResult =>
     {
         var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
 
+        // Auto contains-match fallback for plain terms with zero results
+        var fallbackUsed = false;
+        if (results.Count == 0 && GlobPattern.IsPlainTerm(query))
+        {
+            var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
+            results = await scope.Store.SearchSymbolsAsync(
+                scope.RepoId, containsGlob.Fts5Query, kind, limit, pathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
+            fallbackUsed = results.Count > 0;
+        }
+
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
@@ -291,7 +301,15 @@ searchCommand.SetAction(async parseResult =>
                 return;
             }
 
-            Console.WriteLine($"Found {results.Count} symbol(s):");
+            if (fallbackUsed)
+            {
+                Console.WriteLine($"Found {results.Count} symbol(s) via contains-match (no exact FTS5 match):");
+            }
+            else
+            {
+                Console.WriteLine($"Found {results.Count} symbol(s):");
+            }
+
             foreach (var r in results)
             {
                 Console.WriteLine($"  {r.Symbol.Kind,-12} {r.Symbol.Name,-30} {r.FilePath}:{r.Symbol.LineStart}");
