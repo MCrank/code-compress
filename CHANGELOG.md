@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-20
+
+### Added
+- Error classification: all error responses include `retryable` field for programmatic error handling (#109)
+- Fuzzy symbol resolution: `get_symbol` and `expand_symbol` accept unqualified names and auto-resolve unique matches, returning candidates list on ambiguity (#111, #120)
+- Next-action hints in MCP tool responses (#113) and CLI output (#123)
+- Structured JSON error output in CLI `--json` mode with error codes matching MCP server format (#119)
+- `GetSymbolCandidatesByNameAsync` store method for unqualified symbol name lookup (#111)
+- `PathValidator.NormalizeRelativePath()` for backslash-to-forward-slash normalization (#112)
+
+### Changed
+- MCP tool descriptions: output schemas (#102), error codes (#103), parameter constraints (#101), performance hints (#110), glob examples & cross-references (#104)
+- CLI `agent-instructions` command: JSON output schemas, error code reference, performance tips, parameter constraints (#122)
+- CLI help text: parameter ranges, defaults, clamping behavior, enum allowed values (#124)
+- Path normalization for `modulePath` and `rootFile` in MCP and CLI (#112, #121)
+- `implement-plan` skill: `stop_server` guidance for build file locks
+
+### Fixed
+- Terraform sample `modules.tf` cloudwatch module source path corrected
+- CLI `search-text` empty query error now correctly sets exit code 1 (#119)
+
 ## [0.8.0] - 2026-03-17
 
 ### Added
