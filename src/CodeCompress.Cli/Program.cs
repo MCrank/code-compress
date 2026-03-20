@@ -112,11 +112,11 @@ rootCommand.Subcommands.Add(indexCommand);
 // ── outline ─────────────────────────────────────────────────
 
 var outlinePathOption = CreatePathOption();
-var outlineGroupByOption = new Option<string>("--group-by") { Description = "Grouping strategy: file, kind, or directory", DefaultValueFactory = _ => "file" };
+var outlineGroupByOption = new Option<string>("--group-by") { Description = "Grouping strategy. Allowed values: 'file' (default), 'kind', 'directory'. Other values rejected.", DefaultValueFactory = _ => "file" };
 var outlineIncludePrivateOption = new Option<bool>("--include-private") { Description = "Include private/local symbols" };
 var outlineMaxDepthOption = new Option<int?>("--max-depth") { Description = "Limit directory traversal depth (null for unlimited)" };
 var outlinePathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var outlineMaxSymbolsOption = new Option<int>("--max-symbols") { Description = "Maximum symbols to return (1-5000)", DefaultValueFactory = _ => 500 };
+var outlineMaxSymbolsOption = new Option<int>("--max-symbols") { Description = "Maximum symbols to return (1-5000, default 500). Values outside range are clamped.", DefaultValueFactory = _ => 500 };
 var outlineOffsetOption = new Option<int>("--offset") { Description = "Number of symbols to skip for pagination", DefaultValueFactory = _ => 0 };
 
 var outlineCommand = new Command("outline",
@@ -179,7 +179,7 @@ rootCommand.Subcommands.Add(outlineCommand);
 var getSymbolPathOption = CreatePathOption();
 var getSymbolNameOption = new Option<string>("--name")
 {
-    Description = "Qualified symbol name (e.g., CombatService:ProcessAttack)",
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., CombatService:ProcessAttack) or unqualified names. Unqualified names are resolved automatically.",
     Required = true,
 };
 
@@ -250,7 +250,7 @@ var searchQueryOption = new Option<string>("--query")
 };
 var searchKindOption = new Option<string?>("--kind") { Description = "Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)" };
 var searchPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
+var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
 
 var searchCommand = new Command("search",
     "Search the symbol index using FTS5 full-text search. " +
@@ -310,7 +310,7 @@ var searchTextQueryOption = new Option<string>("--query")
 };
 var searchTextGlobOption = new Option<string?>("--glob") { Description = "File pattern filter (e.g., *.cs, src/services/*.lua)" };
 var searchTextPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var searchTextLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
+var searchTextLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
 
 var searchTextCommand = new Command("search-text",
     "Search raw file contents using FTS5 full-text search. " +
@@ -508,7 +508,7 @@ rootCommand.Subcommands.Add(snapshotCommand);
 var fileTreePathOption = CreatePathOption();
 var fileTreeDepthOption = new Option<int>("--depth")
 {
-    Description = "Maximum directory depth (1-20)",
+    Description = "Maximum directory depth (1-20, default 5). Values outside range are clamped.",
     DefaultValueFactory = _ => 5,
 };
 
@@ -544,8 +544,8 @@ rootCommand.Subcommands.Add(fileTreeCommand);
 
 var depsPathOption = CreatePathOption();
 var depsFileOption = new Option<string?>("--file") { Description = "Start from a specific file (relative path)" };
-var depsDirectionOption = new Option<string>("--direction") { Description = "Direction: dependencies (outgoing), dependents (incoming), or both", DefaultValueFactory = _ => "both" };
-var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50)", DefaultValueFactory = _ => 3 };
+var depsDirectionOption = new Option<string>("--direction") { Description = "Traversal direction. Allowed values: 'dependencies' (outgoing), 'dependents' (incoming), 'both' (default). Other values rejected.", DefaultValueFactory = _ => "both" };
+var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50, default 3). Values outside range are clamped.", DefaultValueFactory = _ => 3 };
 
 var depsCommand = new Command("deps",
     "Show the import/require dependency graph. " +
@@ -712,7 +712,7 @@ rootCommand.Subcommands.Add(getModuleApiCommand);
 var expandSymbolPathOption = CreatePathOption();
 var expandSymbolNameOption = new Option<string>("--name")
 {
-    Description = "Qualified symbol name (e.g., MyClass:MyMethod). Use search to discover names.",
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., MyClass:MyMethod) or unqualified names. Unqualified names are resolved automatically.",
     Required = true,
 };
 var expandSymbolContextOption = new Option<bool>("--context")
@@ -920,7 +920,7 @@ var topicOutlinePathFilterOption = new Option<string?>("--path-filter")
 };
 var topicOutlineMaxResultsOption = new Option<int>("--max-results")
 {
-    Description = "Maximum symbols to return (1-200)",
+    Description = "Maximum symbols to return (1-200, default 50). Values outside range are clamped.",
     DefaultValueFactory = _ => 50,
 };
 
@@ -1052,7 +1052,7 @@ var findRefsPathFilterOption = new Option<string?>("--path-filter")
 };
 var findRefsLimitOption = new Option<int>("--limit")
 {
-    Description = "Maximum results to return (1-100)",
+    Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.",
     DefaultValueFactory = _ => 20,
 };
 
