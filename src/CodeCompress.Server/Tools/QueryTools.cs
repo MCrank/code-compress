@@ -118,9 +118,11 @@ internal sealed class QueryTools
             return SerializeError("Path validation failed", "INVALID_PATH");
         }
 
+        var normalizedModulePath = PathValidator.NormalizeRelativePath(modulePath);
+
         try
         {
-            _pathValidator.ValidateRelativePath(modulePath, validatedPath);
+            _pathValidator.ValidateRelativePath(normalizedModulePath, validatedPath);
         }
         catch (ArgumentException)
         {
@@ -132,7 +134,7 @@ internal sealed class QueryTools
             var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
             await using (scope.ConfigureAwait(false))
             {
-                var moduleApi = await scope.Store.GetModuleApiAsync(scope.RepoId, modulePath).ConfigureAwait(false);
+                var moduleApi = await scope.Store.GetModuleApiAsync(scope.RepoId, normalizedModulePath).ConfigureAwait(false);
 
                 var response = new
                 {
