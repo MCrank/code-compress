@@ -69,6 +69,7 @@ internal sealed partial class IndexingTools
                     result.SymbolsFound,
                     result.DurationMs,
                     ParseErrors = result.ParseFailures?.Select(f => new { f.FilePath, f.Reason }),
+                    Hint = "Run project_outline to explore the indexed codebase, or search_symbols to find specific symbols.",
                 };
 
                 return JsonSerializer.Serialize(response, SerializerOptions);
@@ -122,6 +123,7 @@ internal sealed partial class IndexingTools
                     Label = sanitizedLabel,
                     FileCount = fileCount,
                     SymbolCount = symbolCount,
+                    Hint = $"After making changes, run changes_since with label '{sanitizedLabel}' to see symbol-level diffs.",
                 },
                 SerializerOptions);
         }
