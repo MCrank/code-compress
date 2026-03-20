@@ -36,7 +36,7 @@ internal sealed partial class DeltaTools
     }
 
     [McpServerTool(Name = "changes_since")]
-    [Description("Show what changed since a named snapshot: new, modified, and deleted files with symbol-level diffs. Use snapshot_create to set a baseline before making changes, then call this to see exactly what was added, modified, or removed. Requires index_project to have been called first.")]
+    [Description("Show what changed since a named snapshot: new, modified, and deleted files with symbol-level diffs. Use snapshot_create to set a baseline before making changes, then call this to see exactly what was added, modified, or removed. Requires index_project to have been called first. Errors return JSON {error, code}. Codes: INVALID_PATH, SNAPSHOT_NOT_FOUND (includes 'available_snapshots' array — check available labels or create a new snapshot with snapshot_create).")]
     public async Task<string> ChangesSince(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Label of a previously created snapshot. Available labels are returned in the error if the snapshot is not found.")] string snapshotLabel,
@@ -194,7 +194,7 @@ internal sealed partial class DeltaTools
     }
 
     [McpServerTool(Name = "file_tree")]
-    [Description("Get an annotated directory tree with file counts and line counts per directory. Does NOT require index_project — reads the filesystem directly. Use to quickly understand project structure before indexing.")]
+    [Description("Get an annotated directory tree with file counts and line counts per directory. Does NOT require index_project — reads the filesystem directly. Use to quickly understand project structure before indexing. Errors return JSON {error, code}. Codes: INVALID_PATH, DIRECTORY_NOT_FOUND.")]
     public async Task<string> FileTree(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Maximum directory depth (1-20, default 5). Values outside this range are clamped.")] int maxDepth = 5,
