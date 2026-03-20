@@ -204,9 +204,8 @@ getSymbolCommand.SetAction(async parseResult =>
 
         if (symbol is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Symbol not found: {name}").ConfigureAwait(false);
-            await Console.Error.WriteLineAsync("  Hint: Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
             return;
         }
 
@@ -322,7 +321,7 @@ searchTextCommand.SetAction(async parseResult =>
 
     if (string.IsNullOrWhiteSpace(sanitizedQuery))
     {
-        await Console.Error.WriteLineAsync("Error: search query is empty after sanitization.").ConfigureAwait(false);
+        await WriteErrorAsync("Search query is empty after sanitization", "EMPTY_QUERY", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -400,8 +399,7 @@ changesCommand.SetAction(async parseResult =>
 
         if (snapshot is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Snapshot not found: {label}").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Snapshot not found", "SNAPSHOT_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
             return;
         }
 
@@ -510,14 +508,14 @@ fileTreeCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(fileTreePathOption)!;
     var maxDepth = Math.Clamp(parseResult.GetValue(fileTreeDepthOption), 1, 20);
+    var json = parseResult.GetValue(jsonOption);
 
     var pathValidator = provider.GetRequiredService<IPathValidator>();
     var validatedPath = pathValidator.ValidatePath(path, path);
 
     if (!Directory.Exists(validatedPath))
     {
-        await Console.Error.WriteLineAsync("Error: Directory not found.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("Directory not found", "DIRECTORY_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -650,8 +648,8 @@ getModuleApiCommand.SetAction(async parseResult =>
         }
         catch (FileNotFoundException)
         {
-            await Console.Error.WriteLineAsync($"Error: Module not found: {modulePath}").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Module not found", "MODULE_NOT_FOUND", json, jsonSerializerOptions,
+                "Verify the module path and ensure index_project has been run.").ConfigureAwait(false);
             return;
         }
 
@@ -727,9 +725,8 @@ expandSymbolCommand.SetAction(async parseResult =>
         var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
         if (symbol is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Symbol not found: {name}").ConfigureAwait(false);
-            await Console.Error.WriteLineAsync("  Hint: Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
             return;
         }
 
@@ -737,8 +734,7 @@ expandSymbolCommand.SetAction(async parseResult =>
         var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
         if (file is null)
         {
-            await Console.Error.WriteLineAsync("Error: File not found for symbol.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("File not found for symbol", "FILE_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
             return;
         }
 
@@ -796,15 +792,13 @@ getSymbolsCommand.SetAction(async parseResult =>
 
     if (symbolNames.Length == 0)
     {
-        await Console.Error.WriteLineAsync("Error: No symbol names provided.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("No symbol names provided", "EMPTY_SYMBOL_NAMES", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
     if (symbolNames.Length > 50)
     {
-        await Console.Error.WriteLineAsync("Error: Too many symbols. Maximum is 50.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("Too many symbols. Maximum is 50", "SYMBOL_LIMIT_EXCEEDED", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -976,8 +970,8 @@ projectDepsCommand.SetAction(async parseResult =>
 
         if (result.Projects.Count == 0)
         {
-            await Console.Error.WriteLineAsync("Error: No project files found in index. Run 'codecompress index' first.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("No project files found in index", "NO_PROJECTS", json, jsonSerializerOptions,
+                "Run 'codecompress index' first.").ConfigureAwait(false);
             return;
         }
 
@@ -1159,6 +1153,26 @@ static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceP
         serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<IndexEngine>());
 
     return new CliProjectScope(connection, store, engine, repoId, validatedPath);
+}
+
+static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSerializerOptions jsonOptions, string? guidance = null)
+{
+    Environment.ExitCode = 1;
+    if (isJson)
+    {
+        var errorObj = guidance is null
+            ? new { Error = error, Code = code, Retryable = false }
+            : (object)new { Error = error, Code = code, Retryable = false, Guidance = guidance };
+        await Console.Out.WriteLineAsync(JsonSerializer.Serialize(errorObj, jsonOptions)).ConfigureAwait(false);
+    }
+    else
+    {
+        await Console.Error.WriteLineAsync($"Error: {error}").ConfigureAwait(false);
+        if (guidance is not null)
+        {
+            await Console.Error.WriteLineAsync($"  Hint: {guidance}").ConfigureAwait(false);
+        }
+    }
 }
 
 static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)
