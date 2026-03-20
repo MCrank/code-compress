@@ -705,6 +705,8 @@ internal sealed class QueryToolsTests
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(root.GetProperty("guidance").GetString())
+            .Contains("search_symbols").And.Contains("index_project");
     }
 
     [Test]
@@ -863,6 +865,8 @@ internal sealed class QueryToolsTests
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(root.GetProperty("guidance").GetString())
+            .Contains("search_symbols").And.Contains("index_project");
     }
 
     [Test]
@@ -1021,6 +1025,8 @@ internal sealed class QueryToolsTests
             await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing");
             await Assert.That(errors[0].GetProperty("error").GetString()).IsEqualTo("Symbol not found");
             await Assert.That(errors[0].GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+            await Assert.That(errors[0].GetProperty("guidance").GetString())
+                .Contains("search_symbols").And.Contains("index_project");
         }
         finally
         {
@@ -1449,7 +1455,8 @@ internal sealed class QueryToolsTests
 
         await _tools.SearchSymbols("/valid/path", "Order", pathFilter: "src/Core/").ConfigureAwait(false);
 
-        await _store.Received(1).SearchSymbolsAsync(
+        // First call is FTS5, second is auto contains-match fallback (both with same pathFilter)
+        await _store.Received(2).SearchSymbolsAsync(
             "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Core", Arg.Any<string?>()).ConfigureAwait(false);
     }
 
@@ -1742,6 +1749,114 @@ internal sealed class QueryToolsTests
 
         await _store.Received(1).SearchSymbolsAsync(
             "test-repo-id", "Claude* OR Agent*", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>()).ConfigureAwait(false);
+    }
+
+    // ── Contains-match fallback tests ──────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsPlainTermFallsBackToContainsOnZeroResults()
+    {
+        // First FTS5 call returns empty, fallback with *Validator* returns results
+        var fallbackResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+            new(CreateSymbol(2, 1, "IPathValidator", "Interface", "public interface IPathValidator"), "src/Validation/IPathValidator.cs", 0.9),
+        };
+
+        _store.SearchSymbolsAsync("test-repo-id", "Validator", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Validator%")
+            .Returns(fallbackResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "Validator").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(2);
+        await Assert.That(root.GetProperty("fallback_used").GetBoolean()).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsExactMatchDoesNotTriggerFallback()
+    {
+        var directResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+        };
+
+        _store.SearchSymbolsAsync("test-repo-id", "PathValidator", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(directResults);
+
+        var result = await _tools.SearchSymbols("/valid/path", "PathValidator").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task SearchSymbolsFallbackPreservesKindAndPathFilter()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", "Validator", "Class", 20, "src", Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), "Class", 20, "src", "%Validator%")
+            .Returns(new List<SymbolSearchResult>
+            {
+                new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+            });
+
+        var result = await _tools.SearchSymbols("/valid/path", "Validator", kind: "class", pathFilter: "src/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        await Assert.That(root.GetProperty("fallback_used").GetBoolean()).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchSymbolsNoResultsAfterFallbackReturnsEmpty()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", "NonExistent", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%NonExistent%")
+            .Returns(new List<SymbolSearchResult>());
+
+        var result = await _tools.SearchSymbols("/valid/path", "NonExistent").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
+        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task SearchSymbolsWildcardQueryDoesNotTriggerFallback()
+    {
+        // *Handler already has wildcards — should NOT trigger fallback
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), "%Handler")
+            .Returns(new List<SymbolSearchResult>());
+
+        var result = await _tools.SearchSymbols("/valid/path", "*Handler").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
+        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task SearchSymbolsFts5OperatorQueryDoesNotTriggerFallback()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", "damage OR health", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        var result = await _tools.SearchSymbols("/valid/path", "damage OR health").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
+        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
     }
 
     // ── Size guard tests ────────────────────────────────────────────────

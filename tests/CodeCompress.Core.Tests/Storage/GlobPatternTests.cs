@@ -266,4 +266,25 @@ internal sealed class GlobPatternTests
         // ErrorDetail should contain a truncated version, not the full 200-char term
         await Assert.That(result.ErrorDetail!.Length).IsLessThan(300);
     }
+
+    [Test]
+    [Arguments("Validator", true)]
+    [Arguments("OrderService", true)]
+    [Arguments("a", true)]
+    [Arguments("*Validator*", false)]
+    [Arguments("Validator*", false)]
+    [Arguments("*Validator", false)]
+    [Arguments("I*Service", false)]
+    [Arguments("damage OR health", false)]
+    [Arguments("damage AND health", false)]
+    [Arguments("NOT damage", false)]
+    [Arguments("\"exact phrase\"", false)]
+    [Arguments("", false)]
+    [Arguments("   ", false)]
+    public async Task IsPlainTermDetectsCorrectly(string query, bool expected)
+    {
+        var result = GlobPattern.IsPlainTerm(query);
+
+        await Assert.That(result).IsEqualTo(expected);
+    }
 }

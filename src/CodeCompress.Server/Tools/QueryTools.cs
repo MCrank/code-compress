@@ -29,6 +29,7 @@ internal sealed class QueryTools
     };
 
     private const int SymbolSizeThresholdBytes = 16_384;
+    private const string SymbolNotFoundGuidance = "Use search_symbols to find the correct qualified name. If the symbol was recently added or changed, re-run index_project to update the index.";
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
@@ -212,7 +213,7 @@ internal sealed class QueryTools
                 else
                 {
                     return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
                         SerializerOptions);
                 }
             }
@@ -310,7 +311,7 @@ internal sealed class QueryTools
                 else
                 {
                     return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
                         SerializerOptions);
                 }
             }
@@ -479,6 +480,7 @@ internal sealed class QueryTools
                     Error = "Symbol not found",
                     Code = "SYMBOL_NOT_FOUND",
                     Retryable = false,
+                    Guidance = SymbolNotFoundGuidance,
                 })
                 .ToList();
 
@@ -493,7 +495,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestion' — split into separate queries).")]
+    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestion' — split into separate queries).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
@@ -593,29 +595,23 @@ internal sealed class QueryTools
                     scope.RepoId, literalQuery, kind, clampedLimit, validatedPathFilter).ConfigureAwait(false);
             }
 
+            // Auto contains-match fallback: if FTS5 returned 0 results and query is a plain term,
+            // retry with *query* pattern to find substring matches (e.g., "Validator" → "*Validator*")
+            var fallbackUsed = false;
+            if (results.Count == 0 && GlobPattern.IsPlainTerm(query))
+            {
+                var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
+                results = await scope.Store.SearchSymbolsAsync(
+                    scope.RepoId, containsGlob.Fts5Query, kind, clampedLimit, validatedPathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                fallbackUsed = results.Count > 0;
+            }
+
             var displayQuery = !string.IsNullOrEmpty(glob.Fts5Query) ? glob.Fts5Query : glob.SqlLikePattern ?? query;
             var hint = results.Count > 0
                 ? "Use get_symbol with a result's name (or parent:name for nested symbols) to retrieve full source code."
                 : (string?)null;
-            var response = new
-            {
-                Query = displayQuery,
-                TotalMatches = results.Count,
-                Results = results.Select((r, index) => new
-                {
-                    r.Symbol.Name,
-                    r.Symbol.Kind,
-                    Parent = r.Symbol.ParentSymbol,
-                    File = r.FilePath,
-                    Line = r.Symbol.LineStart,
-                    r.Symbol.Signature,
-                    Snippet = r.Symbol.DocComment ?? string.Empty,
-                    Rank = index + 1,
-                }),
-                Hint = hint,
-            };
 
-            return JsonSerializer.Serialize(response, SerializerOptions);
+            return SerializeSearchResults(displayQuery, results, hint, fallbackUsed);
         }
     }
 
@@ -1036,6 +1032,36 @@ internal sealed class QueryTools
         };
 
         return JsonSerializer.Serialize(response, SerializerOptions);
+    }
+
+    private static string SerializeSearchResults(
+        string displayQuery,
+        IReadOnlyList<Core.Models.SymbolSearchResult> results,
+        string? hint,
+        bool fallbackUsed)
+    {
+        var resultItems = results.Select((r, index) => new
+        {
+            r.Symbol.Name,
+            r.Symbol.Kind,
+            Parent = r.Symbol.ParentSymbol,
+            File = r.FilePath,
+            Line = r.Symbol.LineStart,
+            r.Symbol.Signature,
+            Snippet = r.Symbol.DocComment ?? string.Empty,
+            Rank = index + 1,
+        });
+
+        if (fallbackUsed)
+        {
+            return JsonSerializer.Serialize(
+                new { Query = displayQuery, TotalMatches = results.Count, FallbackUsed = true, Results = resultItems, Hint = hint },
+                SerializerOptions);
+        }
+
+        return JsonSerializer.Serialize(
+            new { Query = displayQuery, TotalMatches = results.Count, Results = resultItems, Hint = hint },
+            SerializerOptions);
     }
 
     private static string SerializeError(string error, string code, string? guidance = null) =>
