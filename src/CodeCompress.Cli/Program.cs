@@ -104,6 +104,8 @@ indexCommand.SetAction(async parseResult =>
                 }
             }
         }
+
+        await WriteHintAsync("Run 'codecompress outline --path <path>' to explore the indexed codebase.", json).ConfigureAwait(false);
     }
 });
 
@@ -294,6 +296,8 @@ searchCommand.SetAction(async parseResult =>
             {
                 Console.WriteLine($"  {r.Symbol.Kind,-12} {r.Symbol.Name,-30} {r.FilePath}:{r.Symbol.LineStart}");
             }
+
+            await WriteHintAsync("Run 'codecompress get-symbol --path <path> --name <Name>' to retrieve full source code.", json).ConfigureAwait(false);
         }
     }
 });
@@ -498,6 +502,8 @@ snapshotCommand.SetAction(async parseResult =>
         {
             Console.WriteLine($"Snapshot created: \"{label}\" (id: {snapshotId})");
         }
+
+        await WriteHintAsync($"After making changes, run 'codecompress changes --path <path> --label {label}' to see diffs.", json).ConfigureAwait(false);
     }
 });
 
@@ -1100,6 +1106,8 @@ findRefsCommand.SetAction(async parseResult =>
                 Console.WriteLine($"  {r.FilePath}:{r.Line}");
                 Console.WriteLine($"    {r.ContextSnippet.Trim()}");
             }
+
+            await WriteHintAsync("Run 'codecompress get-symbol --path <path> --name <Name>' to view source code of referenced symbols.", json).ConfigureAwait(false);
         }
     }
 });
@@ -1160,6 +1168,14 @@ rootCommand.Subcommands.Add(agentInstructionsCommand);
 return await rootCommand.Parse(args).InvokeAsync().ConfigureAwait(false);
 
 // ── Helpers ─────────────────────────────────────────────────
+
+static async Task WriteHintAsync(string hint, bool isJson)
+{
+    if (!isJson)
+    {
+        await Console.Error.WriteLineAsync($"Hint: {hint}").ConfigureAwait(false);
+    }
+}
 
 static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceProvider serviceProvider)
 {
