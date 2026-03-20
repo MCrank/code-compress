@@ -167,7 +167,7 @@ internal sealed class QueryTools
     [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). For multiple symbols, prefer get_symbols (single round-trip). For a single method in a large class, prefer expand_symbol (saves ~60% more tokens). For large symbols (>16KB), returns a guided summary with child method signatures and instructions to use expand_symbol for individual methods. Use force=true to bypass the size guard. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, source_code}. For large symbols (>16KB): {name, kind, parent, file, line_start, line_end, signature, truncated: true, source_size_bytes, children: [{name, signature, expand_with}], guidance}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
     public async Task<string> GetSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'CombatService:ProcessAttack') or just the name for top-level symbols. Use search_symbols to discover names.")] string symbolName,
+        [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'CombatService:ProcessAttack') or unqualified names (e.g., 'ProcessAttack'). Unqualified names are resolved automatically; if ambiguous, returns a candidates list.")] string symbolName,
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
         [Description("Bypass size guard and return full source code even for large symbols")] bool force = false,
         CancellationToken cancellationToken = default)
@@ -188,9 +188,31 @@ internal sealed class QueryTools
             var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
             if (symbol is null)
             {
-                return JsonSerializer.Serialize(
-                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
-                    SerializerOptions);
+                // Fuzzy resolution: try matching by unqualified name
+                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+                if (candidates.Count == 1)
+                {
+                    symbol = candidates[0];
+                }
+                else if (candidates.Count > 1)
+                {
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            Error = "Multiple symbols match this name",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
+                        },
+                        SerializerOptions);
+                }
+                else
+                {
+                    return JsonSerializer.Serialize(
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        SerializerOptions);
+                }
             }
 
             var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
@@ -244,7 +266,7 @@ internal sealed class QueryTools
     [Description("Retrieve only the body of a nested symbol (e.g., a single method) without loading the entire parent class — saves ~60% tokens vs get_symbol on the parent. Use 'Parent:Child' qualified names to extract exactly the method you need. Ideal for reading individual methods in large classes. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, doc_comment, source_code}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND.")]
     public async Task<string> ExpandSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("Fully qualified symbol name — use 'Parent:Child' for nested symbols (e.g., 'PlayerService:GetHealth'). Use search_symbols to discover names.")] string symbolName,
+        [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'PlayerService:GetHealth') or unqualified names (e.g., 'GetHealth'). Unqualified names are resolved automatically; if ambiguous, returns a candidates list.")] string symbolName,
         [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
         CancellationToken cancellationToken = default)
     {
@@ -264,9 +286,31 @@ internal sealed class QueryTools
             var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
             if (symbol is null)
             {
-                return JsonSerializer.Serialize(
-                    new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
-                    SerializerOptions);
+                // Fuzzy resolution: try matching by unqualified name
+                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+                if (candidates.Count == 1)
+                {
+                    symbol = candidates[0];
+                }
+                else if (candidates.Count > 1)
+                {
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            Error = "Multiple symbols match this name",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
+                        },
+                        SerializerOptions);
+                }
+                else
+                {
+                    return JsonSerializer.Serialize(
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        SerializerOptions);
+                }
             }
 
             var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
