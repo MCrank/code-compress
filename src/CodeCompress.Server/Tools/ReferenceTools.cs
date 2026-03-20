@@ -34,7 +34,7 @@ internal sealed class ReferenceTools
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Symbol name to search for references (e.g., 'ProcessAttack', 'ISymbolStore'). Does not need to exist in the symbol table — text search is used.")] string symbolName,
         [Description("Filter results to files under this relative directory path (e.g., 'src/')")] string? pathFilter = null,
-        [Description("Maximum results to return (1-100, default 20)")] int limit = 20,
+        [Description("Maximum results to return (1-100, default 20). Values outside this range are clamped.")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;

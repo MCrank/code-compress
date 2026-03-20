@@ -11,7 +11,7 @@ module "vpc" {
  * Uses the official AWS CloudWatch module from the Terraform registry.
  */
 module "monitoring" {
-  source  = "terraform-aws-modules/cloudwatch/aws"
+  source  = "terraform-aws-modules/cloudwatch/aws/modules/metric-alarm"
   version = "~> 4.0"
 
   alarm_name          = "${local.name_prefix}-cpu-alarm"
