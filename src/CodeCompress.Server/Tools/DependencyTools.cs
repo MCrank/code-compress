@@ -60,11 +60,13 @@ internal sealed class DependencyTools
                 "INVALID_DIRECTION");
         }
 
-        if (rootFile is not null)
+        var normalizedRootFile = rootFile is not null ? PathValidator.NormalizeRelativePath(rootFile) : null;
+
+        if (normalizedRootFile is not null)
         {
             try
             {
-                _pathValidator.ValidateRelativePath(rootFile, validatedPath);
+                _pathValidator.ValidateRelativePath(normalizedRootFile, validatedPath);
             }
             catch (ArgumentException)
             {
@@ -78,15 +80,15 @@ internal sealed class DependencyTools
         await using (scope.ConfigureAwait(false))
         {
             var graph = await scope.Store.GetDependencyGraphAsync(
-                scope.RepoId, rootFile, direction, clampedDepth).ConfigureAwait(false);
+                scope.RepoId, normalizedRootFile, direction, clampedDepth).ConfigureAwait(false);
 
             // Non-existent root file returns empty graph
-            if (rootFile is not null && graph.Nodes.Count == 0)
+            if (normalizedRootFile is not null && graph.Nodes.Count == 0)
             {
                 return SerializeError("File not found in index", "FILE_NOT_FOUND");
             }
 
-            return FormatGraph(graph, rootFile, direction, clampedDepth);
+            return FormatGraph(graph, normalizedRootFile, direction, clampedDepth);
         }
     }
 
