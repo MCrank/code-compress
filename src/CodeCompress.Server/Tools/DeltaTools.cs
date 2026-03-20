@@ -197,7 +197,7 @@ internal sealed partial class DeltaTools
     [Description("Get an annotated directory tree with file counts and line counts per directory. Does NOT require index_project — reads the filesystem directly. Use to quickly understand project structure before indexing.")]
     public async Task<string> FileTree(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("Maximum directory depth (1-20, default 5)")] int maxDepth = 5,
+        [Description("Maximum directory depth (1-20, default 5). Values outside this range are clamped.")] int maxDepth = 5,
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;

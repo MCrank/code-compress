@@ -47,10 +47,10 @@ internal sealed class QueryTools
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Include private/local symbols")] bool includePrivate = false,
-        [Description("Grouping strategy: file, kind, or directory")] string groupBy = "file",
+        [Description("Grouping strategy. Allowed values: 'file' (default — group by source file), 'kind' (group by symbol type), 'directory' (group by folder hierarchy). Other values are rejected.")] string groupBy = "file",
         [Description("Limit directory traversal depth (null for unlimited)")] int? maxDepth = null,
         [Description("Filter outline to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module). Optional.")] string? pathFilter = null,
-        [Description("Maximum number of symbols to return (1-5000, default 500). Use with offset to paginate large codebases.")] int maxSymbols = 500,
+        [Description("Maximum number of symbols to return (1-5000, default 500). Values outside this range are clamped. Use with offset to paginate large codebases.")] int maxSymbols = 500,
         [Description("Number of symbols to skip for pagination (default 0). Use with maxSymbols to retrieve subsequent pages.")] int offset = 0,
         CancellationToken cancellationToken = default)
     {
@@ -451,7 +451,7 @@ internal sealed class QueryTools
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
         [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
         [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module), 'lib/' (library code only).")] string? pathFilter = null,
-        [Description("Maximum results to return (1-100)")] int limit = 20,
+        [Description("Maximum results to return (1-100, default 20). Values outside this range are clamped.")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -572,7 +572,7 @@ internal sealed class QueryTools
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Topic or keyword to search for (e.g., 'authentication', 'kubernetes', 'database'). Searches symbol names, signatures, and doc comments via FTS5.")] string topic,
         [Description("Filter results to files under this relative directory path (e.g., 'src/Core/Models'). Optional.")] string? pathFilter = null,
-        [Description("Maximum number of symbols to return (1-200, default 50). Limits output to prevent token overflow.")] int maxResults = 50,
+        [Description("Maximum number of symbols to return (1-200, default 50). Values outside this range are clamped.")] int maxResults = 50,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -639,7 +639,7 @@ internal sealed class QueryTools
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
         [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Config' (configuration files only).")] string? pathFilter = null,
-        [Description("Maximum results to return (1-100)")] int limit = 20,
+        [Description("Maximum results to return (1-100, default 20). Values outside this range are clamped.")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;

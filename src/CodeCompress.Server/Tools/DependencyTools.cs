@@ -39,8 +39,8 @@ internal sealed class DependencyTools
     public async Task<string> DependencyGraph(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Start traversal from a specific file (relative path). Omit for full project graph.")] string? rootFile = null,
-        [Description("Direction: dependencies (outgoing), dependents (incoming), or both")] string direction = "both",
-        [Description("Maximum traversal depth (1-50). Omit for unlimited.")] int? depth = null,
+        [Description("Traversal direction. Allowed values: 'dependencies' (outgoing imports), 'dependents' (incoming — who imports this file), 'both' (default). Other values are rejected.")] string direction = "both",
+        [Description("Maximum traversal depth (1-50, default 50). Values outside this range are clamped. Omit for full depth.")] int? depth = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
