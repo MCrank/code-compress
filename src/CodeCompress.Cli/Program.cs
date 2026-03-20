@@ -204,9 +204,25 @@ getSymbolCommand.SetAction(async parseResult =>
 
         if (symbol is null)
         {
-            await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            return;
+            // Fuzzy resolution: try matching by unqualified name
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
         }
 
         if (json)
@@ -725,9 +741,25 @@ expandSymbolCommand.SetAction(async parseResult =>
         var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
         if (symbol is null)
         {
-            await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            return;
+            // Fuzzy resolution: try matching by unqualified name
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
         }
 
         var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
