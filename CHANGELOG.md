@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-03-20
+
+### Added
+- Auto contains-match fallback: `search_symbols` automatically retries with `*query*` when a plain term returns zero FTS5 results, improving symbol discoverability without manual wildcards (e.g., "Validator" now finds "PathValidator", "IPathValidator") (#132)
+- `GlobPattern.IsPlainTerm()` helper for detecting fallback-eligible queries (#132)
+- `fallback_used` response field indicates when contains-matching was used (#132)
+- Stale index hint in `SYMBOL_NOT_FOUND` error guidance — suggests re-running `index_project` when a symbol may exist but the index is outdated (#133)
+
+### Changed
+- `search_symbols` tool description updated to document auto-fallback behavior (#132)
+
 ## [0.9.0] - 2026-03-20
 
 ### Added
