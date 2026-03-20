@@ -43,6 +43,7 @@ public interface ISymbolStore
 
     // Lookups
     public Task<Symbol?> GetSymbolByNameAsync(string repoId, string symbolName);
+    public Task<IReadOnlyList<Symbol>> GetSymbolCandidatesByNameAsync(string repoId, string unqualifiedName, int limit = 10);
     public Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames);
     public Task<IReadOnlyList<Symbol>> GetChildSymbolsAsync(string repoId, string parentSymbolName);
 
