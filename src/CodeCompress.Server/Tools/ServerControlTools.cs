@@ -23,7 +23,7 @@ internal sealed class ServerControlTools
     }
 
     [McpServerTool(Name = "stop_server")]
-    [Description("Gracefully shut down the CodeCompress MCP server. Claude Code will automatically restart it on the next tool call. Use this to release DLL locks during development or free resources.")]
+    [Description("Gracefully shut down the CodeCompress MCP server. Claude Code will automatically restart it on the next tool call. Use this to release DLL locks during development or free resources. Returns JSON: {success: true, message}.")]
     public async Task<string> StopServer()
     {
         // Schedule shutdown after a brief delay so the response can be sent first

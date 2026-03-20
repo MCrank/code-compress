@@ -35,7 +35,7 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "dependency_graph")]
-    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. Errors return JSON {error, code}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project).")]
+    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. Returns plain text: each file node followed by 'requires -> file1, file2' and 'required by -> file3' edges, with a total summary line. Errors return JSON {error, code}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project).")]
     public async Task<string> DependencyGraph(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Start traversal from a specific file (relative path). Omit for full project graph.")] string? rootFile = null,
@@ -171,7 +171,7 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "project_dependencies")]
-    [Description("Show inter-project dependency relationships in a .NET solution — parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types. Use to understand solution architecture. Requires index_project to have been called first. Errors return JSON {error, code}. Codes: INVALID_PATH, NO_PROJECTS (no .csproj/.fsproj/.vbproj files in index — run index_project first).")]
+    [Description("Show inter-project dependency relationships in a .NET solution — parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types. Use to understand solution architecture. Requires index_project to have been called first. Returns plain text: each project node with 'references -> project1, project2' (with shared types) and 'referenced by -> project3', plus a total summary line. Errors return JSON {error, code}. Codes: INVALID_PATH, NO_PROJECTS (no .csproj/.fsproj/.vbproj files in index — run index_project first).")]
     public async Task<string> ProjectDependencies(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MySolution' or '/home/user/my-solution'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to projects whose name contains this string (case-insensitive). Omit for all projects.")] string? projectFilter = null,
