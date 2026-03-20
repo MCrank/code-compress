@@ -560,7 +560,7 @@ var depsCommand = new Command("deps",
 depsCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(depsPathOption)!;
-    var rootFile = parseResult.GetValue(depsFileOption);
+    var rootFile = parseResult.GetValue(depsFileOption) is { } rf ? PathValidator.NormalizeRelativePath(rf) : null;
     var direction = parseResult.GetValue(depsDirectionOption)!;
     var depth = Math.Clamp(parseResult.GetValue(depsDepthOption), 1, 50);
     var json = parseResult.GetValue(jsonOption);
@@ -651,7 +651,7 @@ var getModuleApiCommand = new Command("get-module-api",
 getModuleApiCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(getModuleApiPathOption)!;
-    var modulePath = parseResult.GetValue(getModuleApiModuleOption)!;
+    var modulePath = PathValidator.NormalizeRelativePath(parseResult.GetValue(getModuleApiModuleOption)!);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
