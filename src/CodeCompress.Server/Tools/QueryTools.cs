@@ -29,6 +29,7 @@ internal sealed class QueryTools
     };
 
     private const int SymbolSizeThresholdBytes = 16_384;
+    private const string SymbolNotFoundGuidance = "Use search_symbols to find the correct qualified name. If the symbol was recently added or changed, re-run index_project to update the index.";
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
@@ -212,7 +213,7 @@ internal sealed class QueryTools
                 else
                 {
                     return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
                         SerializerOptions);
                 }
             }
@@ -310,7 +311,7 @@ internal sealed class QueryTools
                 else
                 {
                     return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName) },
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
                         SerializerOptions);
                 }
             }
@@ -479,6 +480,7 @@ internal sealed class QueryTools
                     Error = "Symbol not found",
                     Code = "SYMBOL_NOT_FOUND",
                     Retryable = false,
+                    Guidance = SymbolNotFoundGuidance,
                 })
                 .ToList();
 
