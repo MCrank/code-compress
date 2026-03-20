@@ -35,12 +35,12 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "dependency_graph")]
-    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first.")]
+    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. Returns plain text: each file node followed by 'requires -> file1, file2' and 'required by -> file3' edges, with a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project).")]
     public async Task<string> DependencyGraph(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Start traversal from a specific file (relative path). Omit for full project graph.")] string? rootFile = null,
-        [Description("Direction: dependencies (outgoing), dependents (incoming), or both")] string direction = "both",
-        [Description("Maximum traversal depth (1-50). Omit for unlimited.")] int? depth = null,
+        [Description("Traversal direction. Allowed values: 'dependencies' (outgoing imports), 'dependents' (incoming — who imports this file), 'both' (default). Other values are rejected.")] string direction = "both",
+        [Description("Maximum traversal depth (1-50, default 50). Values outside this range are clamped. Omit for full depth.")] int? depth = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -60,11 +60,13 @@ internal sealed class DependencyTools
                 "INVALID_DIRECTION");
         }
 
-        if (rootFile is not null)
+        var normalizedRootFile = rootFile is not null ? PathValidator.NormalizeRelativePath(rootFile) : null;
+
+        if (normalizedRootFile is not null)
         {
             try
             {
-                _pathValidator.ValidateRelativePath(rootFile, validatedPath);
+                _pathValidator.ValidateRelativePath(normalizedRootFile, validatedPath);
             }
             catch (ArgumentException)
             {
@@ -78,15 +80,15 @@ internal sealed class DependencyTools
         await using (scope.ConfigureAwait(false))
         {
             var graph = await scope.Store.GetDependencyGraphAsync(
-                scope.RepoId, rootFile, direction, clampedDepth).ConfigureAwait(false);
+                scope.RepoId, normalizedRootFile, direction, clampedDepth).ConfigureAwait(false);
 
             // Non-existent root file returns empty graph
-            if (rootFile is not null && graph.Nodes.Count == 0)
+            if (normalizedRootFile is not null && graph.Nodes.Count == 0)
             {
                 return SerializeError("File not found in index", "FILE_NOT_FOUND");
             }
 
-            return FormatGraph(graph, rootFile, direction, clampedDepth);
+            return FormatGraph(graph, normalizedRootFile, direction, clampedDepth);
         }
     }
 
@@ -171,7 +173,7 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "project_dependencies")]
-    [Description("Show inter-project dependency relationships in a .NET solution — parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types. Use to understand solution architecture. Requires index_project to have been called first.")]
+    [Description("Show inter-project dependency relationships in a .NET solution — parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types. Use to understand solution architecture. Requires index_project to have been called first. Returns plain text: each project node with 'references -> project1, project2' (with shared types) and 'referenced by -> project3', plus a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, NO_PROJECTS (no .csproj/.fsproj/.vbproj files in index — run index_project first).")]
     public async Task<string> ProjectDependencies(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MySolution' or '/home/user/my-solution'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to projects whose name contains this string (case-insensitive). Omit for all projects.")] string? projectFilter = null,
@@ -290,6 +292,6 @@ internal sealed class DependencyTools
 
     private static string SerializeError(string error, string code, string? guidance = null) =>
         guidance is null
-            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
-            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
+            ? JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false, Guidance = guidance }, SerializerOptions);
 }

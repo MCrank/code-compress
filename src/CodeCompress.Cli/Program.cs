@@ -104,6 +104,8 @@ indexCommand.SetAction(async parseResult =>
                 }
             }
         }
+
+        await WriteHintAsync("Run 'codecompress outline --path <path>' to explore the indexed codebase.", json).ConfigureAwait(false);
     }
 });
 
@@ -112,11 +114,11 @@ rootCommand.Subcommands.Add(indexCommand);
 // ── outline ─────────────────────────────────────────────────
 
 var outlinePathOption = CreatePathOption();
-var outlineGroupByOption = new Option<string>("--group-by") { Description = "Grouping strategy: file, kind, or directory", DefaultValueFactory = _ => "file" };
+var outlineGroupByOption = new Option<string>("--group-by") { Description = "Grouping strategy. Allowed values: 'file' (default), 'kind', 'directory'. Other values rejected.", DefaultValueFactory = _ => "file" };
 var outlineIncludePrivateOption = new Option<bool>("--include-private") { Description = "Include private/local symbols" };
 var outlineMaxDepthOption = new Option<int?>("--max-depth") { Description = "Limit directory traversal depth (null for unlimited)" };
 var outlinePathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var outlineMaxSymbolsOption = new Option<int>("--max-symbols") { Description = "Maximum symbols to return (1-5000)", DefaultValueFactory = _ => 500 };
+var outlineMaxSymbolsOption = new Option<int>("--max-symbols") { Description = "Maximum symbols to return (1-5000, default 500). Values outside range are clamped.", DefaultValueFactory = _ => 500 };
 var outlineOffsetOption = new Option<int>("--offset") { Description = "Number of symbols to skip for pagination", DefaultValueFactory = _ => 0 };
 
 var outlineCommand = new Command("outline",
@@ -179,7 +181,7 @@ rootCommand.Subcommands.Add(outlineCommand);
 var getSymbolPathOption = CreatePathOption();
 var getSymbolNameOption = new Option<string>("--name")
 {
-    Description = "Qualified symbol name (e.g., CombatService:ProcessAttack)",
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., CombatService:ProcessAttack) or unqualified names. Unqualified names are resolved automatically.",
     Required = true,
 };
 
@@ -204,10 +206,25 @@ getSymbolCommand.SetAction(async parseResult =>
 
         if (symbol is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Symbol not found: {name}").ConfigureAwait(false);
-            await Console.Error.WriteLineAsync("  Hint: Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
-            return;
+            // Fuzzy resolution: try matching by unqualified name
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
         }
 
         if (json)
@@ -235,7 +252,7 @@ var searchQueryOption = new Option<string>("--query")
 };
 var searchKindOption = new Option<string?>("--kind") { Description = "Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)" };
 var searchPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
+var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
 
 var searchCommand = new Command("search",
     "Search the symbol index using FTS5 full-text search. " +
@@ -279,6 +296,8 @@ searchCommand.SetAction(async parseResult =>
             {
                 Console.WriteLine($"  {r.Symbol.Kind,-12} {r.Symbol.Name,-30} {r.FilePath}:{r.Symbol.LineStart}");
             }
+
+            await WriteHintAsync("Run 'codecompress get-symbol --path <path> --name <Name>' to retrieve full source code.", json).ConfigureAwait(false);
         }
     }
 });
@@ -295,7 +314,7 @@ var searchTextQueryOption = new Option<string>("--query")
 };
 var searchTextGlobOption = new Option<string?>("--glob") { Description = "File pattern filter (e.g., *.cs, src/services/*.lua)" };
 var searchTextPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
-var searchTextLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100)", DefaultValueFactory = _ => 20 };
+var searchTextLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
 
 var searchTextCommand = new Command("search-text",
     "Search raw file contents using FTS5 full-text search. " +
@@ -322,7 +341,7 @@ searchTextCommand.SetAction(async parseResult =>
 
     if (string.IsNullOrWhiteSpace(sanitizedQuery))
     {
-        await Console.Error.WriteLineAsync("Error: search query is empty after sanitization.").ConfigureAwait(false);
+        await WriteErrorAsync("Search query is empty after sanitization", "EMPTY_QUERY", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -400,8 +419,7 @@ changesCommand.SetAction(async parseResult =>
 
         if (snapshot is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Snapshot not found: {label}").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Snapshot not found", "SNAPSHOT_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
             return;
         }
 
@@ -484,6 +502,8 @@ snapshotCommand.SetAction(async parseResult =>
         {
             Console.WriteLine($"Snapshot created: \"{label}\" (id: {snapshotId})");
         }
+
+        await WriteHintAsync($"After making changes, run 'codecompress changes --path <path> --label {label}' to see diffs.", json).ConfigureAwait(false);
     }
 });
 
@@ -494,7 +514,7 @@ rootCommand.Subcommands.Add(snapshotCommand);
 var fileTreePathOption = CreatePathOption();
 var fileTreeDepthOption = new Option<int>("--depth")
 {
-    Description = "Maximum directory depth (1-20)",
+    Description = "Maximum directory depth (1-20, default 5). Values outside range are clamped.",
     DefaultValueFactory = _ => 5,
 };
 
@@ -510,14 +530,14 @@ fileTreeCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(fileTreePathOption)!;
     var maxDepth = Math.Clamp(parseResult.GetValue(fileTreeDepthOption), 1, 20);
+    var json = parseResult.GetValue(jsonOption);
 
     var pathValidator = provider.GetRequiredService<IPathValidator>();
     var validatedPath = pathValidator.ValidatePath(path, path);
 
     if (!Directory.Exists(validatedPath))
     {
-        await Console.Error.WriteLineAsync("Error: Directory not found.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("Directory not found", "DIRECTORY_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -530,8 +550,8 @@ rootCommand.Subcommands.Add(fileTreeCommand);
 
 var depsPathOption = CreatePathOption();
 var depsFileOption = new Option<string?>("--file") { Description = "Start from a specific file (relative path)" };
-var depsDirectionOption = new Option<string>("--direction") { Description = "Direction: dependencies (outgoing), dependents (incoming), or both", DefaultValueFactory = _ => "both" };
-var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50)", DefaultValueFactory = _ => 3 };
+var depsDirectionOption = new Option<string>("--direction") { Description = "Traversal direction. Allowed values: 'dependencies' (outgoing), 'dependents' (incoming), 'both' (default). Other values rejected.", DefaultValueFactory = _ => "both" };
+var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50, default 3). Values outside range are clamped.", DefaultValueFactory = _ => 3 };
 
 var depsCommand = new Command("deps",
     "Show the import/require dependency graph. " +
@@ -546,7 +566,7 @@ var depsCommand = new Command("deps",
 depsCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(depsPathOption)!;
-    var rootFile = parseResult.GetValue(depsFileOption);
+    var rootFile = parseResult.GetValue(depsFileOption) is { } rf ? PathValidator.NormalizeRelativePath(rf) : null;
     var direction = parseResult.GetValue(depsDirectionOption)!;
     var depth = Math.Clamp(parseResult.GetValue(depsDepthOption), 1, 50);
     var json = parseResult.GetValue(jsonOption);
@@ -637,7 +657,7 @@ var getModuleApiCommand = new Command("get-module-api",
 getModuleApiCommand.SetAction(async parseResult =>
 {
     var path = parseResult.GetValue(getModuleApiPathOption)!;
-    var modulePath = parseResult.GetValue(getModuleApiModuleOption)!;
+    var modulePath = PathValidator.NormalizeRelativePath(parseResult.GetValue(getModuleApiModuleOption)!);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
@@ -650,8 +670,8 @@ getModuleApiCommand.SetAction(async parseResult =>
         }
         catch (FileNotFoundException)
         {
-            await Console.Error.WriteLineAsync($"Error: Module not found: {modulePath}").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("Module not found", "MODULE_NOT_FOUND", json, jsonSerializerOptions,
+                "Verify the module path and ensure index_project has been run.").ConfigureAwait(false);
             return;
         }
 
@@ -698,7 +718,7 @@ rootCommand.Subcommands.Add(getModuleApiCommand);
 var expandSymbolPathOption = CreatePathOption();
 var expandSymbolNameOption = new Option<string>("--name")
 {
-    Description = "Qualified symbol name (e.g., MyClass:MyMethod). Use search to discover names.",
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., MyClass:MyMethod) or unqualified names. Unqualified names are resolved automatically.",
     Required = true,
 };
 var expandSymbolContextOption = new Option<bool>("--context")
@@ -727,18 +747,32 @@ expandSymbolCommand.SetAction(async parseResult =>
         var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
         if (symbol is null)
         {
-            await Console.Error.WriteLineAsync($"Error: Symbol not found: {name}").ConfigureAwait(false);
-            await Console.Error.WriteLineAsync("  Hint: Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
-            return;
+            // Fuzzy resolution: try matching by unqualified name
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
         }
 
         var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
         var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
         if (file is null)
         {
-            await Console.Error.WriteLineAsync("Error: File not found for symbol.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("File not found for symbol", "FILE_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
             return;
         }
 
@@ -796,15 +830,13 @@ getSymbolsCommand.SetAction(async parseResult =>
 
     if (symbolNames.Length == 0)
     {
-        await Console.Error.WriteLineAsync("Error: No symbol names provided.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("No symbol names provided", "EMPTY_SYMBOL_NAMES", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
     if (symbolNames.Length > 50)
     {
-        await Console.Error.WriteLineAsync("Error: Too many symbols. Maximum is 50.").ConfigureAwait(false);
-        Environment.ExitCode = 1;
+        await WriteErrorAsync("Too many symbols. Maximum is 50", "SYMBOL_LIMIT_EXCEEDED", json, jsonSerializerOptions).ConfigureAwait(false);
         return;
     }
 
@@ -894,7 +926,7 @@ var topicOutlinePathFilterOption = new Option<string?>("--path-filter")
 };
 var topicOutlineMaxResultsOption = new Option<int>("--max-results")
 {
-    Description = "Maximum symbols to return (1-200)",
+    Description = "Maximum symbols to return (1-200, default 50). Values outside range are clamped.",
     DefaultValueFactory = _ => 50,
 };
 
@@ -976,8 +1008,8 @@ projectDepsCommand.SetAction(async parseResult =>
 
         if (result.Projects.Count == 0)
         {
-            await Console.Error.WriteLineAsync("Error: No project files found in index. Run 'codecompress index' first.").ConfigureAwait(false);
-            Environment.ExitCode = 1;
+            await WriteErrorAsync("No project files found in index", "NO_PROJECTS", json, jsonSerializerOptions,
+                "Run 'codecompress index' first.").ConfigureAwait(false);
             return;
         }
 
@@ -1026,7 +1058,7 @@ var findRefsPathFilterOption = new Option<string?>("--path-filter")
 };
 var findRefsLimitOption = new Option<int>("--limit")
 {
-    Description = "Maximum results to return (1-100)",
+    Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.",
     DefaultValueFactory = _ => 20,
 };
 
@@ -1074,6 +1106,8 @@ findRefsCommand.SetAction(async parseResult =>
                 Console.WriteLine($"  {r.FilePath}:{r.Line}");
                 Console.WriteLine($"    {r.ContextSnippet.Trim()}");
             }
+
+            await WriteHintAsync("Run 'codecompress get-symbol --path <path> --name <Name>' to view source code of referenced symbols.", json).ConfigureAwait(false);
         }
     }
 });
@@ -1106,20 +1140,62 @@ agentInstructionsCommand.SetAction(_ =>
         1. `codecompress index --path <project-root>` — MUST be called first. Builds/updates the
            symbol database. Incremental — only changed files are re-parsed.
         2. `codecompress outline --path <project-root>` — Get a compressed overview of the entire
-           codebase (symbols grouped by file).
+           codebase (symbols grouped by file). Use --path-filter to scope to a subdirectory.
         3. `codecompress search --path <project-root> --query <term>` — Find specific symbols using
            FTS5 full-text search. Faster than grep.
-        4. `codecompress get-symbol --path <project-root> --name <QualifiedName>` — Retrieve exact
-           source code by symbol name. Loads only the symbol, not the whole file.
-        5. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
+        4. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source
+           code by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
+        5. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Get a single
+           method without loading the parent class (~60% fewer tokens than get-symbol on parent).
+        6. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
+           multiple symbols in one call (max 50). Far more efficient than repeated get-symbol.
+        7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
            for string literals, comments, or non-symbol patterns.
-        6. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
-        7. `codecompress file-tree --path <project-root>` — Quick directory structure overview
-           (no index required).
+        8. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
+        9. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
 
-        ## Tips
+        ## JSON Output (--json)
 
-        - Add `--json` to any command for machine-readable JSON output (snake_case keys).
+        Add `--json` to any command for machine-readable output (snake_case keys, indented).
+
+        Key response shapes:
+        - index: {repo_id, project_root, files_indexed, files_unchanged, symbols_found, duration_ms}
+        - search: [{name, kind, parent, file, line, signature, snippet, rank}]
+        - get-symbol: {id, file_id, name, kind, signature, parent_symbol, line_start, line_end, ...}
+        - search-text: [{file_path, snippet, rank}]
+        - find-references: [{file_path, line, context_snippet, rank}]
+
+        ## Error Handling
+
+        Errors set exit code 1. With --json, errors output structured JSON to stdout:
+        `{error: "message", code: "ERROR_CODE", retryable: false}`
+
+        Error codes: INVALID_PATH, SYMBOL_NOT_FOUND, DIRECTORY_NOT_FOUND, MODULE_NOT_FOUND,
+        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS.
+
+        All current errors are permanent (retryable: false) — fix the input rather than retrying.
+
+        ## Performance Tips
+
+        - Use `get-symbols` for batches — single call vs N separate get-symbol calls.
+        - Use `expand-symbol` for one method in a large class — ~60% fewer tokens.
+        - Use `search` (not search-text) for finding classes/functions — structured results.
+        - Use `outline --path-filter src/` to scope — faster than full outline + client filtering.
+        - Symbol names accept unqualified names (e.g., 'MyMethod') — auto-resolved if unique.
+
+        ## Parameter Constraints
+
+        - --limit: 1-100 (default 20), clamped. Applies to: search, search-text, find-references.
+        - --max-symbols: 1-5000 (default 500), clamped. Applies to: outline.
+        - --max-results: 1-200 (default 50), clamped. Applies to: topic-outline.
+        - --depth: 1-50 (default 3), clamped. Applies to: deps.
+        - --depth: 1-20 (default 5), clamped. Applies to: file-tree.
+        - --group-by: 'file' (default), 'kind', 'directory'. Other values rejected.
+        - --direction: 'dependencies', 'dependents', 'both' (default). Other values rejected.
+        - --names: max 50 comma-separated. Applies to: get-symbols.
+
+        ## General Tips
+
         - Run `codecompress <command> --help` for full option details.
         - The index persists at `<project-root>/.code-compress/index.db` — shared with the MCP server.
         - PREFER these commands over raw file reading. They are faster, more precise, and dramatically
@@ -1134,6 +1210,14 @@ rootCommand.Subcommands.Add(agentInstructionsCommand);
 return await rootCommand.Parse(args).InvokeAsync().ConfigureAwait(false);
 
 // ── Helpers ─────────────────────────────────────────────────
+
+static async Task WriteHintAsync(string hint, bool isJson)
+{
+    if (!isJson)
+    {
+        await Console.Error.WriteLineAsync($"Hint: {hint}").ConfigureAwait(false);
+    }
+}
 
 static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceProvider serviceProvider)
 {
@@ -1159,6 +1243,26 @@ static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceP
         serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<IndexEngine>());
 
     return new CliProjectScope(connection, store, engine, repoId, validatedPath);
+}
+
+static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSerializerOptions jsonOptions, string? guidance = null)
+{
+    Environment.ExitCode = 1;
+    if (isJson)
+    {
+        var errorObj = guidance is null
+            ? new { Error = error, Code = code, Retryable = false }
+            : (object)new { Error = error, Code = code, Retryable = false, Guidance = guidance };
+        await Console.Out.WriteLineAsync(JsonSerializer.Serialize(errorObj, jsonOptions)).ConfigureAwait(false);
+    }
+    else
+    {
+        await Console.Error.WriteLineAsync($"Error: {error}").ConfigureAwait(false);
+        if (guidance is not null)
+        {
+            await Console.Error.WriteLineAsync($"  Hint: {guidance}").ConfigureAwait(false);
+        }
+    }
 }
 
 static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)

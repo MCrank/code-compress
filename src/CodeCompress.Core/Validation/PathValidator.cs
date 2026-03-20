@@ -76,6 +76,20 @@ public static class PathValidator
     }
 
     /// <summary>
+    /// Normalizes a relative path for consistent store lookups:
+    /// replaces backslashes with forward slashes and trims trailing separators.
+    /// </summary>
+    public static string NormalizeRelativePath(string relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            return relativePath;
+        }
+
+        return relativePath.Replace('\\', '/').TrimEnd('/');
+    }
+
+    /// <summary>
     /// Non-throwing variant that returns true if the candidate resolves within root.
     /// </summary>
     public static bool IsWithinRoot(string candidatePath, string projectRoot)

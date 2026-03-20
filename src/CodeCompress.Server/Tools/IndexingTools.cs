@@ -28,12 +28,12 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "index_project")]
-    [Description("Index a codebase to build a searchable symbol database — MUST be called before any query tools. Scans source files, extracts symbols (classes, methods, functions, types), and stores them in a SQLite index. Re-running performs an incremental update (only changed files are re-parsed), so it's fast after the initial index. This enables all other CodeCompress tools to provide compressed, symbol-level code access.")]
+    [Description("Index a codebase to build a searchable symbol database — MUST be called before any query tools. Scans source files, extracts symbols (classes, methods, functions, types), and stores them in a SQLite index. Re-running performs an incremental update (only changed files are re-parsed), so it's fast after the initial index. This enables all other CodeCompress tools to provide compressed, symbol-level code access. Returns JSON: {repo_id, project_root, files_indexed, files_unchanged, files_errored, total_files, symbols_found, duration_ms, parse_errors: [{file_path, reason}] or null}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH (path outside project root — fix the path), DIRECTORY_NOT_FOUND (directory does not exist — verify the path).")]
     public async Task<string> IndexProject(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to a specific language (e.g., 'luau')")] string? language = null,
-        [Description("Glob patterns for files to include")] string[]? includePatterns = null,
-        [Description("Glob patterns for files to exclude")] string[]? excludePatterns = null,
+        [Description("Microsoft glob patterns for files to include (e.g., 'src/**/*.cs', '**/*.py', 'tests/**'). Omit to index all supported file types.")] string[]? includePatterns = null,
+        [Description("Microsoft glob patterns for files to exclude (e.g., 'bin/**', 'obj/**', 'node_modules/**', '**/generated/**'). Common build output directories are excluded by default.")] string[]? excludePatterns = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -69,6 +69,7 @@ internal sealed partial class IndexingTools
                     result.SymbolsFound,
                     result.DurationMs,
                     ParseErrors = result.ParseFailures?.Select(f => new { f.FilePath, f.Reason }),
+                    Hint = "Run project_outline to explore the indexed codebase, or search_symbols to find specific symbols.",
                 };
 
                 return JsonSerializer.Serialize(response, SerializerOptions);
@@ -81,7 +82,7 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "snapshot_create")]
-    [Description("Create a named snapshot of the current index state. Use before making code changes, then call changes_since with the snapshot label to see a precise symbol-level diff of what changed. Requires index_project to have been called first.")]
+    [Description("Create a named snapshot of the current index state. Use before making code changes, then call changes_since with the snapshot label to see a precise symbol-level diff of what changed. Requires index_project to have been called first. Returns JSON: {snapshot_id, label, file_count, symbol_count}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH.")]
     public async Task<string> SnapshotCreate(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Human-readable snapshot label")] string label,
@@ -122,13 +123,14 @@ internal sealed partial class IndexingTools
                     Label = sanitizedLabel,
                     FileCount = fileCount,
                     SymbolCount = symbolCount,
+                    Hint = $"After making changes, run changes_since with label '{sanitizedLabel}' to see symbol-level diffs.",
                 },
                 SerializerOptions);
         }
     }
 
     [McpServerTool(Name = "invalidate_cache")]
-    [Description("Delete the entire index for a project, forcing a full re-index on the next index_project call. Use when the index appears corrupted or out of sync.")]
+    [Description("Delete ALL indexed data for a project — removes every symbol, dependency, file record, and repository metadata from the database. The next index_project call will perform a full re-index from scratch, which can be slow for large codebases. Only use when the index appears corrupted or out of sync. For normal updates, prefer index_project which performs fast incremental re-indexing of only changed files. Returns JSON: {success: true, message}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH.")]
     public async Task<string> InvalidateCache(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
@@ -187,8 +189,8 @@ internal sealed partial class IndexingTools
 
     private static string SerializeError(string error, string code, string? guidance = null) =>
         guidance is null
-            ? JsonSerializer.Serialize(new { Error = error, Code = code }, SerializerOptions)
-            : JsonSerializer.Serialize(new { Error = error, Code = code, Guidance = guidance }, SerializerOptions);
+            ? JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false }, SerializerOptions)
+            : JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false, Guidance = guidance }, SerializerOptions);
 
     [GeneratedRegex(@"[^a-zA-Z0-9 _.\-]")]
     private static partial Regex SafeLabelPattern();

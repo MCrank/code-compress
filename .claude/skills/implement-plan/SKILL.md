@@ -136,6 +136,7 @@ For **every** deliverable in the plan (mini-plan or derived plan), follow this s
 
 - Run: `dotnet build CodeCompress.slnx` — must produce **zero warnings**
 - SonarAnalyzer.CSharp violations are build errors — fix them immediately
+- **File lock errors (MSB3021/MSB3027):** If the build fails because `CodeCompress.Server.exe` is locked by the running MCP server process, call the `stop_server` MCP tool to gracefully shut down the server, then retry the build. Claude Code will automatically restart the server on the next MCP tool call.
 
 ## Step 3: Security Enforcement
 
