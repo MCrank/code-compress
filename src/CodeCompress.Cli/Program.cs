@@ -222,7 +222,7 @@ getSymbolCommand.SetAction(async parseResult =>
             else
             {
                 await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names. If the symbol was recently added or changed, re-run 'codecompress index' to update the index.").ConfigureAwait(false);
                 return;
             }
         }
@@ -763,7 +763,7 @@ expandSymbolCommand.SetAction(async parseResult =>
             else
             {
                 await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names. If the symbol was recently added or changed, re-run 'codecompress index' to update the index.").ConfigureAwait(false);
                 return;
             }
         }

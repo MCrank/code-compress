@@ -705,6 +705,8 @@ internal sealed class QueryToolsTests
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(root.GetProperty("guidance").GetString())
+            .Contains("search_symbols").And.Contains("index_project");
     }
 
     [Test]
@@ -863,6 +865,8 @@ internal sealed class QueryToolsTests
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(root.GetProperty("guidance").GetString())
+            .Contains("search_symbols").And.Contains("index_project");
     }
 
     [Test]
@@ -1021,6 +1025,8 @@ internal sealed class QueryToolsTests
             await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing");
             await Assert.That(errors[0].GetProperty("error").GetString()).IsEqualTo("Symbol not found");
             await Assert.That(errors[0].GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+            await Assert.That(errors[0].GetProperty("guidance").GetString())
+                .Contains("search_symbols").And.Contains("index_project");
         }
         finally
         {
