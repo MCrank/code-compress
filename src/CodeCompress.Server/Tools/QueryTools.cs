@@ -445,7 +445,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Requires index_project to have been called first.")]
+    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first.")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
@@ -633,7 +633,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. Use pathFilter to scope results. Requires index_project to have been called first.")]
+    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. For symbol-specific searches (classes, functions, types), prefer search_symbols which returns structured metadata. Use pathFilter to scope results. Requires index_project to have been called first.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,

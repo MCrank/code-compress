@@ -32,8 +32,8 @@ internal sealed partial class IndexingTools
     public async Task<string> IndexProject(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to a specific language (e.g., 'luau')")] string? language = null,
-        [Description("Glob patterns for files to include")] string[]? includePatterns = null,
-        [Description("Glob patterns for files to exclude")] string[]? excludePatterns = null,
+        [Description("Microsoft glob patterns for files to include (e.g., 'src/**/*.cs', '**/*.py', 'tests/**'). Omit to index all supported file types.")] string[]? includePatterns = null,
+        [Description("Microsoft glob patterns for files to exclude (e.g., 'bin/**', 'obj/**', 'node_modules/**', '**/generated/**'). Common build output directories are excluded by default.")] string[]? excludePatterns = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -128,7 +128,7 @@ internal sealed partial class IndexingTools
     }
 
     [McpServerTool(Name = "invalidate_cache")]
-    [Description("Delete the entire index for a project, forcing a full re-index on the next index_project call. Use when the index appears corrupted or out of sync.")]
+    [Description("Delete ALL indexed data for a project — removes every symbol, dependency, file record, and repository metadata from the database. The next index_project call will perform a full re-index from scratch, which can be slow for large codebases. Only use when the index appears corrupted or out of sync. For normal updates, prefer index_project which performs fast incremental re-indexing of only changed files.")]
     public async Task<string> InvalidateCache(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
