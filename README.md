@@ -270,9 +270,10 @@ The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/
 | Terraform / HCL | `.tf`, `.tfvars` | Available | Regex/pattern-based |
 | Java | `.java` | Available | Regex/pattern-based |
 | Go | `.go` | Available | Regex/pattern-based |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Regex/pattern-based |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
 | JSON Config | `.json` | Available | Structure-based |
-| Python, TypeScript, Rust | — | Planned | — |
+| Python, Rust | — | Planned | — |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
 
