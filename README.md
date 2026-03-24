@@ -268,6 +268,7 @@ The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/
 | C# / .NET | `.cs` | Available | Regex/pattern-based |
 | Blazor / Razor | `.razor` | Available | Directive extraction + C# delegation |
 | Terraform / HCL | `.tf`, `.tfvars` | Available | Regex/pattern-based |
+| Java | `.java` | Available | Regex/pattern-based |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
 | JSON Config | `.json` | Available | Structure-based |
 | Python, TypeScript, Go, Rust | — | Planned | — |
