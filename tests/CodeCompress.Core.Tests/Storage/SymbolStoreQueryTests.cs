@@ -112,6 +112,36 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(results).Count().IsEqualTo(0);
     }
 
+    [Test]
+    public async Task SearchSymbolsAsyncFindsMethodByParentNameInFts5()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/VcsConnection.cs", "hash1", 1024, 50, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/VcsConnection.cs").ConfigureAwait(false);
+
+        // Parent name "VcsConnection" does NOT appear in the method's name, signature, or doc_comment
+        // It only appears in parent_symbol — so this test proves parent_symbol is FTS5-indexed
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "VcsConnection", "Class", "public class VcsConnection", null, 0, 500, 1, 50, "Public", "VCS connection manager"),
+            new(0, insertedFile.Id, "Activate", "Method", "public void Activate()", "VcsConnection", 100, 50, 10, 15, "Public", "Activates the connection"),
+            new(0, insertedFile.Id, "Deactivate", "Method", "public void Deactivate()", "VcsConnection", 200, 50, 20, 25, "Public", null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // Search "VcsConnection Activate" — "VcsConnection" must match via parent_symbol (not in Activate's name/signature/doc)
+        var results = await store.SearchSymbolsAsync("repo1", "VcsConnection Activate", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("Activate");
+        await Assert.That(results[0].Symbol.ParentSymbol).IsEqualTo("VcsConnection");
+    }
+
     // ── GetSymbolByNameAsync Tests ───────────────────────────────────────
 
     [Test]
