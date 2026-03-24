@@ -1047,6 +1047,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE s.name = @name AND f.repo_id = @repoId
+                ORDER BY CASE s.kind
+                    WHEN 'Class' THEN 1 WHEN 'Interface' THEN 1 WHEN 'Record' THEN 1
+                    WHEN 'Enum' THEN 1 WHEN 'Type' THEN 1 WHEN 'Module' THEN 2
+                    WHEN 'Function' THEN 3 WHEN 'Method' THEN 4 WHEN 'Constant' THEN 5
+                    ELSE 6 END
                 LIMIT 1
                 """;
 #pragma warning restore CA2100
@@ -1093,6 +1098,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name = @name AND f.repo_id = @repoId
+            ORDER BY CASE s.kind
+                WHEN 'Class' THEN 1 WHEN 'Interface' THEN 1 WHEN 'Record' THEN 1
+                WHEN 'Enum' THEN 1 WHEN 'Type' THEN 1 WHEN 'Module' THEN 2
+                WHEN 'Function' THEN 3 WHEN 'Method' THEN 4 WHEN 'Constant' THEN 5
+                ELSE 6 END
             LIMIT @limit
             """;
 #pragma warning restore CA2100
