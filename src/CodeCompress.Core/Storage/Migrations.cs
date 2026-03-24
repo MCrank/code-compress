@@ -73,26 +73,26 @@ public static class Migrations
         "CREATE INDEX IF NOT EXISTS ix_dependencies_file_id ON dependencies(file_id)",
         "CREATE INDEX IF NOT EXISTS ix_dependencies_resolved ON dependencies(resolved_file_id)",
         "CREATE INDEX IF NOT EXISTS ix_snapshots_repo_id ON index_snapshots(repo_id)",
-        "CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, signature, doc_comment, content=symbols, content_rowid=id)",
+        "CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, content=symbols, content_rowid=id)",
         "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(relative_path, content)",
         """
         CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
-            INSERT INTO symbols_fts(rowid, name, signature, doc_comment)
-            VALUES (new.id, new.name, new.signature, new.doc_comment);
+            INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+            VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
         END
         """,
         """
         CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
-            INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment)
-            VALUES ('delete', old.id, old.name, old.signature, old.doc_comment);
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
+            VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
         END
         """,
         """
         CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
-            INSERT INTO symbols_fts(symbols_fts, rowid, name, signature, doc_comment)
-            VALUES ('delete', old.id, old.name, old.signature, old.doc_comment);
-            INSERT INTO symbols_fts(rowid, name, signature, doc_comment)
-            VALUES (new.id, new.name, new.signature, new.doc_comment);
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
+            VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
+            INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+            VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
         END
         """,
     ];
@@ -105,6 +105,67 @@ public static class Migrations
         await using var _ = transaction.ConfigureAwait(false);
 
         foreach (var ddl in DdlStatements)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100 // DDL statements are static literals, not user input
+            command.CommandText = ddl;
+#pragma warning restore CA2100
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync().ConfigureAwait(false);
+
+        // Upgrade FTS5 table if it predates the parent_symbol column
+        await UpgradeFts5IfNeededAsync(connection).ConfigureAwait(false);
+    }
+
+    private static async Task UpgradeFts5IfNeededAsync(SqliteConnection connection)
+    {
+        // Check if parent_symbol is already a column in symbols_fts by attempting a column query
+        using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='symbols_fts'";
+        if (await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) is not string ftsSchema
+            || ftsSchema.Contains("parent_symbol", StringComparison.Ordinal))
+        {
+            return; // Either no FTS table or already upgraded
+        }
+
+        // Rebuild: drop old FTS table + triggers, then recreate with parent_symbol
+        var upgradeDdl = new[]
+        {
+            "DROP TRIGGER IF EXISTS symbols_ai",
+            "DROP TRIGGER IF EXISTS symbols_ad",
+            "DROP TRIGGER IF EXISTS symbols_au",
+            "DROP TABLE IF EXISTS symbols_fts",
+            "CREATE VIRTUAL TABLE symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, content=symbols, content_rowid=id)",
+            """
+            CREATE TRIGGER symbols_ai AFTER INSERT ON symbols BEGIN
+                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+                VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
+            END
+            """,
+            """
+            CREATE TRIGGER symbols_ad AFTER DELETE ON symbols BEGIN
+                INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
+                VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
+            END
+            """,
+            """
+            CREATE TRIGGER symbols_au AFTER UPDATE ON symbols BEGIN
+                INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
+                VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
+                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+                VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
+            END
+            """,
+            "INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')",
+        };
+
+        var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = transaction.ConfigureAwait(false);
+
+        foreach (var ddl in upgradeDdl)
         {
             using var command = connection.CreateCommand();
             command.Transaction = (SqliteTransaction)transaction;

@@ -135,8 +135,8 @@ Enforced via `.editorconfig`:
 
 ## Target Languages
 
-**Available:** Luau, C#, Terraform, Blazor Razor, .NET Project Files, JSON Config
-**Planned:** Python, TypeScript/JavaScript, Go, Rust
+**Available:** Luau, C#, Java, Go, TypeScript/JavaScript, Rust, Python, Terraform, Blazor Razor, .NET Project Files, JSON Config
+**Planned:** (none currently)
 
 ## Key NuGet Packages
 

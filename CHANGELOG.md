@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-03-23
+
+### Added
+- **Java language parser** — classes, interfaces, enums, records, annotation types, methods, inner classes, Javadoc, generics (#142)
+- **Go language parser** — structs, interfaces (generic), functions, receiver methods, constants, visibility by capitalization (#140)
+- **TypeScript/JavaScript parser** — single parser for .ts/.tsx/.js/.jsx/.mjs/.cjs; classes, interfaces, enums, type aliases, arrow functions, ESM/CJS imports, JSDoc (#138)
+- **Rust language parser** — structs, enums, traits, impl block methods, macro_rules!, type aliases, derive attributes, /// doc comments (#141)
+- **Python language parser** — first indentation-based parser; classes, functions, methods, decorators, constants, .py/.pyi support (#137)
+- **`assemble_context` MCP tool** — one-shot context assembly within a token budget; combines search + source retrieval + file overview in a single call, reducing 5-10 round-trips to 1 (#139)
+- **CLI `assemble` command** — CLI equivalent of assemble_context (#139)
+- FTS5 index now includes `parent_symbol` — searching "ClassName MethodName" finds methods by parent type (#143)
+
+### Fixed
+- `get_symbol` with unqualified name now prefers class over constructor when both share the same name (#144)
+
+### Changed
+- README comprehensively updated with all MCP tools, CLI commands, new languages, and agent configuration (#139)
+
 ## [0.10.0] - 2026-03-20
 
 ### Added
