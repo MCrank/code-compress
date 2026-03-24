@@ -272,9 +272,9 @@ The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/
 | Go | `.go` | Available | Regex/pattern-based |
 | TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Regex/pattern-based |
 | Rust | `.rs` | Available | Regex/pattern-based |
+| Python | `.py`, `.pyi` | Available | Indentation-based |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
 | JSON Config | `.json` | Available | Structure-based |
-| Python | — | Planned | — |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
 
