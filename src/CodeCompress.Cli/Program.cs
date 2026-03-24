@@ -1132,6 +1132,163 @@ findRefsCommand.SetAction(async parseResult =>
 
 rootCommand.Subcommands.Add(findRefsCommand);
 
+// ── assemble ────────────────────────────────────────────────
+
+var assemblePathOption = CreatePathOption();
+var assembleQueryOption = new Option<string>("--query")
+{
+    Description = "Task description or search terms (e.g., 'authentication middleware')",
+    Required = true,
+};
+var assembleActiveFileOption = new Option<string?>("--active-file")
+{
+    Description = "Relative path to the file you're editing — gets highest priority",
+};
+var assembleBudgetOption = new Option<int>("--budget")
+{
+    Description = "Maximum token budget (1000-200000, default 40000). Values outside range are clamped.",
+    DefaultValueFactory = _ => 40000,
+};
+
+var assembleCommand = new Command("assemble",
+    "Assemble relevant code context within a token budget. " +
+    "Combines search + source retrieval + file overview in one call. Requires index.")
+{
+    assemblePathOption,
+    assembleQueryOption,
+    assembleActiveFileOption,
+    assembleBudgetOption,
+};
+
+assembleCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(assemblePathOption)!;
+    var query = parseResult.GetValue(assembleQueryOption)!;
+    _ = parseResult.GetValue(assembleActiveFileOption); // Reserved for future active-file priority
+    var budget = Math.Clamp(parseResult.GetValue(assembleBudgetOption), 1000, 200000);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        const double charsPerToken = 3.5;
+        var charBudget = (int)(budget * charsPerToken);
+
+        var searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
+
+        // Auto contains-match fallback
+        if (searchResults.Count == 0 && GlobPattern.IsPlainTerm(query))
+        {
+            var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
+            searchResults = await scope.Store.SearchSymbolsAsync(
+                scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+        }
+
+        if (searchResults.Count == 0)
+        {
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { query, total_matches = 0, budget }, jsonSerializerOptions));
+            }
+            else
+            {
+                Console.WriteLine("No symbols matched this query.");
+            }
+
+            return;
+        }
+
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var filePathMap = files.ToDictionary(f => f.RelativePath, f => f, StringComparer.OrdinalIgnoreCase);
+
+        var output = new System.Text.StringBuilder();
+        var usedChars = 0;
+
+        // File overview
+        var matchedFiles = searchResults.Select(r => r.FilePath).Distinct().OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+        output.AppendLine("## File Overview\n```");
+        foreach (var file in matchedFiles)
+        {
+            var line = $"  {file}";
+            if (usedChars + line.Length > charBudget / 10)
+            {
+                break;
+            }
+
+            output.AppendLine(line);
+            usedChars += line.Length;
+        }
+
+        output.AppendLine("```\n");
+
+        // Source code sections
+        var symbolsByFile = searchResults.GroupBy(r => r.FilePath).OrderByDescending(g => g.Count());
+        foreach (var fileGroup in symbolsByFile)
+        {
+            if (usedChars >= charBudget)
+            {
+                break;
+            }
+
+            if (!filePathMap.TryGetValue(fileGroup.Key, out var fileRecord))
+            {
+                continue;
+            }
+
+            var resolvedPath = Path.Combine(path, fileRecord.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(resolvedPath))
+            {
+                continue;
+            }
+
+            output.Append("## ").AppendLine(fileRecord.RelativePath).AppendLine();
+
+#pragma warning disable S3267 // Loop has budget check, IO, and break — cannot simplify with LINQ
+            foreach (var result in fileGroup)
+#pragma warning restore S3267
+            {
+                if (usedChars >= charBudget)
+                {
+                    break;
+                }
+
+                try
+                {
+                    using var stream = new FileStream(resolvedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    stream.Seek(result.Symbol.ByteOffset, SeekOrigin.Begin);
+                    var buffer = new byte[result.Symbol.ByteLength];
+                    var bytesRead = await stream.ReadAsync(buffer).ConfigureAwait(false);
+                    var sourceCode = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+
+                    var ext = Path.GetExtension(fileRecord.RelativePath).TrimStart('.');
+                    var block = $"### {result.Symbol.Kind}: {result.Symbol.Name} (L{result.Symbol.LineStart}-{result.Symbol.LineEnd})\n```{ext}\n{sourceCode}\n```\n\n";
+
+                    if (usedChars + block.Length <= charBudget)
+                    {
+                        output.Append(block);
+                        usedChars += block.Length;
+                    }
+                }
+                catch (IOException)
+                {
+                    // Skip unreadable files
+                }
+            }
+        }
+
+        var tokensUsed = (int)(usedChars / charsPerToken);
+        output.Append("---\n**Context Assembly** | Symbols: ").Append(searchResults.Count)
+              .Append(" | Files: ").Append(matchedFiles.Count)
+              .Append(" | Tokens: ~").Append(tokensUsed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))
+              .Append('/').Append(budget.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))
+              .AppendLine();
+
+        Console.Write(output);
+    }
+});
+
+rootCommand.Subcommands.Add(assembleCommand);
+
 // ── agent-instructions ──────────────────────────────────────
 
 var agentInstructionsCommand = new Command("agent-instructions",

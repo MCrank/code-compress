@@ -192,8 +192,8 @@ Developer <── Terminal ────>   CodeCompress CLI ──────�
                                                    /      \
                                           Language       SQLite Store
                                           Parsers        .code-compress/
-                                    (Luau, C#, Blazor,  index.db
-                                   Terraform, JSON, …)
+                                    (C#, Java, Go, TS,  index.db
+                                    Rust, Python, …)
 ```
 
 Both the MCP server and CLI share the same index database — you can index with one and query with the other.
@@ -229,16 +229,27 @@ CodeCompress is designed to stay current with minimal effort:
 | `snapshot_create` | Create a named snapshot for tracking changes over time |
 | `invalidate_cache` | Force a full re-index on next `index_project` call |
 
+### Context Assembly
+
+| Tool | What it does |
+|------|---|
+| `assemble_context` | **One-shot context builder** — searches symbols, retrieves source code, and builds a structured overview within a token budget. Replaces 5-10 manual tool calls with 1. Provide a query + optional active file, get back Markdown with file tree, source code blocks, and token usage stats. Large symbols auto-summarize. |
+
+> **When to use `assemble_context`:** At the start of a task when you need broad context. For surgical retrieval of a specific symbol, use `get_symbol` or `expand_symbol` directly.
+
 ### Querying
 
 | Tool | What it does |
 |------|---|
 | `project_outline` | Compressed API surface of the entire project — types, functions, signatures |
-| `get_symbol` | Retrieve the full source code of a single symbol by name |
-| `get_symbols` | Batch retrieve multiple symbols in one call |
+| `get_symbol` | Retrieve the full source code of a single symbol by name (supports `Parent:Child` qualified names) |
+| `get_symbols` | Batch retrieve multiple symbols in one call (up to 50) |
 | `get_module_api` | Complete public API of a single file/module |
-| `search_symbols` | Full-text search across symbol names, signatures, and docs |
+| `expand_symbol` | Extract a single method from a large class (~60% fewer tokens than `get_symbol`) |
+| `search_symbols` | Full-text search across symbol names, signatures, parent types, and docs. Auto-retries with contains-match when exact FTS5 returns zero results. |
 | `search_text` | Raw text search across file contents (with glob filtering) |
+| `topic_outline` | Topic-based search with results grouped in outline format |
+| `find_references` | Find all references to a symbol across the codebase |
 
 ### Change Tracking & Navigation
 
@@ -247,6 +258,7 @@ CodeCompress is designed to stay current with minimal effort:
 | `changes_since` | Delta report — what files/symbols changed since a snapshot |
 | `file_tree` | Annotated project file tree |
 | `dependency_graph` | Import/require dependency graph for a file |
+| `project_dependencies` | Inter-project dependency graph (.NET solutions) |
 
 ### Server Management
 
@@ -255,10 +267,6 @@ CodeCompress is designed to stay current with minimal effort:
 | `stop_server` | Gracefully shut down the server to release resources and DLL locks |
 
 > **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
-
-## Server Lifecycle
-
-The `stop_server` tool provides on-demand shutdown — useful for releasing DLL/file locks during development without manually killing processes. The server exits gracefully, closing all SQLite connections, and restarts automatically on the next tool call.
 
 ## Supported Languages
 
@@ -318,13 +326,15 @@ raw files — it saves 80-90% tokens.
 
 1. **Index first** — `index_project` (MCP) or `codecompress index --path <root>` (CLI).
    Builds/updates the symbol database. Incremental — only changed files are re-parsed.
-2. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
-3. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
+2. **Assemble context** — `assemble_context` / `codecompress assemble` for one-shot task context.
+   Combines search + source retrieval + file overview within a token budget.
+3. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
+4. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
    `search_text` / `codecompress search-text` for raw file content search.
-4. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
+5. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
    `expand_symbol` / `codecompress expand-symbol` for a single method (~60% fewer tokens).
-5. **Find references** — `find_references` / `codecompress find-references` to trace usage.
-6. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
+6. **Find references** — `find_references` / `codecompress find-references` to trace usage.
+7. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
 
 ## Tips
 
@@ -377,10 +387,13 @@ dotnet tool update -g CodeCompress
 # Index a project (must be run first)
 codecompress index --path /path/to/project
 
+# Assemble task-relevant context in one call (new!)
+codecompress assemble --path /path/to/project --query "authentication" --budget 30000
+
 # Get a compressed codebase overview
 codecompress outline --path /path/to/project
 
-# Search for symbols
+# Search for symbols (auto-retries with contains-match on zero results)
 codecompress search --path /path/to/project --query "Authentication*"
 
 # Retrieve a specific symbol's source code
@@ -444,12 +457,13 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | CLI Command | MCP Tool | Description |
 |---|---|---|
 | `index` | `index_project` | Build/update the symbol database |
+| `assemble` | `assemble_context` | One-shot context assembly within token budget |
 | `outline` | `project_outline` | Compressed codebase overview |
 | `get-symbol` | `get_symbol` | Retrieve symbol source code |
 | `expand-symbol` | `expand_symbol` | Extract nested symbol (~60% fewer tokens) |
 | `get-symbols` | `get_symbols` | Batch retrieve multiple symbols |
 | `get-module-api` | `get_module_api` | Public API surface of a file |
-| `search` | `search_symbols` | FTS5 symbol search |
+| `search` | `search_symbols` | FTS5 symbol search (auto contains-match fallback) |
 | `search-text` | `search_text` | FTS5 raw content search |
 | `topic-outline` | `topic_outline` | Topic-based search in outline format |
 | `find-references` | `find_references` | Find all symbol references |
