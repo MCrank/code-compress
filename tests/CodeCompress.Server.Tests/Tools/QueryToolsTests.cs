@@ -1807,7 +1807,13 @@ internal sealed class QueryToolsTests
         using var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
         await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("MIXED_PATTERN");
-        await Assert.That(root.GetProperty("suggestion").GetString()).Contains("separate queries");
+        await Assert.That(root.GetProperty("suggestion").GetString()).Contains("MUST split");
+
+        // Should include ready-to-use query suggestions
+        var suggestions = root.GetProperty("suggestions");
+        await Assert.That(suggestions.GetArrayLength()).IsGreaterThanOrEqualTo(2);
+        await Assert.That(suggestions[0].GetString()).IsEqualTo("Claude*");
+        await Assert.That(suggestions[1].GetString()).IsEqualTo("*Service");
     }
 
     [Test]
