@@ -119,7 +119,7 @@ public sealed partial class GlobPattern
         return new GlobPattern(GlobMatchStrategy.SqlLike, string.Empty, likePattern);
     }
 
-    private static bool ContainsFts5Operators(string query)
+    internal static bool ContainsFts5Operators(string query)
     {
         var tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return tokens.Any(t => Fts5Operators.Contains(t, StringComparer.Ordinal));

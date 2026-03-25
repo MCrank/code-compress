@@ -126,6 +126,106 @@ internal sealed class ContextToolsTests
         await Assert.That(doc.RootElement.GetProperty("budget").GetInt32()).IsEqualTo(40000);
     }
 
+    // ── Multi-word query support ──────────────────────────────────────
+
+    [Test]
+    public async Task MultiWordQueryUsesOrLogic()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PromptInjectionGuard", "Class", "public class PromptInjectionGuard"), "src/Security/PromptInjectionGuard.cs", 1.0),
+        };
+
+        // First call with tokenized OR query should return results
+        _store.SearchSymbolsAsync("test-repo-id", "PromptInjectionGuard OR sanitize OR detect OR injection", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Security/PromptInjectionGuard.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "PromptInjectionGuard sanitize detect injection").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("## File Overview");
+        await Assert.That(result).Contains("PromptInjectionGuard.cs");
+    }
+
+    [Test]
+    public async Task StopwordsStrippedFromMultiWordQuery()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "AuthHandler", "Class", "public class AuthHandler"), "src/Auth/AuthHandler.cs", 1.0),
+        };
+
+        // Stopwords stripped: "the authentication handler for tenants" → "authentication OR handler OR tenants"
+        _store.SearchSymbolsAsync("test-repo-id", "authentication OR handler OR tenants", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Auth/AuthHandler.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "the authentication handler for tenants").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("## File Overview");
+        await Assert.That(result).Contains("AuthHandler.cs");
+    }
+
+    [Test]
+    public async Task MultiWordQueryFallsBackToContainsMatch()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "TenantFilter", "Class", "public class TenantFilter"), "src/Data/TenantFilter.cs", 1.0),
+        };
+
+        // First call with OR query returns empty
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string?>(p => p == null))
+            .Returns(new List<SymbolSearchResult>());
+
+        // Contains-match fallback for individual terms returns results
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string?>(p => p != null))
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Data/TenantFilter.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "query filter tenant").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("TenantFilter.cs");
+    }
+
+    [Test]
+    public async Task SingleWordQueryStillUsesFallback()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+        };
+
+        // First call returns empty (single word, no OR needed)
+        _store.SearchSymbolsAsync("test-repo-id", "Validator", Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string?>(p => p == null))
+            .Returns(new List<SymbolSearchResult>());
+
+        // Contains-match fallback for single word
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string>(p => p != null))
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Validation/PathValidator.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "Validator").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("PathValidator.cs");
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     private static Symbol CreateSymbol(

@@ -291,4 +291,86 @@ internal sealed class Fts5QuerySanitizerTests
         await Assert.That(result.Strategy).IsEqualTo(GlobMatchStrategy.MixedStrategy);
         await Assert.That(result.ErrorDetail).IsNotNull();
     }
+
+    // ── TokenizeForSearch tests ────────────────────────────────────────
+
+    [Test]
+    public async Task TokenizeForSearchMultiWordReturnsOrJoinedTerms()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("PromptInjectionGuard sanitize detect injection");
+
+        await Assert.That(result).IsEqualTo("PromptInjectionGuard OR sanitize OR detect OR injection");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchStripsStopwords()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("the authentication handler for tenants");
+
+        await Assert.That(result).IsEqualTo("authentication OR handler OR tenants");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchSingleWordReturnsSameWord()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("PathValidator");
+
+        await Assert.That(result).IsEqualTo("PathValidator");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchAllStopwordsReturnsEmpty()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("the a an in of");
+
+        await Assert.That(result).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task TokenizeForSearchEmptyReturnsEmpty()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("");
+
+        await Assert.That(result).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task TokenizeForSearchWhitespaceReturnsEmpty()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("   ");
+
+        await Assert.That(result).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task TokenizeForSearchPreservesExistingFts5Operators()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("damage OR health");
+
+        await Assert.That(result).IsEqualTo("damage OR health");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchPreservesWildcardPatterns()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("*Guard*");
+
+        await Assert.That(result).IsEqualTo("*Guard*");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchSanitizesEachToken()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("name:foo bar");
+
+        await Assert.That(result).IsEqualTo("foo OR bar");
+    }
+
+    [Test]
+    public async Task TokenizeForSearchStopwordsCaseInsensitive()
+    {
+        var result = Fts5QuerySanitizer.TokenizeForSearch("The Authentication FOR Tenants");
+
+        await Assert.That(result).IsEqualTo("Authentication OR Tenants");
+    }
 }
