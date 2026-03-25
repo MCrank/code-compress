@@ -870,6 +870,77 @@ internal sealed class QueryToolsTests
     }
 
     [Test]
+    public async Task ExpandSymbolPrefixMatchReturnsCandidatesWithQualifiedNames()
+    {
+        // Exact match fails
+        _store.GetSymbolByNameAsync("test-repo-id", "ProjectEndpoints:MapMaestroProject")
+            .Returns((Symbol?)null);
+
+        // Prefix match returns multiple candidates
+        var candidates = new List<Symbol>
+        {
+            CreateSymbol(2, 1, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", parent: "ProjectEndpoints"),
+            CreateSymbol(3, 1, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", parent: "ProjectEndpoints"),
+        };
+        _store.GetSymbolsByParentAndChildPrefixAsync("test-repo-id", "ProjectEndpoints", "MapMaestroProject", Arg.Any<int>())
+            .Returns(candidates);
+
+        var result = await _tools.ExpandSymbol("/valid/path", "ProjectEndpoints:MapMaestroProject").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        var candidateArray = root.GetProperty("candidates");
+        await Assert.That(candidateArray.GetArrayLength()).IsEqualTo(2);
+        await Assert.That(candidateArray[0].GetString()).IsEqualTo("ProjectEndpoints:MapMaestroProjectCrudEndpoints");
+        await Assert.That(candidateArray[1].GetString()).IsEqualTo("ProjectEndpoints:MapMaestroProjectMemberEndpoints");
+    }
+
+    [Test]
+    public async Task ExpandSymbolPrefixMatchSingleResultReturnsSymbol()
+    {
+        var content = "public static class ProjectEndpoints\n{\n    public static void MapMaestroProjectMemberEndpoints() { }\n}\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+
+            var methodSource = "    public static void MapMaestroProjectMemberEndpoints() { }";
+            var byteOffset = Encoding.UTF8.GetByteCount("public static class ProjectEndpoints\n{\n");
+            var byteLength = Encoding.UTF8.GetByteCount(methodSource);
+
+            // Exact match fails
+            _store.GetSymbolByNameAsync("test-repo-id", "ProjectEndpoints:MapMaestroProjectMember")
+                .Returns((Symbol?)null);
+
+            // Prefix match returns single result — should auto-resolve
+            var symbol = CreateSymbol(2, 1, "MapMaestroProjectMemberEndpoints", "Method",
+                "public static void MapMaestroProjectMemberEndpoints()", parent: "ProjectEndpoints",
+                byteOffset: byteOffset, byteLength: byteLength);
+            _store.GetSymbolsByParentAndChildPrefixAsync("test-repo-id", "ProjectEndpoints", "MapMaestroProjectMember", Arg.Any<int>())
+                .Returns(new List<Symbol> { symbol });
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord>
+                {
+                    new(1, "test-repo-id", fileName, "hash1", 500, 20, 1000, 2000),
+                });
+
+            _pathValidator.ValidatePath(dir, dir).Returns(dir);
+
+            var result = await _tools.ExpandSymbol(dir, "ProjectEndpoints:MapMaestroProjectMember").ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("MapMaestroProjectMemberEndpoints");
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
     public async Task ExpandSymbolInvalidPathReturnsError()
     {
         _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())

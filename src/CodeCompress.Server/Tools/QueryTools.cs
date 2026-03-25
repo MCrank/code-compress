@@ -289,30 +289,61 @@ internal sealed class QueryTools
             var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
             if (symbol is null)
             {
-                // Fuzzy resolution: try matching by unqualified name
-                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
-                if (candidates.Count == 1)
+                // Step 2: prefix match within parent scope for qualified names (Parent:ChildPrefix*)
+                var separatorIndex = symbolName.IndexOfAny(['.', ':']);
+                if (separatorIndex > 0 && separatorIndex < symbolName.Length - 1)
                 {
-                    symbol = candidates[0];
+                    var parent = symbolName[..separatorIndex];
+                    var childPrefix = symbolName[(separatorIndex + 1)..];
+                    var prefixCandidates = await scope.Store.GetSymbolsByParentAndChildPrefixAsync(
+                        scope.RepoId, parent, childPrefix).ConfigureAwait(false);
+
+                    if (prefixCandidates.Count == 1)
+                    {
+                        symbol = prefixCandidates[0];
+                    }
+                    else if (prefixCandidates.Count > 1)
+                    {
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                Error = "Multiple symbols match this prefix",
+                                Code = "SYMBOL_NOT_FOUND",
+                                Retryable = false,
+                                Symbol = SanitizeSymbolName(symbolName),
+                                Candidates = prefixCandidates.Select(c => $"{parent}:{c.Name}"),
+                            },
+                            SerializerOptions);
+                    }
                 }
-                else if (candidates.Count > 1)
+
+                // Step 3: unscoped candidate search by unqualified name
+                if (symbol is null)
                 {
-                    return JsonSerializer.Serialize(
-                        new
-                        {
-                            Error = "Multiple symbols match this name",
-                            Code = "SYMBOL_NOT_FOUND",
-                            Retryable = false,
-                            Symbol = SanitizeSymbolName(symbolName),
-                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
-                        },
-                        SerializerOptions);
-                }
-                else
-                {
-                    return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
-                        SerializerOptions);
+                    var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+                    if (candidates.Count == 1)
+                    {
+                        symbol = candidates[0];
+                    }
+                    else if (candidates.Count > 1)
+                    {
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                Error = "Multiple symbols match this name",
+                                Code = "SYMBOL_NOT_FOUND",
+                                Retryable = false,
+                                Symbol = SanitizeSymbolName(symbolName),
+                                Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
+                            },
+                            SerializerOptions);
+                    }
+                    else
+                    {
+                        return JsonSerializer.Serialize(
+                            new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
+                            SerializerOptions);
+                    }
                 }
             }
 

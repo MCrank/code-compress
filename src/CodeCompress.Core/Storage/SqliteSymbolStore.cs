@@ -1134,6 +1134,62 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return results;
     }
 
+    public async Task<IReadOnlyList<Symbol>> GetSymbolsByParentAndChildPrefixAsync(string repoId, string parent, string childPrefix, int limit = 10)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(childPrefix);
+
+        if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(childPrefix))
+        {
+            return [];
+        }
+
+        var clampedLimit = Math.Min(Math.Max(limit, 1), 50);
+
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.parent_symbol = @parent AND s.name LIKE @childPrefix ESCAPE '!' AND f.repo_id = @repoId
+            ORDER BY s.name
+            LIMIT @limit
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@parent", parent);
+        command.Parameters.AddWithValue("@childPrefix", EscapeLikePattern(childPrefix) + "%");
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<Symbol>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new Symbol(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetInt32(8),
+                reader.GetInt32(9),
+                reader.GetString(10),
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<Symbol>> GetSymbolsByNamesAsync(string repoId, IReadOnlyList<string> symbolNames)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -1888,4 +1944,12 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         return new ProjectOutline(repoId, groups, totalCount, isTruncated);
     }
+
+    /// <summary>
+    /// Escapes SQL LIKE special characters using '!' as the escape character.
+    /// </summary>
+    private static string EscapeLikePattern(string input) =>
+        input.Replace("!", "!!", StringComparison.Ordinal)
+             .Replace("%", "!%", StringComparison.Ordinal)
+             .Replace("_", "!_", StringComparison.Ordinal);
 }
