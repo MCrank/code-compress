@@ -289,30 +289,61 @@ internal sealed class QueryTools
             var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
             if (symbol is null)
             {
-                // Fuzzy resolution: try matching by unqualified name
-                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
-                if (candidates.Count == 1)
+                // Step 2: prefix match within parent scope for qualified names (Parent:ChildPrefix*)
+                var separatorIndex = symbolName.IndexOfAny(['.', ':']);
+                if (separatorIndex > 0 && separatorIndex < symbolName.Length - 1)
                 {
-                    symbol = candidates[0];
+                    var parent = symbolName[..separatorIndex];
+                    var childPrefix = symbolName[(separatorIndex + 1)..];
+                    var prefixCandidates = await scope.Store.GetSymbolsByParentAndChildPrefixAsync(
+                        scope.RepoId, parent, childPrefix).ConfigureAwait(false);
+
+                    if (prefixCandidates.Count == 1)
+                    {
+                        symbol = prefixCandidates[0];
+                    }
+                    else if (prefixCandidates.Count > 1)
+                    {
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                Error = "Multiple symbols match this prefix",
+                                Code = "SYMBOL_NOT_FOUND",
+                                Retryable = false,
+                                Symbol = SanitizeSymbolName(symbolName),
+                                Candidates = prefixCandidates.Select(c => $"{parent}:{c.Name}"),
+                            },
+                            SerializerOptions);
+                    }
                 }
-                else if (candidates.Count > 1)
+
+                // Step 3: unscoped candidate search by unqualified name
+                if (symbol is null)
                 {
-                    return JsonSerializer.Serialize(
-                        new
-                        {
-                            Error = "Multiple symbols match this name",
-                            Code = "SYMBOL_NOT_FOUND",
-                            Retryable = false,
-                            Symbol = SanitizeSymbolName(symbolName),
-                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
-                        },
-                        SerializerOptions);
-                }
-                else
-                {
-                    return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
-                        SerializerOptions);
+                    var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+                    if (candidates.Count == 1)
+                    {
+                        symbol = candidates[0];
+                    }
+                    else if (candidates.Count > 1)
+                    {
+                        return JsonSerializer.Serialize(
+                            new
+                            {
+                                Error = "Multiple symbols match this name",
+                                Code = "SYMBOL_NOT_FOUND",
+                                Retryable = false,
+                                Symbol = SanitizeSymbolName(symbolName),
+                                Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
+                            },
+                            SerializerOptions);
+                    }
+                    else
+                    {
+                        return JsonSerializer.Serialize(
+                            new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
+                            SerializerOptions);
+                    }
                 }
             }
 
@@ -495,7 +526,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index using FTS5 full-text search — faster and more precise than grep-style file scanning. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestion' — split into separate queries).")]
+    [Description("Search the symbol index for classes, methods, functions, types, interfaces, enums, and other code structure. Use this for navigating to named symbols — NOT for searching file contents, string literals, comments, or configuration values (use search_text for those). Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestions' array with ready-to-use queries — run each one separately).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
@@ -556,13 +587,17 @@ internal sealed class QueryTools
 
         if (glob.Strategy == GlobMatchStrategy.MixedStrategy)
         {
+            // Generate concrete ready-to-use query suggestions from the original terms
+            var suggestions = GenerateMixedPatternSuggestions(query);
+
             return JsonSerializer.Serialize(
                 new
                 {
                     Error = glob.ErrorDetail,
                     Code = "MIXED_PATTERN",
                     Retryable = false,
-                    Suggestion = "Split into separate queries: run one query for prefix patterns (e.g., 'Claude*') and another for suffix/contains patterns (e.g., '*Service').",
+                    Suggestion = "This query mixes incompatible pattern types. You MUST split it into separate search_symbols calls — one per pattern below.",
+                    Suggestions = suggestions,
                 },
                 SerializerOptions);
         }
@@ -682,7 +717,7 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Search raw indexed file contents using FTS5 full-text search — faster than grep for large codebases since content is pre-indexed. Use for string literals, comments, TODOs, or non-symbol patterns that search_symbols wouldn't find. For symbol-specific searches (classes, functions, types), prefer search_symbols which is faster and returns structured metadata with direct chaining to get_symbol. Use pathFilter to scope results. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{file_path, snippet, rank}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
+    [Description("Search raw file contents for string literals, comments, TODOs, configuration values, SQL patterns, or any text that is NOT a symbol name. Use this instead of search_symbols when looking for: content patterns (e.g., 'FromSqlRaw', 'HasQueryFilter'), string literals or magic strings, comments and documentation text, configuration values, audit patterns (e.g., 'TODO', 'HACK', 'password'), or any non-symbol text in source files. Faster than grep — content is pre-indexed via FTS5. For navigating to named symbols (classes, methods, types), use search_symbols instead. Use pathFilter to scope results. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{file_path, snippet, rank}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER.")]
     public async Task<string> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
@@ -1006,6 +1041,37 @@ internal sealed class QueryTools
 
         var result = sb.ToString();
         return result.Length > 256 ? result[..256] : result;
+    }
+
+    private static List<string> GenerateMixedPatternSuggestions(string query)
+    {
+        var tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var suggestions = new List<string>();
+
+        foreach (var token in tokens)
+        {
+            if (string.Equals(token, "OR", StringComparison.Ordinal) ||
+                string.Equals(token, "AND", StringComparison.Ordinal) ||
+                string.Equals(token, "NOT", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var cleaned = token.Trim('(', ')');
+            if (string.IsNullOrEmpty(cleaned))
+            {
+                continue;
+            }
+
+            // Sanitize: allow only alphanumeric, *, _, ., -
+            var sanitized = string.Concat(cleaned.Where(c => char.IsLetterOrDigit(c) || c is '*' or '_' or '.' or '-'));
+            if (sanitized.Length > 0 && sanitized.Length <= 64)
+            {
+                suggestions.Add(sanitized);
+            }
+        }
+
+        return suggestions;
     }
 
     private static string FormatGuidedSummary(Symbol symbol, string filePath, IReadOnlyList<Symbol> children)

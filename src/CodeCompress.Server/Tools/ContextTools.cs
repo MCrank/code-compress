@@ -70,15 +70,39 @@ internal sealed class ContextTools
             var usedChars = 0;
 
             // ── 1. Search for relevant symbols ──────────────────────
-            var searchResults = await scope.Store.SearchSymbolsAsync(
-                scope.RepoId, query, null, MaxSearchResults).ConfigureAwait(false);
+            // Tokenize: strips stopwords, joins multi-word queries with OR
+            var tokenizedQuery = Fts5QuerySanitizer.TokenizeForSearch(query);
+            var searchQuery = string.IsNullOrWhiteSpace(tokenizedQuery)
+                ? Fts5QuerySanitizer.Sanitize(query)
+                : tokenizedQuery;
 
-            // Auto contains-match fallback for plain terms
-            if (searchResults.Count == 0 && GlobPattern.IsPlainTerm(query))
+            var searchResults = await scope.Store.SearchSymbolsAsync(
+                scope.RepoId, searchQuery, null, MaxSearchResults).ConfigureAwait(false);
+
+            // Auto contains-match fallback: try each term as *term* individually
+            if (searchResults.Count == 0)
             {
-                var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
-                searchResults = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                var terms = searchQuery.Split([" OR "], StringSplitOptions.RemoveEmptyEntries)
+                    .Select(t => t.Trim())
+                    .Where(t => t.Length > 0)
+                    .ToList();
+
+                foreach (var term in terms.Where(GlobPattern.IsPlainTerm))
+                {
+                    var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{term}*");
+                    if (containsGlob.SqlLikePattern is null)
+                    {
+                        continue;
+                    }
+
+                    searchResults = await scope.Store.SearchSymbolsAsync(
+                        scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+
+                    if (searchResults.Count > 0)
+                    {
+                        break;
+                    }
+                }
             }
 
             if (searchResults.Count == 0)

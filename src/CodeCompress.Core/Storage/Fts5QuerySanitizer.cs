@@ -50,6 +50,65 @@ public static partial class Fts5QuerySanitizer
         return result;
     }
 
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "and", "are", "as", "at", "be", "but", "by",
+        "for", "from", "has", "have", "how", "if", "in", "is", "it",
+        "its", "no", "not", "of", "on", "or", "so", "that", "the",
+        "then", "this", "to", "was", "what", "when", "where", "which",
+        "who", "will", "with",
+    };
+
+    /// <summary>
+    /// Tokenizes a natural-language search query for use with FTS5.
+    /// Splits on whitespace, strips stopwords, sanitizes each token,
+    /// and joins remaining terms with OR for broad matching.
+    /// Returns the original query unchanged if it already contains
+    /// FTS5 operators or wildcard patterns.
+    /// </summary>
+    public static string TokenizeForSearch(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = query.Trim();
+
+        // If the query already has wildcards or FTS5 operators, leave it alone
+        if (trimmed.Contains('*', StringComparison.Ordinal) ||
+            trimmed.Contains('?', StringComparison.Ordinal) ||
+            trimmed.Contains('"', StringComparison.Ordinal) ||
+            GlobPattern.ContainsFts5Operators(trimmed))
+        {
+            return Sanitize(trimmed);
+        }
+
+        var tokens = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        // Single word — return as-is after sanitization
+        if (tokens.Length <= 1)
+        {
+            return Sanitize(trimmed);
+        }
+
+        // Multi-word: strip stopwords, sanitize each, join with OR
+        var meaningful = tokens
+            .Where(t => !Stopwords.Contains(t))
+            .Select(t => Sanitize(t))
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .ToList();
+
+        if (meaningful.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return meaningful.Count == 1
+            ? meaningful[0]
+            : string.Join(" OR ", meaningful);
+    }
+
     /// <summary>
     /// Sanitizes a glob pattern for use in SQL GLOB/LIKE clauses.
     /// Allows only alphanumeric, *, ?, /, ., -, _

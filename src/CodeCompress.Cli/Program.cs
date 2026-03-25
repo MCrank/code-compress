@@ -765,24 +765,49 @@ expandSymbolCommand.SetAction(async parseResult =>
         var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
         if (symbol is null)
         {
-            // Fuzzy resolution: try matching by unqualified name
-            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
-            if (candidates.Count == 1)
+            // Step 2: prefix match within parent scope for qualified names
+            var separatorIndex = name.IndexOfAny(['.', ':']);
+            if (separatorIndex > 0 && separatorIndex < name.Length - 1)
             {
-                symbol = candidates[0];
+                var parent = name[..separatorIndex];
+                var childPrefix = name[(separatorIndex + 1)..];
+                var prefixCandidates = await scope.Store.GetSymbolsByParentAndChildPrefixAsync(
+                    scope.RepoId, parent, childPrefix).ConfigureAwait(false);
+
+                if (prefixCandidates.Count == 1)
+                {
+                    symbol = prefixCandidates[0];
+                }
+                else if (prefixCandidates.Count > 1)
+                {
+                    var qualifiedNames = prefixCandidates.Select(c => $"{parent}:{c.Name}");
+                    await WriteErrorAsync("Multiple symbols match this prefix", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                        $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                    return;
+                }
             }
-            else if (candidates.Count > 1)
+
+            // Step 3: unscoped candidate search by unqualified name
+            if (symbol is null)
             {
-                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
-                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
-                return;
-            }
-            else
-            {
-                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names. If the symbol was recently added or changed, re-run 'codecompress index' to update the index.").ConfigureAwait(false);
-                return;
+                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+                if (candidates.Count == 1)
+                {
+                    symbol = candidates[0];
+                }
+                else if (candidates.Count > 1)
+                {
+                    var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                    await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                        $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                    return;
+                }
+                else
+                {
+                    await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                        "Use 'codecompress search --path <path> --query <name>' to discover symbol names. If the symbol was recently added or changed, re-run 'codecompress index' to update the index.").ConfigureAwait(false);
+                    return;
+                }
             }
         }
 
@@ -1174,14 +1199,38 @@ assembleCommand.SetAction(async parseResult =>
         const double charsPerToken = 3.5;
         var charBudget = (int)(budget * charsPerToken);
 
-        var searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, null, 50).ConfigureAwait(false);
+        // Tokenize: strips stopwords, joins multi-word queries with OR
+        var tokenizedQuery = Fts5QuerySanitizer.TokenizeForSearch(query);
+        var searchQuery = string.IsNullOrWhiteSpace(tokenizedQuery)
+            ? Fts5QuerySanitizer.Sanitize(query)
+            : tokenizedQuery;
 
-        // Auto contains-match fallback
-        if (searchResults.Count == 0 && GlobPattern.IsPlainTerm(query))
+        var searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, searchQuery, null, 50).ConfigureAwait(false);
+
+        // Auto contains-match fallback: try each term as *term* individually
+        if (searchResults.Count == 0)
         {
-            var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
-            searchResults = await scope.Store.SearchSymbolsAsync(
-                scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+            var terms = searchQuery.Split([" OR "], StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim())
+                .Where(t => t.Length > 0)
+                .ToList();
+
+            foreach (var term in terms.Where(GlobPattern.IsPlainTerm))
+            {
+                var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{term}*");
+                if (containsGlob.SqlLikePattern is null)
+                {
+                    continue;
+                }
+
+                searchResults = await scope.Store.SearchSymbolsAsync(
+                    scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+
+                if (searchResults.Count > 0)
+                {
+                    break;
+                }
+            }
         }
 
         if (searchResults.Count == 0)

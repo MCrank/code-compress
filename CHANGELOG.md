@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-03-25
+
+### Added
+- `expand_symbol` prefix matching — when a qualified name like `Parent:ChildPrefix` doesn't exactly match, tries prefix matching within the parent scope before falling back to unscoped search. Single match auto-resolves; multiple matches return candidate list with full qualified names (#155)
+- `GetSymbolsByParentAndChildPrefixAsync` store method for parent-scoped prefix lookups (#155)
+
+### Fixed
+- `assemble_context` now returns results for multi-word natural-language queries — tokenizes input, strips stopwords, joins terms with OR instead of implicit AND that returned 0 results (#154)
+- MIXED_PATTERN error now includes a `suggestions` array with ready-to-use query strings and directive wording that agents will follow (#156)
+
+### Changed
+- `search_symbols` description now explicitly directs agents to `search_text` for content/pattern searches (#156)
+- `search_text` description leads with concrete use cases (string literals, comments, TODOs, audit patterns like `FromSqlRaw`) (#156)
+- CLI `assemble` and `expand-symbol` commands updated for feature parity with MCP server tools (#154, #155)
+
 ## [0.11.0] - 2026-03-23
 
 ### Added

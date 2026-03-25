@@ -257,6 +257,58 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(results[1].Kind).IsEqualTo("Method");
     }
 
+    // ── GetSymbolsByParentAndChildPrefixAsync Tests ────────────────────
+
+    [Test]
+    public async Task GetSymbolsByParentAndChildPrefixAsyncReturnsMatchingChildren()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/Endpoints.cs", "hash1", 2048, 80, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/Endpoints.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ProjectEndpoints", "Class", "public static class ProjectEndpoints", null, 0, 500, 1, 50, "Public", null),
+            new(0, insertedFile.Id, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", "ProjectEndpoints", 100, 100, 10, 20, "Public", null),
+            new(0, insertedFile.Id, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", "ProjectEndpoints", 200, 100, 21, 30, "Public", null),
+            new(0, insertedFile.Id, "MapOtherEndpoints", "Method", "public static void MapOtherEndpoints()", "ProjectEndpoints", 300, 100, 31, 40, "Public", null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.GetSymbolsByParentAndChildPrefixAsync("repo1", "ProjectEndpoints", "MapMaestroProject").ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0].Name).IsEqualTo("MapMaestroProjectCrudEndpoints");
+        await Assert.That(results[1].Name).IsEqualTo("MapMaestroProjectMemberEndpoints");
+    }
+
+    [Test]
+    public async Task GetSymbolsByParentAndChildPrefixAsyncReturnsEmptyWhenNoMatch()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var results = await store.GetSymbolsByParentAndChildPrefixAsync("repo1", "MyClass", "NonExistent").ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetSymbolsByParentAndChildPrefixAsyncReturnsEmptyForEmptyPrefix()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var (store, _) = await SeedTestDataAsync(connection).ConfigureAwait(false);
+
+        var results = await store.GetSymbolsByParentAndChildPrefixAsync("repo1", "MyClass", "").ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsEqualTo(0);
+    }
+
     // ── GetSymbolsByNamesAsync Tests ─────────────────────────────────────
 
     [Test]
