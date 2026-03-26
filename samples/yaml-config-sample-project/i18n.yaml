@@ -1,0 +1,32 @@
+# Internationalization configuration
+default_locale: en-US
+
+supported_locales:
+  - en-US
+  - ja-JP
+  - es-MX
+  - de-DE
+
+translations:
+  welcome_message: "Welcome to the platform!"
+  error_generic: "Something went wrong"
+  player_name: "Player"
+
+localized:
+  ja-JP:
+    welcome_message: "プラットフォームへようこそ！"
+    error_generic: "問題が発生しました"
+    player_name: "プレイヤー"
+  es-MX:
+    welcome_message: "¡Bienvenido a la plataforma!"
+    error_generic: "Algo salió mal"
+    player_name: "Jugador"
+  de-DE:
+    welcome_message: "Willkommen auf der Plattform!"
+    error_generic: "Etwas ist schiefgelaufen"
+    player_name: "Spieler"
+
+status_icons:
+  active: "✅ Active"
+  inactive: "❌ Inactive"
+  pending: "⏳ Pending"

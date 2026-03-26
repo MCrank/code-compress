@@ -1,0 +1,54 @@
+# Kubernetes cluster settings
+cluster_name: "aks-prod-eastus"
+kubernetes_version: "1.29"
+resource_group: rg-prod-eus
+location: eastus
+sku_tier: Standard
+enable_monitoring: true
+enable_defender: false
+maintenance_window: null
+
+# Node pools — array of objects
+node_pools:
+  - name: system
+    vm_size: Standard_D4s_v5
+    count: 3
+    min_count: 2
+    max_count: 5
+    os_type: Linux
+    mode: System
+    labels:
+      role: system
+      tier: infrastructure
+  - name: userpool
+    vm_size: Standard_E8s_v5
+    count: 5
+    min_count: 3
+    max_count: 20
+    os_type: Linux
+    mode: User
+    labels:
+      role: workload
+      tier: application
+
+# Networking
+networking:
+  vnet_cidr: "10.0.0.0/16"
+  service_cidr: "10.1.0.0/16"
+  dns_service_ip: "10.1.0.10"
+  pod_cidr: "10.244.0.0/16"
+  network_plugin: azure
+  network_policy: calico
+
+# Allowed CIDRs — scalar array
+allowed_cidr_blocks:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+
+# Tags — inline mapping
+tags: {environment: production, team: platform, cost_center: engineering}
+
+# Empty sections
+empty_config: {}
+empty_list: []
