@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILanguageParser, RustParser>();
         services.AddSingleton<ILanguageParser, PythonParser>();
         services.AddSingleton<ILanguageParser, TypeScriptJavaScriptParser>();
+        services.AddSingleton<ILanguageParser, YamlConfigParser>();
 
         // Indexing
         services.AddSingleton<IFileHasher, FileHasher>();

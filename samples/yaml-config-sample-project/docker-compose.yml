@@ -1,0 +1,46 @@
+# Docker Compose for local development
+version: "3.8"
+
+services:
+  - name: web
+    image: nginx:latest
+    ports:
+      - "8080:80"
+      - "8443:443"
+    environment:
+      NODE_ENV: development
+      DEBUG: "true"
+    replicas: 2
+
+  - name: api
+    image: myapp/api:latest
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://localhost:5432/mydb"
+      REDIS_URL: "redis://localhost:6379"
+    replicas: 1
+
+  - name: db
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: mydb
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+    replicas: 1
+
+# Network settings
+network:
+  driver: bridge
+  subnet: "172.20.0.0/16"
+
+# Volume configuration
+volumes:
+  db_data:
+    driver: local
+    size_gb: 50
+  redis_data:
+    driver: local
+    size_gb: 10
