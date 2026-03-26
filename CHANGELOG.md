@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-03-25
+
+### Added
+- **YAML config parser** — indexes `.yaml`/`.yml` files as queryable `ConfigKey` symbols with colon-delimited hierarchical qualified names, hybrid array handling (object arrays indexed individually, scalar arrays summarized), and security hardening against YAML bombs, prompt injection, and stack overflow (#162)
+- YAML sample project with Kubernetes settings, Docker Compose, and i18n configuration files (#162)
+
+### Fixed
+- Java, Go, Rust, Python, and TypeScript/JavaScript parsers now registered in DI container — previously implemented but unreachable at runtime, causing `index_project` to silently skip files for these languages (#161)
+
+### Changed
+- NuGet packages now ship as platform-specific packages (~2.5 MB each) instead of a single monolithic package (~17.5 MB), reducing end-user download size by ~85%. Supported platforms: win-x64, win-arm64, linux-x64, linux-arm64, osx-arm64, osx-x64 (#164)
+
 ## [0.12.0] - 2026-03-25
 
 ### Added
