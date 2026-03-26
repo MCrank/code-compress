@@ -283,6 +283,7 @@ CodeCompress is designed to stay current with minimal effort:
 | Python | `.py`, `.pyi` | Available | Indentation-based |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
 | JSON Config | `.json` | Available | Structure-based |
+| YAML Config | `.yaml`, `.yml` | Available | Structure-based |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
 
