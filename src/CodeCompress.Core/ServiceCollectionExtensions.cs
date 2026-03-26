@@ -21,6 +21,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILanguageParser, JsonConfigParser>();
         services.AddSingleton<ILanguageParser, BlazorRazorParser>();
         services.AddSingleton<ILanguageParser, TerraformParser>();
+        services.AddSingleton<ILanguageParser, JavaParser>();
+        services.AddSingleton<ILanguageParser, GoParser>();
+        services.AddSingleton<ILanguageParser, RustParser>();
+        services.AddSingleton<ILanguageParser, PythonParser>();
+        services.AddSingleton<ILanguageParser, TypeScriptJavaScriptParser>();
 
         // Indexing
         services.AddSingleton<IFileHasher, FileHasher>();
