@@ -16,6 +16,7 @@ internal sealed class IndexEngineTests
     private IChangeTracker _changeTracker = null!;
     private ISymbolStore _symbolStore = null!;
     private IPathValidator _pathValidator = null!;
+    private IGitIgnoreFilter _gitIgnoreFilter = null!;
     private ILogger<IndexEngine> _logger = null!;
     private StubLuauParser _luauParser = null!;
     private StubCSharpParser _csharpParser = null!;
@@ -31,7 +32,12 @@ internal sealed class IndexEngineTests
         _changeTracker = Substitute.For<IChangeTracker>();
         _symbolStore = Substitute.For<ISymbolStore>();
         _pathValidator = Substitute.For<IPathValidator>();
+        _gitIgnoreFilter = Substitute.For<IGitIgnoreFilter>();
         _logger = Substitute.For<ILogger<IndexEngine>>();
+
+        // Default: gitignore filter returns empty set (no files ignored)
+        _gitIgnoreFilter.GetIgnoredPathsAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>());
         _luauParser = new StubLuauParser();
         _csharpParser = new StubCSharpParser();
 
@@ -54,6 +60,7 @@ internal sealed class IndexEngineTests
             new ILanguageParser[] { _luauParser, _csharpParser },
             _symbolStore,
             _pathValidator,
+            _gitIgnoreFilter,
             _logger);
     }
 

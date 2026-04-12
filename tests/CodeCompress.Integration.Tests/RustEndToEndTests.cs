@@ -5,6 +5,7 @@ using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeCompress.Integration.Tests;
 
@@ -13,6 +14,7 @@ internal sealed class RustEndToEndTests : IDisposable
     private SqliteConnection _connection = null!;
     private SqliteSymbolStore _store = null!;
     private IndexEngine _engine = null!;
+    private IGitIgnoreFilter _gitIgnoreFilter = null!;
     private string _sampleProjectPath = null!;
     private string _repoId = null!;
 
@@ -27,8 +29,10 @@ internal sealed class RustEndToEndTests : IDisposable
         _store = new SqliteSymbolStore(_connection);
 
         var parsers = new ILanguageParser[] { new RustParser() };
+        _gitIgnoreFilter = Substitute.For<IGitIgnoreFilter>();
+        _gitIgnoreFilter.GetIgnoredPathsAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(new HashSet<string>());
         _engine = new IndexEngine(new FileHasher(), new ChangeTracker(), parsers, _store,
-            new PathValidatorService(), NullLogger<IndexEngine>.Instance);
+            new PathValidatorService(), _gitIgnoreFilter, NullLogger<IndexEngine>.Instance);
 
         _sampleProjectPath = FindSamplePath();
         _repoId = IndexEngine.ComputeRepoId(Path.GetFullPath(_sampleProjectPath));

@@ -29,6 +29,7 @@ public sealed partial class IndexEngine : IIndexEngine
     private readonly IChangeTracker _changeTracker;
     private readonly ISymbolStore _symbolStore;
     private readonly IPathValidator _pathValidator;
+    private readonly IGitIgnoreFilter _gitIgnoreFilter;
     private readonly ILogger<IndexEngine> _logger;
     private readonly Dictionary<string, ILanguageParser> _parsersByExtension;
     private readonly Dictionary<string, ILanguageParser> _parsersByLanguageId;
@@ -42,6 +43,7 @@ public sealed partial class IndexEngine : IIndexEngine
         IEnumerable<ILanguageParser> parsers,
         ISymbolStore symbolStore,
         IPathValidator pathValidator,
+        IGitIgnoreFilter gitIgnoreFilter,
         ILogger<IndexEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(fileHasher);
@@ -49,12 +51,14 @@ public sealed partial class IndexEngine : IIndexEngine
         ArgumentNullException.ThrowIfNull(parsers);
         ArgumentNullException.ThrowIfNull(symbolStore);
         ArgumentNullException.ThrowIfNull(pathValidator);
+        ArgumentNullException.ThrowIfNull(gitIgnoreFilter);
         ArgumentNullException.ThrowIfNull(logger);
 
         _fileHasher = fileHasher;
         _changeTracker = changeTracker;
         _symbolStore = symbolStore;
         _pathValidator = pathValidator;
+        _gitIgnoreFilter = gitIgnoreFilter;
         _logger = logger;
 
         _parsersByExtension = new Dictionary<string, ILanguageParser>(StringComparer.OrdinalIgnoreCase);
@@ -91,7 +95,7 @@ public sealed partial class IndexEngine : IIndexEngine
         var repoId = ComputeRepoId(canonicalRoot);
 
         // 3. Discover source files
-        var discoveredFiles = DiscoverFiles(canonicalRoot, language, includePatterns, excludePatterns);
+        var discoveredFiles = await DiscoverFilesAsync(canonicalRoot, language, includePatterns, excludePatterns, cancellationToken).ConfigureAwait(false);
 
         if (discoveredFiles.Count == 0)
         {
@@ -303,11 +307,12 @@ public sealed partial class IndexEngine : IIndexEngine
             parseFailures.IsEmpty ? null : [.. parseFailures]);
     }
 
-    private List<string> DiscoverFiles(
+    private async Task<List<string>> DiscoverFilesAsync(
         string canonicalRoot,
         string? language,
         string[]? includePatterns,
-        string[]? excludePatterns)
+        string[]? excludePatterns,
+        CancellationToken cancellationToken)
     {
         // Determine which extensions to consider
         HashSet<string>? allowedExtensions = null;
@@ -341,8 +346,10 @@ public sealed partial class IndexEngine : IIndexEngine
             }
         }
 
-        var results = new List<string>();
         var defaultExcludeSet = new HashSet<string>(DefaultExcludeDirs, StringComparer.OrdinalIgnoreCase);
+
+        // Phase 1: Collect candidates after hardcoded exclusions + parser check
+        var candidates = new List<(string AbsPath, string RelPath)>();
 
         foreach (var absPath in Directory.EnumerateFiles(canonicalRoot, "*", new EnumerationOptions
         {
@@ -375,6 +382,35 @@ public sealed partial class IndexEngine : IIndexEngine
             // Apply language filter
             if (allowedExtensions is not null && !allowedExtensions.Contains(ext))
             {
+                continue;
+            }
+
+            candidates.Add((absPath, relPath));
+        }
+
+        // Phase 2: Apply .gitignore filtering via git check-ignore
+        var candidateRelPaths = candidates.Select(c => c.RelPath).ToList();
+        var ignoredPaths = await _gitIgnoreFilter.GetIgnoredPathsAsync(canonicalRoot, candidateRelPaths, cancellationToken).ConfigureAwait(false);
+
+        // Phase 3: Apply gitignore + user-supplied patterns
+        var results = new List<string>();
+
+        foreach (var (absPath, relPath) in candidates)
+        {
+            // Skip files that git would ignore (unless overridden by includePatterns below)
+            if (ignoredPaths.Contains(relPath))
+            {
+                // If caller explicitly included this file, let it through
+                if (includeMatcher is not null)
+                {
+                    var includeMatch = includeMatcher.Match(relPath.Replace('\\', '/'));
+                    if (includeMatch.HasMatches)
+                    {
+                        results.Add(absPath);
+                        continue;
+                    }
+                }
+
                 continue;
             }
 

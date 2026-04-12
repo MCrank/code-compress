@@ -5,6 +5,7 @@ using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeCompress.Integration.Tests;
 
@@ -13,6 +14,7 @@ internal sealed class TypeScriptJavaScriptEndToEndTests : IDisposable
     private SqliteConnection _connection = null!;
     private SqliteSymbolStore _store = null!;
     private IndexEngine _engine = null!;
+    private IGitIgnoreFilter _gitIgnoreFilter = null!;
     private string _sampleProjectPath = null!;
     private string _repoId = null!;
 
@@ -34,10 +36,12 @@ internal sealed class TypeScriptJavaScriptEndToEndTests : IDisposable
         var fileHasher = new FileHasher();
         var changeTracker = new ChangeTracker();
         var pathValidator = new PathValidatorService();
+        _gitIgnoreFilter = Substitute.For<IGitIgnoreFilter>();
+        _gitIgnoreFilter.GetIgnoredPathsAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(new HashSet<string>());
 
         _engine = new IndexEngine(
             fileHasher, changeTracker, parsers, _store, pathValidator,
-            NullLogger<IndexEngine>.Instance);
+            _gitIgnoreFilter, NullLogger<IndexEngine>.Instance);
 
         _sampleProjectPath = FindSampleProjectPath();
         _repoId = IndexEngine.ComputeRepoId(Path.GetFullPath(_sampleProjectPath));
