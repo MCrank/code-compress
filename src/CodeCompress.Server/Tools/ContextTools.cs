@@ -35,11 +35,12 @@ internal sealed class ContextTools
     }
 
     [McpServerTool(Name = "assemble_context")]
-    [Description("One-shot context assembly — searches symbols, retrieves source code, and builds a structured overview within a token budget. Use INSTEAD of manually calling search_symbols + get_symbol + project_outline when starting a task. Reduces 5-10 tool round-trips to 1. Returns Markdown: file tree overview, source code sections grouped by file (with syntax-highlighted fenced blocks), and a metadata footer showing token usage. Large symbols (>16KB) are automatically summarized with signature + child list — use expand_symbol for individual methods. Set activeFile to prioritize the file you're editing. Requires index_project first. Zero-result response is JSON: {query, total_matches: 0, hint}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, FTS5_QUERY_ERROR.")]
+    [Description("One-shot context assembly — searches symbols, retrieves source code, and builds a structured overview within a token budget. Use INSTEAD of manually calling search_symbols + get_symbol + project_outline when starting a task. Reduces 5-10 tool round-trips to 1. Returns Markdown: file tree overview, source code sections grouped by file (with syntax-highlighted fenced blocks), and a metadata footer showing token usage. Large symbols (>16KB) are automatically summarized with signature + child list — use expand_symbol for individual methods. Set activeFile to prioritize the file you're editing. Requires index_project first. Zero-result response is JSON: {query, total_matches: 0, hint}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, FTS5_QUERY_ERROR, INVALID_PATH_FILTER.")]
     public async Task<string> AssembleContext(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyApp' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Task description or search terms describing what you're working on (e.g., 'authentication middleware', 'database connection pooling', 'UserService'). Supports FTS5 full-text search — plain terms, prefix*, *contains*, and boolean operators (AND, OR, NOT).")] string query,
         [Description("Relative path to the file you're currently editing (e.g., 'src/services/UserService.ts'). Symbols from this file get highest priority in the assembled context. Optional — omit if you don't have a specific file focus.")] string? activeFile = null,
+        [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module), 'lib/' (library code only).")] string? pathFilter = null,
         [Description("Maximum token budget for the response (1000-200000, default 40000). The assembled context will not exceed this limit. Larger budgets include more symbols and source code. Values outside range are clamped.")] int budget = DefaultBudget,
         [Description("Maximum depth for dependency traversal (0-5, default 2). Higher values include more transitive dependencies but consume more budget.")] int maxDepth = 2,
         CancellationToken cancellationToken = default)
@@ -57,6 +58,19 @@ internal sealed class ContextTools
         if (string.IsNullOrWhiteSpace(query))
         {
             return SerializeError("Query cannot be empty", "EMPTY_QUERY");
+        }
+
+        string? validatedPathFilter = null;
+        if (pathFilter is not null)
+        {
+            try
+            {
+                validatedPathFilter = PathValidator.ValidatePathFilter(pathFilter);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+            }
         }
 
         var clampedBudget = Math.Clamp(budget, 1_000, 200_000);
@@ -80,7 +94,7 @@ internal sealed class ContextTools
             try
             {
                 searchResults = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, searchQuery, null, MaxSearchResults).ConfigureAwait(false);
+                    scope.RepoId, searchQuery, null, MaxSearchResults, validatedPathFilter).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
@@ -89,7 +103,7 @@ internal sealed class ContextTools
                 try
                 {
                     searchResults = await scope.Store.SearchSymbolsAsync(
-                        scope.RepoId, literalQuery, null, MaxSearchResults).ConfigureAwait(false);
+                        scope.RepoId, literalQuery, null, MaxSearchResults, validatedPathFilter).ConfigureAwait(false);
                 }
                 catch (System.Data.Common.DbException)
                 {
@@ -116,7 +130,7 @@ internal sealed class ContextTools
                     try
                     {
                         searchResults = await scope.Store.SearchSymbolsAsync(
-                            scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                            scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, validatedPathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
                     }
                     catch (System.Data.Common.DbException)
                     {

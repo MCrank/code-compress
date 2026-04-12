@@ -311,6 +311,103 @@ internal sealed class ContextToolsTests
         await Assert.That(result).Contains("TenantFilter.cs");
     }
 
+    // ── pathFilter ────────────────────────────────────────────────────
+
+    [Test]
+    public async Task PathFilterScopesResultsToMatchingDirectory()
+    {
+        var srcSymbol = new SymbolSearchResult(
+            CreateSymbol(1, 1, "UserService", "Class", "public class UserService"), "src/Services/UserService.cs", 1.0);
+
+        // When pathFilter is provided, SearchSymbolsAsync receives the validated filter
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Is<string?>(p => p != null), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult> { srcSymbol });
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Services/UserService.cs", "hash1", 500, 20, 1000, 2000),
+                new(2, "test-repo-id", "tests/UserServiceTests.cs", "hash2", 300, 10, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "UserService", pathFilter: "src/").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("UserService.cs");
+        await Assert.That(result).DoesNotContain("UserServiceTests.cs");
+    }
+
+    [Test]
+    public async Task NullPathFilterPreservesExistingBehavior()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+        };
+
+        // When pathFilter is null, SearchSymbolsAsync receives null for pathFilter
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Is<string?>(p => p == null), Arg.Any<string?>())
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Validation/PathValidator.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "PathValidator").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("## File Overview");
+        await Assert.That(result).Contains("PathValidator.cs");
+    }
+
+    [Test]
+    [Arguments("../escape")]
+    [Arguments("/etc/passwd")]
+    [Arguments("src/../../etc")]
+    public async Task InvalidPathFilterReturnsStructuredError(string badFilter)
+    {
+        var result = await _tools.AssembleContext("/valid/path", "query", pathFilter: badFilter).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+    }
+
+    [Test]
+    public async Task PathFilterAppliesToContainsMatchFallback()
+    {
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "TenantFilter", "Class", "public class TenantFilter"), "src/Data/TenantFilter.cs", 1.0),
+        };
+
+        // First call (OR query, with pathFilter) returns empty
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Is<string?>(p => p != null), Arg.Is<string?>(p => p == null))
+            .Returns(new List<SymbolSearchResult>());
+
+        // Contains-match fallback also receives pathFilter
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Is<string?>(p => p != null), Arg.Is<string?>(p => p != null))
+            .Returns(searchResults);
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Data/TenantFilter.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "filter tenant", pathFilter: "src/").ConfigureAwait(false);
+
+        await Assert.That(result).Contains("TenantFilter.cs");
+    }
+
+    [Test]
+    public async Task PathFilterWithNoMatchesReturnsZeroResultResponse()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(new List<SymbolSearchResult>());
+
+        var result = await _tools.AssembleContext("/valid/path", "UserService", pathFilter: "nonexistent/").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     private static Symbol CreateSymbol(

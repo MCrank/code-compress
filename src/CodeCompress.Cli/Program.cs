@@ -1184,6 +1184,7 @@ var assembleBudgetOption = new Option<int>("--budget")
     Description = "Maximum token budget (1000-200000, default 40000). Values outside range are clamped.",
     DefaultValueFactory = _ => 40000,
 };
+var assemblePathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
 
 var assembleCommand = new Command("assemble",
     "Assemble relevant code context within a token budget. " +
@@ -1193,6 +1194,7 @@ var assembleCommand = new Command("assemble",
     assembleQueryOption,
     assembleActiveFileOption,
     assembleBudgetOption,
+    assemblePathFilterOption,
 };
 
 assembleCommand.SetAction(async parseResult =>
@@ -1201,6 +1203,7 @@ assembleCommand.SetAction(async parseResult =>
     var query = parseResult.GetValue(assembleQueryOption)!;
     _ = parseResult.GetValue(assembleActiveFileOption); // Reserved for future active-file priority
     var budget = Math.Clamp(parseResult.GetValue(assembleBudgetOption), 1000, 200000);
+    var pathFilter = parseResult.GetValue(assemblePathFilterOption);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
@@ -1218,13 +1221,13 @@ assembleCommand.SetAction(async parseResult =>
         IReadOnlyList<SymbolSearchResult> searchResults;
         try
         {
-            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, searchQuery, null, 50).ConfigureAwait(false);
+            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, searchQuery, null, 50, pathFilter).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException)
         {
             // FTS5 syntax error — retry with literal phrase
             var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
-            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, null, 50).ConfigureAwait(false);
+            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, null, 50, pathFilter).ConfigureAwait(false);
         }
 
         // Auto contains-match fallback: try each term as *term* individually
@@ -1246,7 +1249,7 @@ assembleCommand.SetAction(async parseResult =>
                 try
                 {
                     searchResults = await scope.Store.SearchSymbolsAsync(
-                        scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                        scope.RepoId, containsGlob.Fts5Query, null, 50, pathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
                 }
                 catch (System.Data.Common.DbException)
                 {
