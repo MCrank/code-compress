@@ -5,6 +5,7 @@ using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeCompress.Integration.Tests;
 
@@ -13,6 +14,7 @@ internal sealed class ProjectDependencyGraphTests : IDisposable
     private SqliteConnection _connection = null!;
     private SqliteSymbolStore _store = null!;
     private IndexEngine _engine = null!;
+    private IGitIgnoreFilter _gitIgnoreFilter = null!;
     private string _tempDir = null!;
     private string _repoId = null!;
 
@@ -41,6 +43,8 @@ internal sealed class ProjectDependencyGraphTests : IDisposable
         var fileHasher = new FileHasher();
         var changeTracker = new ChangeTracker();
         var pathValidator = new PathValidatorService();
+        _gitIgnoreFilter = Substitute.For<IGitIgnoreFilter>();
+        _gitIgnoreFilter.GetIgnoredPathsAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(new HashSet<string>());
 
         _engine = new IndexEngine(
             fileHasher,
@@ -48,6 +52,7 @@ internal sealed class ProjectDependencyGraphTests : IDisposable
             parsers,
             _store,
             pathValidator,
+            _gitIgnoreFilter,
             NullLogger<IndexEngine>.Instance);
 
         _tempDir = Path.Combine(Path.GetTempPath(), "codecompress-test-" + Guid.NewGuid().ToString("N")[..8]);
