@@ -277,7 +277,17 @@ searchCommand.SetAction(async parseResult =>
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
+        IReadOnlyList<SymbolSearchResult> results;
+        try
+        {
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // FTS5 syntax error — retry with literal phrase
+            var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, kind, limit, pathFilter).ConfigureAwait(false);
+        }
 
         // Auto contains-match fallback for plain terms with zero results
         var fallbackUsed = false;
@@ -1205,7 +1215,17 @@ assembleCommand.SetAction(async parseResult =>
             ? Fts5QuerySanitizer.Sanitize(query)
             : tokenizedQuery;
 
-        var searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, searchQuery, null, 50).ConfigureAwait(false);
+        IReadOnlyList<SymbolSearchResult> searchResults;
+        try
+        {
+            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, searchQuery, null, 50).ConfigureAwait(false);
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // FTS5 syntax error — retry with literal phrase
+            var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+            searchResults = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, null, 50).ConfigureAwait(false);
+        }
 
         // Auto contains-match fallback: try each term as *term* individually
         if (searchResults.Count == 0)
@@ -1223,8 +1243,16 @@ assembleCommand.SetAction(async parseResult =>
                     continue;
                 }
 
-                searchResults = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                try
+                {
+                    searchResults = await scope.Store.SearchSymbolsAsync(
+                        scope.RepoId, containsGlob.Fts5Query, null, 50, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                }
+                catch (System.Data.Common.DbException)
+                {
+                    // Skip this term and try the next one
+                    continue;
+                }
 
                 if (searchResults.Count > 0)
                 {

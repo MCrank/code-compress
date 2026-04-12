@@ -226,6 +226,91 @@ internal sealed class ContextToolsTests
         await Assert.That(result).Contains("PathValidator.cs");
     }
 
+    // ── FTS5 error handling ─────────────────────────────────────────────
+
+    [Test]
+    public async Task PrimarySearchDbExceptionRetriesWithLiteralPhrase()
+    {
+        var callCount = 0;
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "PathValidator", "Class", "public class PathValidator"), "src/Validation/PathValidator.cs", 1.0),
+        };
+
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(callInfo =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    throw new Microsoft.Data.Sqlite.SqliteException("fts5: syntax error", 1);
+                }
+
+                return searchResults;
+            });
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Validation/PathValidator.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "Program.cs host config").ConfigureAwait(false);
+
+        // Should succeed via literal phrase retry, not throw
+        await Assert.That(result).Contains("## File Overview");
+        await Assert.That(result).Contains("PathValidator.cs");
+    }
+
+    [Test]
+    public async Task PrimarySearchDbExceptionBothAttemptsFailReturnsStructuredError()
+    {
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Throws(new Microsoft.Data.Sqlite.SqliteException("fts5: syntax error", 1));
+
+        var result = await _tools.AssembleContext("/valid/path", "broken OR query").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("error").GetString()).Contains("FTS5");
+        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("FTS5_QUERY_ERROR");
+    }
+
+    [Test]
+    public async Task ContainsMatchFallbackDbExceptionSkipsTermAndContinues()
+    {
+        var callCount = 0;
+        var searchResults = new List<SymbolSearchResult>
+        {
+            new(CreateSymbol(1, 1, "TenantFilter", "Class", "public class TenantFilter"), "src/Data/TenantFilter.cs", 1.0),
+        };
+
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string?>(p => p == null))
+            .Returns(new List<SymbolSearchResult>());
+
+        _store.SearchSymbolsAsync("test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Is<string?>(p => p != null))
+            .Returns(callInfo =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    // First contains-match term fails
+                    throw new Microsoft.Data.Sqlite.SqliteException("fts5: syntax error", 1);
+                }
+
+                // Second term succeeds
+                return searchResults;
+            });
+        _store.GetFilesByRepoAsync("test-repo-id")
+            .Returns(new List<FileRecord>
+            {
+                new(1, "test-repo-id", "src/Data/TenantFilter.cs", "hash1", 500, 20, 1000, 2000),
+            });
+
+        var result = await _tools.AssembleContext("/valid/path", "broken filter tenant").ConfigureAwait(false);
+
+        // Should succeed — skipped the broken term, found results on the next term
+        await Assert.That(result).Contains("TenantFilter.cs");
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     private static Symbol CreateSymbol(
