@@ -1329,7 +1329,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            whereClause.Append(" AND f.relative_path LIKE @pathPrefix || '%'");
+            whereClause.Append(" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
         }
 
         // Step 1: Get total symbol count for truncation detection
