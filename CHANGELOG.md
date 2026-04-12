@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-04-11
+
+### Added
+- `pathFilter` parameter on `assemble_context` — scopes assembled context to a specific directory prefix (e.g., `src/`), matching the existing pattern from `search_symbols` and `project_outline`. Applies to both MCP Server and CLI (#169)
+- `.gitignore` support during file discovery — `IndexEngine` now automatically excludes files matching `.gitignore` rules via `git check-ignore`. Hardcoded exclusions remain as baseline. Falls back gracefully when git is not installed or directory is not a git repo (#170)
+
+### Fixed
+- `assemble_context` now catches FTS5 query errors instead of returning a generic "An error occurred" message — retries with literal phrase, returns structured `FTS5_QUERY_ERROR` JSON on failure. Same fix applied to CLI `search-symbols` and `assemble` commands (#168)
+- `ValidatePathFilter` now LIKE-escapes `%`, `_`, and `!` characters instead of stripping them, fixing corruption of legitimate paths containing underscores (e.g., `src/my_module/` was silently mangled to `src/mymodule/`). Also adds missing `ESCAPE '!'` clause to `GetProjectOutlineAsync` (#173)
+
 ## [0.13.0] - 2026-03-25
 
 ### Added
