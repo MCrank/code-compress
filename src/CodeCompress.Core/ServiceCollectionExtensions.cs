@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         // Indexing
         services.AddSingleton<IFileHasher, FileHasher>();
         services.AddSingleton<IChangeTracker, ChangeTracker>();
+        services.AddSingleton<IGitIgnoreFilter, GitIgnoreFilter>();
         services.AddSingleton<IIndexEngine, IndexEngine>();
         services.AddSingleton<IProjectRootResolver, ProjectRootResolver>();
 

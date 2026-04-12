@@ -1495,6 +1495,7 @@ static async Task<CliProjectScope> CreateProjectScopeAsync(string path, ServiceP
         serviceProvider.GetRequiredService<IEnumerable<CodeCompress.Core.Parsers.ILanguageParser>>(),
         store,
         pathValidator,
+        serviceProvider.GetRequiredService<IGitIgnoreFilter>(),
         serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<IndexEngine>());
 
     return new CliProjectScope(connection, store, engine, repoId, validatedPath);

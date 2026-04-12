@@ -13,6 +13,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
     private readonly IChangeTracker _changeTracker;
     private readonly IEnumerable<ILanguageParser> _parsers;
     private readonly IPathValidator _pathValidator;
+    private readonly IGitIgnoreFilter _gitIgnoreFilter;
     private readonly IProjectRootResolver _rootResolver;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -22,6 +23,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         IChangeTracker changeTracker,
         IEnumerable<ILanguageParser> parsers,
         IPathValidator pathValidator,
+        IGitIgnoreFilter gitIgnoreFilter,
         IProjectRootResolver rootResolver,
         ILoggerFactory loggerFactory)
     {
@@ -30,6 +32,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         ArgumentNullException.ThrowIfNull(changeTracker);
         ArgumentNullException.ThrowIfNull(parsers);
         ArgumentNullException.ThrowIfNull(pathValidator);
+        ArgumentNullException.ThrowIfNull(gitIgnoreFilter);
         ArgumentNullException.ThrowIfNull(rootResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
@@ -38,6 +41,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         _changeTracker = changeTracker;
         _parsers = parsers;
         _pathValidator = pathValidator;
+        _gitIgnoreFilter = gitIgnoreFilter;
         _rootResolver = rootResolver;
         _loggerFactory = loggerFactory;
     }
@@ -59,6 +63,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
             _parsers,
             store,
             _pathValidator,
+            _gitIgnoreFilter,
             _loggerFactory.CreateLogger<IndexEngine>());
 
         return new ProjectScope(connection, store, engine, repoId, canonicalRoot);
