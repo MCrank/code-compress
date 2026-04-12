@@ -35,7 +35,7 @@ internal sealed class ContextTools
     }
 
     [McpServerTool(Name = "assemble_context")]
-    [Description("One-shot context assembly — searches symbols, retrieves source code, and builds a structured overview within a token budget. Use INSTEAD of manually calling search_symbols + get_symbol + project_outline when starting a task. Reduces 5-10 tool round-trips to 1. Returns Markdown: file tree overview, source code sections grouped by file (with syntax-highlighted fenced blocks), and a metadata footer showing token usage. Large symbols (>16KB) are automatically summarized with signature + child list — use expand_symbol for individual methods. Set activeFile to prioritize the file you're editing. Requires index_project first. Zero-result response is JSON: {query, total_matches: 0, hint}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY.")]
+    [Description("One-shot context assembly — searches symbols, retrieves source code, and builds a structured overview within a token budget. Use INSTEAD of manually calling search_symbols + get_symbol + project_outline when starting a task. Reduces 5-10 tool round-trips to 1. Returns Markdown: file tree overview, source code sections grouped by file (with syntax-highlighted fenced blocks), and a metadata footer showing token usage. Large symbols (>16KB) are automatically summarized with signature + child list — use expand_symbol for individual methods. Set activeFile to prioritize the file you're editing. Requires index_project first. Zero-result response is JSON: {query, total_matches: 0, hint}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, FTS5_QUERY_ERROR.")]
     public async Task<string> AssembleContext(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyApp' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Task description or search terms describing what you're working on (e.g., 'authentication middleware', 'database connection pooling', 'UserService'). Supports FTS5 full-text search — plain terms, prefix*, *contains*, and boolean operators (AND, OR, NOT).")] string query,
@@ -76,8 +76,26 @@ internal sealed class ContextTools
                 ? Fts5QuerySanitizer.Sanitize(query)
                 : tokenizedQuery;
 
-            var searchResults = await scope.Store.SearchSymbolsAsync(
-                scope.RepoId, searchQuery, null, MaxSearchResults).ConfigureAwait(false);
+            IReadOnlyList<SymbolSearchResult> searchResults;
+            try
+            {
+                searchResults = await scope.Store.SearchSymbolsAsync(
+                    scope.RepoId, searchQuery, null, MaxSearchResults).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // FTS5 syntax error — retry with literal phrase
+                var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
+                try
+                {
+                    searchResults = await scope.Store.SearchSymbolsAsync(
+                        scope.RepoId, literalQuery, null, MaxSearchResults).ConfigureAwait(false);
+                }
+                catch (System.Data.Common.DbException)
+                {
+                    return SerializeError("FTS5 query failed — try simpler search terms", "FTS5_QUERY_ERROR");
+                }
+            }
 
             // Auto contains-match fallback: try each term as *term* individually
             if (searchResults.Count == 0)
@@ -95,8 +113,16 @@ internal sealed class ContextTools
                         continue;
                     }
 
-                    searchResults = await scope.Store.SearchSymbolsAsync(
-                        scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                    try
+                    {
+                        searchResults = await scope.Store.SearchSymbolsAsync(
+                            scope.RepoId, containsGlob.Fts5Query, null, MaxSearchResults, null, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                    }
+                    catch (System.Data.Common.DbException)
+                    {
+                        // Skip this term and try the next one
+                        continue;
+                    }
 
                     if (searchResults.Count > 0)
                     {
@@ -109,7 +135,7 @@ internal sealed class ContextTools
             {
                 return JsonSerializer.Serialize(new
                 {
-                    Query = query,
+                    Query = SanitizeForDisplay(query),
                     TotalMatches = 0,
                     TokensUsed = 0,
                     Budget = clampedBudget,
