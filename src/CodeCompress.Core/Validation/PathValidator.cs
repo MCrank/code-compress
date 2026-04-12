@@ -142,9 +142,12 @@ public static class PathValidator
             throw new ArgumentException("Path filter must not contain parent directory traversal.", nameof(pathFilter));
         }
 
-        // Strip LIKE wildcards to prevent unintended pattern matching
-        normalized = normalized.Replace("%", string.Empty, StringComparison.Ordinal)
-                               .Replace("_", string.Empty, StringComparison.Ordinal);
+        // Escape LIKE wildcards to prevent unintended pattern matching.
+        // Uses '!' as the ESCAPE character, matching the ESCAPE '!' clause in SQL queries.
+        // Order matters: escape '!' first so existing '!' aren't double-escaped.
+        normalized = normalized.Replace("!", "!!", StringComparison.Ordinal)
+                               .Replace("%", "!%", StringComparison.Ordinal)
+                               .Replace("_", "!_", StringComparison.Ordinal);
 
         // Strip trailing slash
         normalized = normalized.TrimEnd('/');

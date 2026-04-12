@@ -351,10 +351,35 @@ internal sealed class PathValidatorTests
     }
 
     [Test]
-    public async Task ValidatePathFilterStripsLikeWildcards()
+    public async Task ValidatePathFilterEscapesLikeWildcards()
     {
         var result = PathValidator.ValidatePathFilter("src/%models_");
 
-        await Assert.That(result).IsEqualTo("src/models");
+        await Assert.That(result).IsEqualTo("src/!%models!_");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterPreservesUnderscoresInPaths()
+    {
+        var result = PathValidator.ValidatePathFilter("src/my_module/sub_dir");
+
+        await Assert.That(result).IsEqualTo("src/my!_module/sub!_dir");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterEscapesExclamationMark()
+    {
+        var result = PathValidator.ValidatePathFilter("src/important!/dir");
+
+        await Assert.That(result).IsEqualTo("src/important!!/dir");
+    }
+
+    [Test]
+    public async Task ValidatePathFilterEscapesAllSpecialCharsInOrder()
+    {
+        // ! must be escaped first, then % and _
+        var result = PathValidator.ValidatePathFilter("a!b%c_d");
+
+        await Assert.That(result).IsEqualTo("a!!b!%c!_d");
     }
 }
