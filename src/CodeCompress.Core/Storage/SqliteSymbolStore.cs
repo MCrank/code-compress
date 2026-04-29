@@ -871,7 +871,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             results.Add(new SymbolSearchResult(symbol, reader.GetString(14), reader.GetDouble(15)));
         }
 
-        if (!fuzzy)
+        if (!fuzzy || query.Length == 0)
         {
             return results;
         }

@@ -1446,4 +1446,31 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(names).Contains("UserService");
         await Assert.That(names).Contains("UserServic");
     }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyWithEmptyFtsQueryDoesNotReturnShortNameFalsePositives()
+    {
+        var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        await using var _ = connection.ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/Engine.cs", "abc123", 100, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = (await store.GetFilesByRepoAsync("repo1").ConfigureAwait(false))[0];
+
+        // Plant a symbol with a short name that would match empty-string Levenshtein
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile.Id, "X", "Constant", "double X", null, 0, 10, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "ComputeDistance", "Method", "int ComputeDistance()", null, 10, 50, 2, 4, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // Empty Fts5Query (LIKE-only path) with fuzzy=true must NOT return "X" via Levenshtein("","X")==1
+        var results = await store.SearchSymbolsAsync("repo1", string.Empty, null, 20, nameLikePattern: "%DoesNotExist%", fuzzy: true).ConfigureAwait(false);
+
+        await Assert.That(results).IsEmpty();
+    }
 }
