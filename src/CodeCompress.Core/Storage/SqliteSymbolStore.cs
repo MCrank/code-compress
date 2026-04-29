@@ -454,8 +454,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
             command.CommandText =
                 """
-                INSERT INTO dependencies (file_id, requires_path, resolved_file_id, alias)
-                VALUES (@fileId, @requiresPath, @resolvedFileId, @alias)
+                INSERT INTO dependencies (file_id, requires_path, resolved_file_id, alias, edge_kind)
+                VALUES (@fileId, @requiresPath, @resolvedFileId, @alias, @edgeKind)
                 """;
 #pragma warning restore CA2100
 
@@ -463,6 +463,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var pRequiresPath = command.Parameters.Add(new SqliteParameter("@requiresPath", ""));
             var pResolvedFileId = command.Parameters.Add(new SqliteParameter("@resolvedFileId", 0L));
             var pAlias = command.Parameters.Add(new SqliteParameter("@alias", ""));
+            var pEdgeKind = command.Parameters.Add(new SqliteParameter("@edgeKind", "imports"));
 
             foreach (var dep in deps)
             {
@@ -470,6 +471,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 pRequiresPath.Value = dep.RequiresPath;
                 pResolvedFileId.Value = dep.ResolvedFileId.HasValue ? dep.ResolvedFileId.Value : DBNull.Value;
                 pAlias.Value = (object?)dep.Alias ?? DBNull.Value;
+                pEdgeKind.Value = dep.EdgeKind;
 
                 await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
@@ -490,7 +492,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, file_id, requires_path, resolved_file_id, alias
+            SELECT id, file_id, requires_path, resolved_file_id, alias, edge_kind
             FROM dependencies WHERE file_id = @fileId
             """;
 #pragma warning restore CA2100
@@ -507,7 +509,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt64(1),
                 reader.GetString(2),
                 await reader.IsDBNullAsync(3).ConfigureAwait(false) ? null : reader.GetInt64(3),
-                await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4)));
+                await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? "imports" : reader.GetString(5)));
         }
 
         return results;
@@ -1520,12 +1523,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return new ModuleApi(file, symbols, dependencies);
     }
 
-    public async Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth)
+    public async Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth, string? edgeKind = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(direction);
 
         var clampedDepth = Math.Min(Math.Max(depth, 1), 50);
+        var normalizedEdgeKind = edgeKind;
 
         // Load all files for this repo into a lookup
         var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
@@ -1561,7 +1565,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             frontier.AddRange(allFiles.Select(f => f.Id));
         }
 
-        var isDependencies = string.Equals(direction, "dependencies", StringComparison.OrdinalIgnoreCase);
+        var showDependencies = !string.Equals(direction, "dependents", StringComparison.OrdinalIgnoreCase);
+        var showDependents = !string.Equals(direction, "dependencies", StringComparison.OrdinalIgnoreCase);
 
         for (int level = 0; level < clampedDepth && frontier.Count > 0; level++)
         {
@@ -1581,12 +1586,18 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
                 nodes.Add(currentFile.RelativePath);
 
-                if (isDependencies)
+                if (showDependencies)
                 {
                     var deps = await GetDependenciesByFileAsync(fileId).ConfigureAwait(false);
 
                     foreach (var dep in deps)
                     {
+                        if (normalizedEdgeKind is not null &&
+                            !string.Equals(dep.EdgeKind, normalizedEdgeKind, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         var toPath = dep.RequiresPath;
 
                         if (dep.ResolvedFileId.HasValue && fileById.TryGetValue(dep.ResolvedFileId.Value, out var resolved))
@@ -1600,36 +1611,48 @@ public sealed class SqliteSymbolStore : ISymbolStore
                             nodes.Add(toPath);
                         }
 
-                        edges.Add(new DependencyEdge(currentFile.RelativePath, toPath, dep.Alias));
+                        edges.Add(new DependencyEdge(currentFile.RelativePath, toPath, dep.Alias, dep.EdgeKind));
                     }
                 }
-                else
+
+                if (showDependents)
                 {
-                    // Dependents: find files that depend on the current file
+                    // Dependents: find files that depend on the current file (scoped to this repo)
                     using var command = _connection.CreateCommand();
 
 #pragma warning disable CA2100
                     command.CommandText =
                         """
-                        SELECT d.id, d.file_id, d.requires_path, d.resolved_file_id, d.alias
+                        SELECT d.id, d.file_id, d.requires_path, d.resolved_file_id, d.alias, d.edge_kind
                         FROM dependencies d
+                        JOIN files f2 ON d.file_id = f2.id
                         WHERE d.resolved_file_id = @fileId
+                          AND f2.repo_id = @repoId
                         """;
 #pragma warning restore CA2100
 
                     command.Parameters.AddWithValue("@fileId", fileId);
+                    command.Parameters.AddWithValue("@repoId", repoId);
 
                     using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
 
                     while (await reader.ReadAsync().ConfigureAwait(false))
                     {
+                        var depEdgeKind = await reader.IsDBNullAsync(5).ConfigureAwait(false) ? "imports" : reader.GetString(5);
+
+                        if (normalizedEdgeKind is not null &&
+                            !string.Equals(depEdgeKind, normalizedEdgeKind, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         var depFileId = reader.GetInt64(1);
                         var alias = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4);
 
                         if (fileById.TryGetValue(depFileId, out var dependentFile))
                         {
                             nodes.Add(dependentFile.RelativePath);
-                            edges.Add(new DependencyEdge(dependentFile.RelativePath, currentFile.RelativePath, alias));
+                            edges.Add(new DependencyEdge(dependentFile.RelativePath, currentFile.RelativePath, alias, depEdgeKind));
                             nextFrontier.Add(depFileId);
                         }
                     }
@@ -1642,6 +1665,151 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return new DependencyGraph(
             nodes.OrderBy(n => n, StringComparer.Ordinal).ToList(),
             edges);
+    }
+
+    public async Task<BlastRadiusResult> GetBlastRadiusAsync(string repoId, string? filePath, string? symbolName, int maxDepth = 5)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var clampedDepth = Math.Clamp(maxDepth, 1, 20);
+
+        long? rootFileId = null;
+
+        if (filePath is not null)
+        {
+            var file = await GetFileByPathAsync(repoId, filePath).ConfigureAwait(false);
+            if (file is null)
+            {
+                return new BlastRadiusResult(0, []);
+            }
+
+            rootFileId = file.Id;
+        }
+        else if (symbolName is not null)
+        {
+            var symbol = await GetSymbolByNameAsync(repoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                return new BlastRadiusResult(0, []);
+            }
+
+            rootFileId = symbol.FileId;
+        }
+
+        if (rootFileId is null)
+        {
+            return new BlastRadiusResult(0, []);
+        }
+
+        // Load file lookups
+        var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var fileById = allFiles.ToDictionary(f => f.Id);
+
+        // BFS over reverse edges (dependents)
+        var depths = new List<BlastRadiusDepth>();
+        var visited = new HashSet<long> { rootFileId.Value };
+        var frontier = new List<long> { rootFileId.Value };
+
+        for (int level = 1; level <= clampedDepth && frontier.Count > 0; level++)
+        {
+            var nextFrontier = new List<long>();
+            var levelFiles = new List<string>();
+
+            foreach (var fid in frontier)
+            {
+                using var command = _connection.CreateCommand();
+#pragma warning disable CA2100
+                command.CommandText =
+                    """
+                    SELECT d.file_id FROM dependencies d
+                    JOIN files f ON d.file_id = f.id
+                    WHERE d.resolved_file_id = @fileId
+                      AND f.repo_id = @repoId
+                    """;
+#pragma warning restore CA2100
+                command.Parameters.AddWithValue("@fileId", fid);
+                command.Parameters.AddWithValue("@repoId", repoId);
+
+                using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    var depFileId = reader.GetInt64(0);
+                    if (visited.Add(depFileId) && fileById.TryGetValue(depFileId, out var depFile))
+                    {
+                        levelFiles.Add(depFile.RelativePath);
+                        nextFrontier.Add(depFileId);
+                    }
+                }
+            }
+
+            if (levelFiles.Count > 0)
+            {
+                depths.Add(new BlastRadiusDepth(level, levelFiles.Order(StringComparer.Ordinal).ToList()));
+            }
+
+            frontier = nextFrontier;
+        }
+
+        var totalAffected = depths.Sum(d => d.Files.Count);
+        return new BlastRadiusResult(totalAffected, depths);
+    }
+
+    public async Task<IReadOnlyList<SymbolSummary>> FindUnusedSymbolsAsync(string repoId, int limit = 100)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var clampedLimit = Math.Clamp(limit, 1, 1000);
+
+        // Best-effort: public symbols with no incoming dependency edges and not excluded by heuristics.
+        // Excludes: private symbols, test files (*Test*, *Spec*, *Fixture*), Main entry point,
+        // HTTP controller action attributes, module/constant/namespace kinds.
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT s.name, s.kind, s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.repo_id = @repoId
+              AND s.visibility = 'public'
+              AND s.kind NOT IN ('module', 'constant', 'namespace')
+              AND f.relative_path NOT LIKE '%Test%'
+              AND f.relative_path NOT LIKE '%Spec%'
+              AND f.relative_path NOT LIKE '%Fixture%'
+              AND s.name != 'Main'
+              AND s.signature NOT LIKE '%[HttpGet]%'
+              AND s.signature NOT LIKE '%[HttpPost]%'
+              AND s.signature NOT LIKE '%[HttpPut]%'
+              AND s.signature NOT LIKE '%[HttpDelete]%'
+              AND s.signature NOT LIKE '%[Route]%'
+              AND s.signature NOT LIKE '%[ApiController]%'
+              AND NOT EXISTS (
+                  SELECT 1 FROM dependencies d
+                  JOIN files f2 ON d.file_id = f2.id
+                  WHERE f2.repo_id = @repoId
+                    AND d.resolved_file_id = f.id
+              )
+            ORDER BY s.name
+            LIMIT @limit
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<SymbolSummary>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new SymbolSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2)));
+        }
+
+        return results;
     }
 
     public async Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter)

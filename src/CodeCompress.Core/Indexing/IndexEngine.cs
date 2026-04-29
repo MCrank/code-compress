@@ -490,11 +490,20 @@ public sealed partial class IndexEngine : IIndexEngine
 
         foreach (var d in infos)
         {
-            deps.Add(new Dependency(0, fileId, d.RequirePath, null, d.Alias));
+            deps.Add(new Dependency(0, fileId, d.RequirePath, null, d.Alias, EdgeKindToString(d.EdgeKind)));
         }
 
         return deps;
     }
+
+    private static string EdgeKindToString(EdgeKind kind) => kind switch
+    {
+        EdgeKind.Calls => "calls",
+        EdgeKind.Implements => "implements",
+        EdgeKind.Inherits => "inherits",
+        EdgeKind.References => "references",
+        _ => "imports",
+    };
 
     public static string ComputeRepoId(string canonicalRoot)
     {

@@ -2,4 +2,5 @@ namespace CodeCompress.Core.Models;
 
 public sealed record DependencyInfo(
     string RequirePath,
-    string? Alias);
+    string? Alias,
+    EdgeKind EdgeKind = EdgeKind.Imports);
