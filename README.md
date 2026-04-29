@@ -261,6 +261,13 @@ CodeCompress is designed to stay current with minimal effort:
 | `dependency_graph` | Import/require dependency graph for a file |
 | `project_dependencies` | Inter-project dependency graph (.NET solutions) |
 
+### Dependency Analysis
+
+| Tool | What it does |
+|------|---|
+| `blast_radius` | Reverse BFS — find all files affected if a given file or symbol changes |
+| `find_unused_symbols` | Best-effort dead code detection — public symbols with no incoming references |
+
 ### Server Management
 
 | Tool | What it does |
@@ -268,6 +275,21 @@ CodeCompress is designed to stay current with minimal effort:
 | `stop_server` | Gracefully shut down the server to release resources and DLL locks |
 
 > **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
+
+## MCP Prompts
+
+CodeCompress ships 4 pre-built workflow prompts. In Claude Code and other MCP clients that support prompts, you can invoke them by name to load step-by-step workflow guidance directly into your context.
+
+| Prompt | Workflow |
+|--------|---------|
+| `explore_codebase` | `index_project` → `project_outline` → `search_symbols` → `get_symbol` |
+| `find_impact` | `index_project` → `blast_radius` → `find_references` → `dependency_graph` |
+| `review_changes` | `snapshot_create` → _[make changes]_ → `index_project` → `changes_since` |
+| `debug_symbol` | `search_symbols` → `get_hot_path` → `get_symbol` → `find_references` |
+
+Each prompt returns a `ChatRole.User` message with the full workflow, token estimates per tool, and guidance on when to prefer one tool over another.
+
+> **CLI:** Run `codecompress prompts` to list all prompts, or `codecompress prompts --name explore_codebase` to print the full text of a specific prompt.
 
 ## Supported Languages
 
