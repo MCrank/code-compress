@@ -352,6 +352,20 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var pBodyLineStart = command.Parameters.Add(new SqliteParameter("@bodyLineStart", DBNull.Value));
             var pBodyLineEnd = command.Parameters.Add(new SqliteParameter("@bodyLineEnd", DBNull.Value));
 
+            using var ftsCommand = _connection.CreateCommand();
+            ftsCommand.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100 // Static SQL with parameterized values
+            ftsCommand.CommandText =
+                """
+                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+                SELECT last_insert_rowid(), @ftsName, @ftsParentSymbol, @ftsSignature, @ftsDocComment
+                """;
+#pragma warning restore CA2100
+            var pFtsName = ftsCommand.Parameters.Add(new SqliteParameter("@ftsName", string.Empty));
+            var pFtsParentSymbol = ftsCommand.Parameters.Add(new SqliteParameter("@ftsParentSymbol", DBNull.Value));
+            var pFtsSignature = ftsCommand.Parameters.Add(new SqliteParameter("@ftsSignature", string.Empty));
+            var pFtsDocComment = ftsCommand.Parameters.Add(new SqliteParameter("@ftsDocComment", DBNull.Value));
+
             foreach (var symbol in symbols)
             {
                 pFileId.Value = symbol.FileId;
@@ -369,6 +383,12 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 pBodyLineEnd.Value = symbol.BodyLineEnd.HasValue ? (object)symbol.BodyLineEnd.Value : DBNull.Value;
 
                 await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+                pFtsName.Value = IdentifierSplitter.Split(symbol.Name);
+                pFtsParentSymbol.Value = (object?)symbol.ParentSymbol ?? DBNull.Value;
+                pFtsSignature.Value = symbol.Signature;
+                pFtsDocComment.Value = (object?)symbol.DocComment ?? DBNull.Value;
+                await ftsCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await transaction.CommitAsync().ConfigureAwait(false);
@@ -421,15 +441,34 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     public async Task DeleteSymbolsByFileAsync(long fileId)
     {
-        using var command = _connection.CreateCommand();
+        var transaction = await _connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var _ = transaction.ConfigureAwait(false);
 
+        try
+        {
+            using var ftsCommand = _connection.CreateCommand();
+            ftsCommand.Transaction = (SqliteTransaction)transaction;
 #pragma warning disable CA2100
-        command.CommandText = "DELETE FROM symbols WHERE file_id = @fileId";
+            ftsCommand.CommandText = "DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE file_id = @fileId)";
 #pragma warning restore CA2100
+            ftsCommand.Parameters.AddWithValue("@fileId", fileId);
+            await ftsCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-        command.Parameters.AddWithValue("@fileId", fileId);
+            using var command = _connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100
+            command.CommandText = "DELETE FROM symbols WHERE file_id = @fileId";
+#pragma warning restore CA2100
+            command.Parameters.AddWithValue("@fileId", fileId);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await transaction.CommitAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     // ── Dependencies ────────────────────────────────────────────────────
@@ -690,7 +729,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Search ──────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null)
+    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null, bool fuzzy = false)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(query);
@@ -832,7 +871,137 @@ public sealed class SqliteSymbolStore : ISymbolStore
             results.Add(new SymbolSearchResult(symbol, reader.GetString(14), reader.GetDouble(15)));
         }
 
-        return results;
+        if (!fuzzy || query.Length == 0)
+        {
+            return results;
+        }
+
+        var fuzzyResults = await FuzzySearchAsync(repoId, query, kind, clampedLimit, pathFilter).ConfigureAwait(false);
+        if (fuzzyResults.Count == 0)
+        {
+            return results;
+        }
+
+        var existingIds = new HashSet<long>(results.Select(static r => r.Symbol.Id));
+        var merged = new List<SymbolSearchResult>(results);
+        merged.AddRange(fuzzyResults.Where(r => !existingIds.Contains(r.Symbol.Id)));
+
+        return merged.Count <= clampedLimit ? merged : merged[..clampedLimit];
+    }
+
+    private async Task<IReadOnlyList<SymbolSearchResult>> FuzzySearchAsync(
+        string repoId, string query, string? kind, int limit, string? pathFilter)
+    {
+        var sql = new StringBuilder(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end, f.relative_path
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.repo_id = @repoId
+            """);
+
+        if (kind is not null)
+        {
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                sql.Append(" AND s.kind IN (@kind, @kindEnum)");
+            }
+            else
+            {
+                sql.Append(" AND s.kind = @kind");
+            }
+        }
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" LIMIT 10000");
+
+#pragma warning disable CA2100 // SQL built from static literals and parameterized placeholders only
+        using var command = _connection.CreateCommand();
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        if (kind is not null)
+        {
+            command.Parameters.AddWithValue("@kind", kind);
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                command.Parameters.AddWithValue("@kindEnum", nameof(SymbolKind.Enum));
+            }
+        }
+
+        if (pathFilter is not null)
+        {
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var candidates = new List<(SymbolSearchResult Result, int Distance)>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var name = reader.GetString(2);
+            var distance = ComputeLevenshteinDistance(query, name);
+            if (distance is > 0 and <= 2)
+            {
+                var symbol = new Symbol(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    name,
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7),
+                    reader.GetInt32(8),
+                    reader.GetInt32(9),
+                    reader.GetString(10),
+                    await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                    await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                    await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
+
+                candidates.Add((new SymbolSearchResult(symbol, reader.GetString(14), distance), distance));
+            }
+        }
+
+        return candidates
+            .OrderBy(static c => c.Distance)
+            .Take(limit)
+            .Select(static c => c.Result)
+            .ToList();
+    }
+
+    private static int ComputeLevenshteinDistance(string s, string t)
+    {
+        if (s.Length == 0) return t.Length;
+        if (t.Length == 0) return s.Length;
+
+        var prev = new int[t.Length + 1];
+        var curr = new int[t.Length + 1];
+
+        for (var j = 0; j <= t.Length; j++) prev[j] = j;
+
+        for (var i = 1; i <= s.Length; i++)
+        {
+            curr[0] = i;
+            for (var j = 1; j <= t.Length; j++)
+            {
+                var cost = s[i - 1] == t[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
+            }
+
+            (prev, curr) = (curr, prev);
+        }
+
+        return prev[t.Length];
     }
 
     public async Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null)

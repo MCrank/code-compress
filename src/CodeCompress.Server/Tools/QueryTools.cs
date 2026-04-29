@@ -526,13 +526,14 @@ internal sealed class QueryTools
     }
 
     [McpServerTool(Name = "search_symbols")]
-    [Description("Search the symbol index for classes, methods, functions, types, interfaces, enums, and other code structure. Use this for navigating to named symbols — NOT for searching file contents, string literals, comments, or configuration values (use search_text for those). Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestions' array with ready-to-use queries — run each one separately).")]
+    [Description("Search the symbol index for classes, methods, functions, types, interfaces, enums, and other code structure. Use this for navigating to named symbols — NOT for searching file contents, string literals, comments, or configuration values (use search_text for those). Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Symbol names are indexed with camelCase/PascalCase/underscore splitting so 'user profile' matches 'getUserProfile', 'UserProfileService', 'user_profile_handler'. Enable fuzzy=true for typo-tolerant matching (Levenshtein distance ≤ 2) on short whole symbol names (e.g., 'Reopsitory' → 'Repository'); for compound names with a typo, split into tokens instead (e.g., 'levenshtein distance' finds 'ComputeLevenshteinDistance'). Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Use get_symbol or expand_symbol to retrieve full source code of matched symbols. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Chain with get_symbol using the 'name' field (or 'parent:name' for nested symbols). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestions' array with ready-to-use queries — run each one separately).")]
     public async Task<string> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
-        [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*)")] string query,
+        [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*). Multi-word queries like 'user profile' match camelCase/PascalCase symbols such as 'getUserProfile'.")] string query,
         [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
         [Description("Filter results to files under this relative directory path. Scopes results to only files within the specified directory. Examples: 'src/' (exclude tests), 'src/Core/Models' (specific module), 'lib/' (library code only).")] string? pathFilter = null,
         [Description("Maximum results to return (1-100, default 20). Values outside this range are clamped.")] int limit = 20,
+        [Description("Enable fuzzy (typo-tolerant) matching using Levenshtein distance ≤ 2. Merges fuzzy candidates with FTS5 results. Default false. Best for short, whole symbol names with a 1-2 character typo (e.g., 'Reopsitory' → 'Repository'). Does NOT help with partial names or compound-word typos — for those, split the query into tokens instead (e.g., 'levenshtein distance' to find 'ComputeLevenshteinDistance').")] bool fuzzy = false,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -620,14 +621,14 @@ internal sealed class QueryTools
             try
             {
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, glob.Fts5Query, kind, clampedLimit, validatedPathFilter, glob.SqlLikePattern).ConfigureAwait(false);
+                    scope.RepoId, glob.Fts5Query, kind, clampedLimit, validatedPathFilter, glob.SqlLikePattern, fuzzy).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException)
             {
                 // FTS5 syntax error — retry with literal phrase
                 var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, literalQuery, kind, clampedLimit, validatedPathFilter).ConfigureAwait(false);
+                    scope.RepoId, literalQuery, kind, clampedLimit, validatedPathFilter, fuzzy: fuzzy).ConfigureAwait(false);
             }
 
             // Auto contains-match fallback: if FTS5 returned 0 results and query is a plain term,
@@ -637,7 +638,7 @@ internal sealed class QueryTools
             {
                 var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
                 results = await scope.Store.SearchSymbolsAsync(
-                    scope.RepoId, containsGlob.Fts5Query, kind, clampedLimit, validatedPathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                    scope.RepoId, containsGlob.Fts5Query, kind, clampedLimit, validatedPathFilter, containsGlob.SqlLikePattern, fuzzy).ConfigureAwait(false);
                 fallbackUsed = results.Count > 0;
             }
 
