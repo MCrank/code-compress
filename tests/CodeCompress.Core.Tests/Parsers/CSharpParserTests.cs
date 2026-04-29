@@ -1716,4 +1716,144 @@ internal sealed class CSharpParserTests
         // Dependencies from using statements
         await Assert.That(result.Dependencies.Count).IsGreaterThanOrEqualTo(2);
     }
+
+    // ── Body line detection (tree-sitter) ────────────────────────
+
+    [Test]
+    public async Task MethodBodyLinesPopulated()
+    {
+        var source = """
+            public class Foo
+            {
+                public void Bar()
+                {
+                    int x = 1;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Name == "Bar");
+        await Assert.That(method.BodyLineStart).IsEqualTo(5);
+        await Assert.That(method.BodyLineEnd).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task ClassBodyLinesPopulated()
+    {
+        var source = """
+            public class Foo
+            {
+                public void Bar()
+                {
+                    int x = 1;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Kind == SymbolKind.Class);
+        await Assert.That(cls.BodyLineStart).IsEqualTo(3);
+        await Assert.That(cls.BodyLineEnd).IsEqualTo(6);
+    }
+
+    [Test]
+    public async Task SingleLineMethodBodyLinesNull()
+    {
+        var source = """
+            public class Foo
+            {
+                public void Bar() => DoSomething();
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Name == "Bar");
+        await Assert.That(method.BodyLineStart).IsNull();
+        await Assert.That(method.BodyLineEnd).IsNull();
+    }
+
+    [Test]
+    public async Task AbstractMethodBodyLinesNull()
+    {
+        var source = """
+            public abstract class Foo
+            {
+                public abstract void Bar();
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Name == "Bar");
+        await Assert.That(method.BodyLineStart).IsNull();
+        await Assert.That(method.BodyLineEnd).IsNull();
+    }
+
+    [Test]
+    public async Task ConstructorBodyLinesPopulated()
+    {
+        var source = """
+            public class Foo
+            {
+                public Foo()
+                {
+                    _x = 0;
+                    _y = 1;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var ctor = result.Symbols.First(s => s.Kind == SymbolKind.Method && s.Name == "Foo");
+        await Assert.That(ctor.BodyLineStart).IsEqualTo(5);
+        await Assert.That(ctor.BodyLineEnd).IsEqualTo(6);
+    }
+
+    [Test]
+    public async Task EmptyMethodBodyLinesNull()
+    {
+        var source = """
+            public class Foo
+            {
+                public void Bar()
+                {
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var method = result.Symbols.First(s => s.Name == "Bar");
+        await Assert.That(method.BodyLineStart).IsNull();
+        await Assert.That(method.BodyLineEnd).IsNull();
+    }
+
+    [Test]
+    public async Task BodyLinesPopulatedForClassAndMethod()
+    {
+        var source = """
+            public class Foo
+            {
+                public void Bar()
+                {
+                    int x = 1;
+                }
+            }
+            """;
+
+        var result = Parse(source);
+
+        var cls = result.Symbols.First(s => s.Name == "Foo");
+        await Assert.That(cls.BodyLineStart).IsEqualTo(3);
+        await Assert.That(cls.BodyLineEnd).IsEqualTo(6);
+
+        var method = result.Symbols.First(s => s.Name == "Bar");
+        await Assert.That(method.BodyLineStart).IsEqualTo(5);
+        await Assert.That(method.BodyLineEnd).IsEqualTo(5);
+    }
 }

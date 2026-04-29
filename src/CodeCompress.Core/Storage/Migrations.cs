@@ -42,7 +42,9 @@ public static class Migrations
             line_start INTEGER NOT NULL,
             line_end INTEGER NOT NULL,
             visibility TEXT NOT NULL,
-            doc_comment TEXT
+            doc_comment TEXT,
+            body_line_start INTEGER,
+            body_line_end INTEGER
         )
         """,
         """
@@ -118,6 +120,41 @@ public static class Migrations
 
         // Upgrade FTS5 table if it predates the parent_symbol column
         await UpgradeFts5IfNeededAsync(connection).ConfigureAwait(false);
+
+        // Add body line columns to existing databases that predate this migration
+        await AddBodyLineColumnsIfNeededAsync(connection).ConfigureAwait(false);
+    }
+
+    private static async Task AddBodyLineColumnsIfNeededAsync(SqliteConnection connection)
+    {
+        using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='symbols'";
+        if (await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) is not string symbolsSql
+            || symbolsSql.Contains("body_line_start", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var alterDdl = new[]
+        {
+            "ALTER TABLE symbols ADD COLUMN body_line_start INTEGER",
+            "ALTER TABLE symbols ADD COLUMN body_line_end INTEGER",
+        };
+
+        var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = transaction.ConfigureAwait(false);
+
+        foreach (var ddl in alterDdl)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100 // DDL statements are static literals, not user input
+            command.CommandText = ddl;
+#pragma warning restore CA2100
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync().ConfigureAwait(false);
     }
 
     private static async Task UpgradeFts5IfNeededAsync(SqliteConnection connection)

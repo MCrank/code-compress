@@ -1,421 +1,230 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using CodeCompress.Core.Models;
+using TreeSitter;
 
 namespace CodeCompress.Core.Parsers;
 
-public sealed partial class PythonParser : ILanguageParser
+public sealed class PythonParser : ILanguageParser
 {
+    private const string SymbolQuery = """
+        [
+          (class_definition name: (identifier) @name body: (block) @body) @decl
+          (function_definition name: (identifier) @name body: (block) @body) @decl
+        ]
+        """;
+
+    private static readonly HashSet<string> ContainerNodeTypes = new(StringComparer.Ordinal)
+    {
+        "class_definition"
+    };
+
     public string LanguageId => "python";
 
     public IReadOnlyList<string> FileExtensions { get; } = [".py", ".pyi"];
 
-    [GeneratedRegex(@"^\s*import\s+(.+)$")]
-    private static partial Regex ImportPattern();
-
-    [GeneratedRegex(@"^\s*from\s+([\w.]+)\s+import\s+(.+)$")]
-    private static partial Regex FromImportPattern();
-
-    [GeneratedRegex(@"^(\s*)(?:@\w+.*\n)*\s*(?:async\s+)?def\s+(\w+)\s*\((.*)$")]
-    private static partial Regex DefPattern();
-
-    [GeneratedRegex(@"^(\s*)class\s+(\w+)(.*):\s*$")]
-    private static partial Regex ClassPattern();
-
-    [GeneratedRegex(@"^([A-Z][A-Z_0-9]+)\s*(?::\s*\w[^=]*)?\s*=\s*(.+)$")]
-    private static partial Regex ConstantPattern();
-
     public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
     {
         if (content.IsEmpty)
-        {
             return new ParseResult([], []);
-        }
 
-        var text = Encoding.UTF8.GetString(content);
-        var lines = text.Split('\n');
+        var bytes = content.ToArray();
+        var text = Encoding.UTF8.GetString(bytes);
+
+        using var language = new Language("python");
+        using var parser = new Parser(language);
+        using var tree = parser.Parse(text);
+        if (tree is null)
+            return new ParseResult([], []);
+
         var symbols = new List<SymbolInfo>();
-        var dependencies = new List<DependencyInfo>();
-        var lineByteOffsets = ComputeLineByteOffsets(content);
-        var pendingSymbols = new List<PendingSymbol>();
-        var decoratorLines = new List<string>();
-        var inTripleQuote = false;
-        var tripleQuoteChar = '"';
+        var deps = new List<DependencyInfo>();
 
-        for (var i = 0; i < lines.Length; i++)
+        ExtractImports(tree.RootNode, language, deps);
+
+        var declMap = new Dictionary<int, (Node Decl, Node? Name, Node? Body)>();
+        using var symQuery = new Query(language, SymbolQuery);
+        foreach (var match in symQuery.Execute(tree.RootNode).Matches)
         {
-            var line = lines[i].TrimEnd('\r');
-            var trimmed = line.Trim();
-            var lineNumber = i + 1;
-            var byteOffset = lineByteOffsets[i];
-            var indent = GetIndentLevel(line);
-
-            // Handle triple-quoted strings (docstrings and multi-line strings)
-            if (inTripleQuote)
+            Node? decl = null, name = null, body = null;
+            foreach (var cap in match.Captures)
             {
-                var endMarker = new string(tripleQuoteChar, 3);
-                if (trimmed.Contains(endMarker, StringComparison.Ordinal))
+                switch (cap.Name)
                 {
-                    inTripleQuote = false;
+                    case "decl": decl = cap.Node; break;
+                    case "name": name = cap.Node; break;
+                    case "body": body = cap.Node; break;
                 }
+            }
+            if (decl is null) continue;
 
-                continue;
+            var key = decl.StartIndex;
+            if (!declMap.TryGetValue(key, out var existing))
+                declMap[key] = (decl, name, body);
+            else
+                declMap[key] = (existing.Decl, existing.Name ?? name, existing.Body ?? body);
+        }
+
+        foreach (var (_, (decl, nameNode, body)) in declMap.OrderBy(kv => kv.Key))
+        {
+            var symbolName = nameNode?.Text;
+            if (string.IsNullOrEmpty(symbolName)) continue;
+
+            // Use decorated_definition as effective node if the decl is decorated
+            var effectiveNode = decl.Parent?.Type == "decorated_definition" ? decl.Parent : decl;
+
+            var kind = GetKind(decl);
+            var lineStart = effectiveNode.StartPosition.Row + 1;
+            var lineEnd = effectiveNode.EndPosition.Row + 1;
+            var sig = ExtractSignature(effectiveNode, body, bytes);
+            var parentName = FindParentName(decl, declMap);
+            var vis = symbolName.StartsWith('_') ? Visibility.Private : Visibility.Public;
+
+            int? bodyLineStart = null, bodyLineEnd = null;
+            if (body is not null)
+            {
+                var bls = body.StartPosition.Row + 2;
+                var ble = body.EndPosition.Row;
+                if (bls <= ble) { bodyLineStart = bls; bodyLineEnd = ble; }
             }
 
-            // Check for triple-quote start
-            if (trimmed.StartsWith("\"\"\"", StringComparison.Ordinal) || trimmed.StartsWith("'''", StringComparison.Ordinal))
+            symbols.Add(new SymbolInfo(
+                Name: symbolName,
+                Kind: kind,
+                Signature: sig,
+                ParentSymbol: parentName,
+                ByteOffset: effectiveNode.StartIndex,
+                ByteLength: effectiveNode.EndIndex - effectiveNode.StartIndex,
+                LineStart: lineStart,
+                LineEnd: lineEnd,
+                Visibility: vis,
+                DocComment: null,
+                BodyLineStart: bodyLineStart,
+                BodyLineEnd: bodyLineEnd));
+        }
+
+        ExtractModuleConstants(tree.RootNode, bytes, symbols);
+
+        return new ParseResult(symbols, deps);
+    }
+
+    private static void ExtractImports(Node root, Language language, List<DependencyInfo> deps)
+    {
+        using var q = new Query(language, "[(import_statement) @imp (import_from_statement) @imp]");
+        foreach (var cap in q.Execute(root).Captures)
+        {
+            var nodeText = cap.Node.Text.Trim();
+            if (nodeText.StartsWith("import ", StringComparison.Ordinal))
             {
-                tripleQuoteChar = trimmed[0];
-                var endMarker = new string(tripleQuoteChar, 3);
-                // Check if it closes on the same line (after the opening)
-                var afterOpen = trimmed[3..];
-                if (!afterOpen.Contains(endMarker, StringComparison.Ordinal))
+                var rest = nodeText["import ".Length..];
+                foreach (var part in rest.Split(','))
                 {
-                    inTripleQuote = true;
+                    var name = part.Trim().Split(' ')[0];
+                    if (!string.IsNullOrEmpty(name))
+                        deps.Add(new DependencyInfo(RequirePath: name, Alias: null));
                 }
-
-                // If this is a docstring for a pending symbol, capture it
-                if (pendingSymbols.Count > 0)
+            }
+            else if (nodeText.StartsWith("from ", StringComparison.Ordinal))
+            {
+                var rest = nodeText["from ".Length..];
+                var importIdx = rest.IndexOf(" import ", StringComparison.Ordinal);
+                if (importIdx >= 0)
                 {
-                    var lastPending = pendingSymbols[^1];
-                    if (lastPending.DocComment is null && lastPending.LineStart == lineNumber - 1)
-                    {
-                        // Extract first meaningful line of docstring
-                        var docText = afterOpen.TrimEnd(tripleQuoteChar, ' ');
-                        if (string.IsNullOrWhiteSpace(docText) && i + 1 < lines.Length)
-                        {
-                            docText = lines[i + 1].Trim().TrimEnd(tripleQuoteChar, ' ');
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(docText))
-                        {
-                            lastPending.DocComment = docText;
-                        }
-                    }
+                    var modulePath = rest[..importIdx].Trim();
+                    var cleanPath = modulePath.TrimStart('.');
+                    if (string.IsNullOrEmpty(cleanPath)) cleanPath = modulePath;
+                    deps.Add(new DependencyInfo(RequirePath: cleanPath.Replace('.', '/'), Alias: null));
                 }
-
-                continue;
             }
+        }
+    }
 
-            // Single-line comments
-            if (trimmed.StartsWith('#'))
+    private static void ExtractModuleConstants(Node root, byte[] bytes, List<SymbolInfo> symbols)
+    {
+        var children = root.Children;
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            string? name = null;
+
+            if (child.Type is "assignment" or "annotated_assignment")
             {
-                continue;
+                name = FindFirstIdentifier(child);
             }
-
-            if (string.IsNullOrWhiteSpace(trimmed))
+            else if (child.Type == "expression_statement")
             {
-                continue;
+                // Older grammar versions wrap assignment in expression_statement
+                var inner = child.Children.Count > 0 ? child.Children[0] : null;
+                if (inner?.Type == "assignment")
+                    name = FindFirstIdentifier(inner);
             }
 
-            // Close pending symbols whose indentation scope has ended
-            ClosePendingSymbols(indent, lineNumber, byteOffset, line, pendingSymbols, symbols);
+            if (name is null || !IsAllCaps(name)) continue;
 
-            // Collect decorators
-            if (trimmed.StartsWith('@'))
-            {
-                decoratorLines.Add(trimmed);
-                continue;
-            }
-
-            _ = TryMatchImport(trimmed, dependencies)
-                || TryMatchFromImport(trimmed, dependencies)
-                || TryMatchClass(line, trimmed, lineNumber, byteOffset, decoratorLines, pendingSymbols)
-                || TryMatchDef(line, trimmed, lineNumber, byteOffset, decoratorLines, pendingSymbols)
-                || TryMatchConstant(trimmed, lineNumber, byteOffset, symbols);
-
-            decoratorLines.Clear();
-        }
-
-        // Close any remaining pending symbols
-        if (pendingSymbols.Count > 0)
-        {
-            var lastLine = lines.Length;
-            var lastOffset = lineByteOffsets.Length > lastLine - 1 ? lineByteOffsets[lastLine - 1] : lineByteOffsets[^1];
-            var lastLineText = lines.Length > 0 ? lines[^1] : string.Empty;
-            ClosePendingSymbols(0, lastLine, lastOffset, lastLineText, pendingSymbols, symbols);
-        }
-
-        return new ParseResult(symbols, dependencies);
-    }
-
-    private static bool TryMatchImport(string trimmed, List<DependencyInfo> dependencies)
-    {
-        var match = ImportPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var modules = match.Groups[1].Value.Split(',');
-        foreach (var mod in modules)
-        {
-            var cleaned = mod.Trim().Split(' ')[0]; // Handle "import os as operating_system"
-            if (!string.IsNullOrEmpty(cleaned))
-            {
-                dependencies.Add(new DependencyInfo(RequirePath: cleaned, Alias: null));
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryMatchFromImport(string trimmed, List<DependencyInfo> dependencies)
-    {
-        var match = FromImportPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var modulePath = match.Groups[1].Value;
-        // Convert relative imports: .entity -> entity, ..models -> models
-        var cleanPath = modulePath.TrimStart('.');
-        if (string.IsNullOrEmpty(cleanPath))
-        {
-            cleanPath = modulePath; // Keep dots if no module name follows
-        }
-
-        dependencies.Add(new DependencyInfo(RequirePath: cleanPath.Replace('.', '/'), Alias: null));
-        return true;
-    }
-
-    private static bool TryMatchClass(
-        string line, string trimmed, int lineNumber, int byteOffset,
-        List<string> decoratorLines, List<PendingSymbol> pendingSymbols)
-    {
-        var match = ClassPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var name = match.Groups[2].Value;
-        var rest = match.Groups[3].Value.Trim();
-        var indent = GetIndentLevel(line);
-
-        var signatureBuilder = new StringBuilder();
-        foreach (var decorator in decoratorLines)
-        {
-            signatureBuilder.Append(decorator).Append(' ');
-        }
-
-        signatureBuilder.Append("class ").Append(name);
-        if (!string.IsNullOrEmpty(rest))
-        {
-            signatureBuilder.Append(rest.TrimEnd(':').TrimEnd());
-        }
-
-        var signature = signatureBuilder.ToString().TrimEnd();
-        var visibility = name.StartsWith('_') ? Visibility.Private : Visibility.Public;
-        var parentName = GetCurrentParentName(pendingSymbols, indent);
-
-        pendingSymbols.Add(new PendingSymbol(
-            Name: name,
-            Kind: SymbolKind.Class,
-            Signature: signature,
-            ParentName: parentName,
-            ByteOffset: byteOffset,
-            LineStart: lineNumber,
-            Visibility: visibility,
-            DocComment: null,
-            IndentLevel: indent,
-            IsContainer: true));
-
-        return true;
-    }
-
-    private static bool TryMatchDef(
-        string line, string trimmed, int lineNumber, int byteOffset,
-        List<string> decoratorLines, List<PendingSymbol> pendingSymbols)
-    {
-        // Match def or async def
-        if (!trimmed.Contains("def ", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var indent = GetIndentLevel(line);
-
-        // Extract the function name
-        var defIdx = trimmed.IndexOf("def ", StringComparison.Ordinal);
-        if (defIdx < 0)
-        {
-            return false;
-        }
-
-        var afterDef = trimmed[(defIdx + 4)..];
-        var parenIdx = afterDef.IndexOf('(', StringComparison.Ordinal);
-        if (parenIdx < 0)
-        {
-            return false;
-        }
-
-        var name = afterDef[..parenIdx].Trim();
-        if (string.IsNullOrEmpty(name))
-        {
-            return false;
-        }
-
-        // Build signature
-        var signatureBuilder = new StringBuilder();
-        foreach (var decorator in decoratorLines)
-        {
-            signatureBuilder.Append(decorator).Append(' ');
-        }
-
-        // Trim the colon and body from the signature
-        var sigLine = trimmed.TrimEnd();
-        var colonIdx = sigLine.LastIndexOf(':');
-        if (colonIdx > parenIdx + defIdx + 4)
-        {
-            sigLine = sigLine[..colonIdx].TrimEnd();
-        }
-
-        signatureBuilder.Append(sigLine);
-        var signature = signatureBuilder.ToString();
-
-        var parentName = GetCurrentParentName(pendingSymbols, indent);
-        var kind = parentName is not null ? SymbolKind.Method : SymbolKind.Function;
-        var visibility = name.StartsWith('_') ? Visibility.Private : Visibility.Public;
-
-        pendingSymbols.Add(new PendingSymbol(
-            Name: name,
-            Kind: kind,
-            Signature: signature,
-            ParentName: parentName,
-            ByteOffset: byteOffset,
-            LineStart: lineNumber,
-            Visibility: visibility,
-            DocComment: null,
-            IndentLevel: indent,
-            IsContainer: false));
-
-        return true;
-    }
-
-    private static bool TryMatchConstant(
-        string trimmed, int lineNumber, int byteOffset, List<SymbolInfo> symbols)
-    {
-        // Only match at module level (no indentation check needed — constants are top-level)
-        var match = ConstantPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var name = match.Groups[1].Value;
-
-        symbols.Add(new SymbolInfo(
-            Name: name,
-            Kind: SymbolKind.Constant,
-            Signature: trimmed.Trim(),
-            ParentSymbol: null,
-            ByteOffset: byteOffset,
-            ByteLength: Encoding.UTF8.GetByteCount(trimmed),
-            LineStart: lineNumber,
-            LineEnd: lineNumber,
-            Visibility: Visibility.Public,
-            DocComment: null));
-
-        return true;
-    }
-
-    private static void ClosePendingSymbols(
-        int currentIndent, int lineNumber, int byteOffset,
-        string line, List<PendingSymbol> pendingSymbols, List<SymbolInfo> symbols)
-    {
-        for (var i = pendingSymbols.Count - 1; i >= 0; i--)
-        {
-            var pending = pendingSymbols[i];
-            if (currentIndent <= pending.IndentLevel && lineNumber > pending.LineStart)
-            {
-                var byteLength = byteOffset - pending.ByteOffset;
-                if (byteLength <= 0)
-                {
-                    byteLength = Encoding.UTF8.GetByteCount(line);
-                }
-
-                symbols.Add(new SymbolInfo(
-                    Name: pending.Name,
-                    Kind: pending.Kind,
-                    Signature: pending.Signature,
-                    ParentSymbol: pending.ParentName,
-                    ByteOffset: pending.ByteOffset,
-                    ByteLength: byteLength,
-                    LineStart: pending.LineStart,
-                    LineEnd: lineNumber - 1,
-                    Visibility: pending.Visibility,
-                    DocComment: pending.DocComment));
-
-                pendingSymbols.RemoveAt(i);
-            }
+            var sig = Encoding.UTF8.GetString(bytes, child.StartIndex, child.EndIndex - child.StartIndex).Trim();
+            symbols.Add(new SymbolInfo(
+                Name: name,
+                Kind: SymbolKind.Constant,
+                Signature: sig,
+                ParentSymbol: null,
+                ByteOffset: child.StartIndex,
+                ByteLength: child.EndIndex - child.StartIndex,
+                LineStart: child.StartPosition.Row + 1,
+                LineEnd: child.EndPosition.Row + 1,
+                Visibility: Visibility.Public,
+                DocComment: null));
         }
     }
 
-    private static string? GetCurrentParentName(List<PendingSymbol> pendingSymbols, int currentIndent)
+    private static string? FindFirstIdentifier(Node node)
     {
-        for (var i = pendingSymbols.Count - 1; i >= 0; i--)
+        var children = node.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            if (pendingSymbols[i].IndentLevel < currentIndent && pendingSymbols[i].Kind == SymbolKind.Class)
-            {
-                return pendingSymbols[i].Name;
-            }
+            if (children[i].Type == "identifier")
+                return children[i].Text;
         }
-
         return null;
     }
 
-    private static int GetIndentLevel(string line)
-    {
-        var count = 0;
-        foreach (var ch in line)
-        {
-            if (ch == ' ')
-            {
-                count++;
-            }
-            else if (ch == '\t')
-            {
-                count += 4;
-            }
-            else
-            {
-                break;
-            }
-        }
+    private static bool IsAllCaps(string name) =>
+        name.Length >= 1 && char.IsUpper(name[0]) &&
+        name.All(c => char.IsUpper(c) || c == '_' || char.IsDigit(c));
 
-        return count;
+    private static SymbolKind GetKind(Node decl)
+    {
+        if (decl.Type == "class_definition") return SymbolKind.Class;
+
+        var current = decl.Parent;
+        while (current is not null)
+        {
+            if (current.Type == "class_definition") return SymbolKind.Method;
+            if (current.Type == "module") break;
+            current = current.Parent;
+        }
+        return SymbolKind.Function;
     }
 
-    private static int[] ComputeLineByteOffsets(ReadOnlySpan<byte> content)
+    private static string ExtractSignature(Node effectiveNode, Node? body, byte[] bytes)
     {
-        var offsets = new List<int> { 0 };
-        for (var i = 0; i < content.Length; i++)
-        {
-            if (content[i] == (byte)'\n')
-            {
-                offsets.Add(i + 1);
-            }
-        }
-
-        return [.. offsets];
+        var start = effectiveNode.StartIndex;
+        var end = body is not null ? body.StartIndex : effectiveNode.EndIndex;
+        if (end <= start) end = effectiveNode.EndIndex;
+        return Encoding.UTF8.GetString(bytes, start, end - start).TrimEnd();
     }
 
-    private sealed class PendingSymbol(
-        string Name, SymbolKind Kind, string Signature, string? ParentName,
-        int ByteOffset, int LineStart, Visibility Visibility, string? DocComment,
-        int IndentLevel, bool IsContainer)
+    private static string? FindParentName(
+        Node decl,
+        Dictionary<int, (Node Decl, Node? Name, Node? Body)> declMap)
     {
-        public string Name { get; } = Name;
-        public SymbolKind Kind { get; } = Kind;
-        public string Signature { get; } = Signature;
-        public string? ParentName { get; } = ParentName;
-        public int ByteOffset { get; } = ByteOffset;
-        public int LineStart { get; } = LineStart;
-        public Visibility Visibility { get; } = Visibility;
-        public string? DocComment { get; set; } = DocComment;
-        public int IndentLevel { get; } = IndentLevel;
-        public bool IsContainer { get; } = IsContainer;
+        var current = decl.Parent;
+        while (current is not null)
+        {
+            if (ContainerNodeTypes.Contains(current.Type))
+                return declMap.TryGetValue(current.StartIndex, out var e) && e.Name is not null
+                    ? e.Name.Text : null;
+            if (current.Type == "module") return null;
+            current = current.Parent;
+        }
+        return null;
     }
 }

@@ -319,4 +319,40 @@ internal sealed class TypeScriptJavaScriptParserTests
         var cls = result.Symbols.First(s => s.Name == "PageResult");
         await Assert.That(cls.Kind).IsEqualTo(SymbolKind.Class);
     }
+
+    // ── Body line detection (tree-sitter) ────────────────────────
+
+    [Test]
+    public async Task FunctionBodyLinesPopulated()
+    {
+        var source = """
+            function greet(name) {
+                return 'Hello ' + name;
+            }
+            """;
+
+        var result = Parse(source, ".js");
+
+        var fn = result.Symbols.First(s => s.Name == "greet");
+        await Assert.That(fn.BodyLineStart).IsEqualTo(2);
+        await Assert.That(fn.BodyLineEnd).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task TypeScriptClassBodyLinesPopulated()
+    {
+        var source = """
+            class Greeter {
+                greet(name: string): string {
+                    return 'Hello ' + name;
+                }
+            }
+            """;
+
+        var result = Parse(source, ".ts");
+
+        var cls = result.Symbols.First(s => s.Name == "Greeter");
+        await Assert.That(cls.BodyLineStart).IsEqualTo(2);
+        await Assert.That(cls.BodyLineEnd).IsEqualTo(4);
+    }
 }

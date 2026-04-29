@@ -333,8 +333,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
             command.CommandText =
                 """
-                INSERT INTO symbols (file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment)
-                VALUES (@fileId, @name, @kind, @signature, @parentSymbol, @byteOffset, @byteLength, @lineStart, @lineEnd, @visibility, @docComment)
+                INSERT INTO symbols (file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment, body_line_start, body_line_end)
+                VALUES (@fileId, @name, @kind, @signature, @parentSymbol, @byteOffset, @byteLength, @lineStart, @lineEnd, @visibility, @docComment, @bodyLineStart, @bodyLineEnd)
                 """;
 #pragma warning restore CA2100
 
@@ -349,6 +349,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var pLineEnd = command.Parameters.Add(new SqliteParameter("@lineEnd", 0));
             var pVisibility = command.Parameters.Add(new SqliteParameter("@visibility", ""));
             var pDocComment = command.Parameters.Add(new SqliteParameter("@docComment", ""));
+            var pBodyLineStart = command.Parameters.Add(new SqliteParameter("@bodyLineStart", DBNull.Value));
+            var pBodyLineEnd = command.Parameters.Add(new SqliteParameter("@bodyLineEnd", DBNull.Value));
 
             foreach (var symbol in symbols)
             {
@@ -363,6 +365,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 pLineEnd.Value = symbol.LineEnd;
                 pVisibility.Value = symbol.Visibility;
                 pDocComment.Value = (object?)symbol.DocComment ?? DBNull.Value;
+                pBodyLineStart.Value = symbol.BodyLineStart.HasValue ? (object)symbol.BodyLineStart.Value : DBNull.Value;
+                pBodyLineEnd.Value = symbol.BodyLineEnd.HasValue ? (object)symbol.BodyLineEnd.Value : DBNull.Value;
 
                 await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
@@ -383,7 +387,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment
+            SELECT id, file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment, body_line_start, body_line_end
             FROM symbols WHERE file_id = @fileId ORDER BY line_start
             """;
 #pragma warning restore CA2100
@@ -407,7 +411,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -706,6 +712,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                        s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end,
                        f.relative_path, bm25(symbols_fts) AS rank
                 FROM symbols_fts
                 JOIN symbols s ON s.id = symbols_fts.rowid
@@ -724,6 +731,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                        s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end,
                        f.relative_path, 0.0 AS rank
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
@@ -814,9 +822,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
-            results.Add(new SymbolSearchResult(symbol, reader.GetString(12), reader.GetDouble(13)));
+            results.Add(new SymbolSearchResult(symbol, reader.GetString(14), reader.GetDouble(15)));
         }
 
         return results;
@@ -1026,7 +1036,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             command.CommandText =
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE s.parent_symbol = @parent AND s.name = @child AND f.repo_id = @repoId
@@ -1043,7 +1054,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             command.CommandText =
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE s.name = @name AND f.repo_id = @repoId
@@ -1077,7 +1089,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
         }
 
         return null;
@@ -1094,7 +1108,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name = @name AND f.repo_id = @repoId
@@ -1128,7 +1143,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1153,7 +1170,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.parent_symbol = @parent AND s.name LIKE @childPrefix ESCAPE '!' AND f.repo_id = @repoId
@@ -1184,7 +1202,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1237,7 +1257,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             $"""
              SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                    s.body_line_start, s.body_line_end
              FROM symbols s
              JOIN files f ON f.id = s.file_id
              WHERE ({conditions}) AND f.repo_id = @repoId
@@ -1263,7 +1284,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1278,7 +1301,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.parent_symbol = @parent AND f.repo_id = @repoId
@@ -1305,7 +1329,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1363,6 +1389,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end,
                    f.relative_path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
@@ -1410,11 +1437,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
             var key = string.Equals(groupBy, "kind", StringComparison.OrdinalIgnoreCase)
                 ? symbol.Kind
-                : reader.GetString(12);
+                : reader.GetString(14);
 
             if (!symbolsByKey.TryGetValue(key, out var list))
             {
@@ -1876,6 +1905,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end,
                    f.relative_path
             FROM symbols_fts
             JOIN symbols s ON s.id = symbols_fts.rowid
@@ -1921,9 +1951,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
-            var filePath = reader.GetString(12);
+            var filePath = reader.GetString(14);
 
             if (!symbolsByFile.TryGetValue(filePath, out var list))
             {

@@ -68,7 +68,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
 
         await Assert.That(result.RepoId).IsEqualTo(_repoId);
         await Assert.That(result.FilesIndexed).IsEqualTo(15);
-        await Assert.That(result.SymbolsFound).IsEqualTo(99);
+        await Assert.That(result.SymbolsFound).IsEqualTo(104);
     }
 
     // ── Query Tests ──────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ internal sealed class CSharpEndToEndTests : IDisposable
         await Assert.That(outline.Groups).Count().IsGreaterThanOrEqualTo(1);
 
         var totalSymbols = CountOutlineSymbols(outline.Groups);
-        await Assert.That(totalSymbols).IsEqualTo(99);
+        await Assert.That(totalSymbols).IsEqualTo(104);
 
         // Verify some specific symbol kinds appear
         var allSymbolKinds = CollectSymbolKinds(outline.Groups);
