@@ -959,6 +959,179 @@ expandSymbolCommand.SetAction(async parseResult =>
 
 rootCommand.Subcommands.Add(expandSymbolCommand);
 
+// ── get-hot-path ─────────────────────────────────────────────
+
+var hotPathPathOption = CreatePathOption();
+var hotPathNameOption = new Option<string>("--name")
+{
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., OrderService:ProcessPayment) or unqualified names.",
+    Required = true,
+};
+var hotPathIdentifiersOption = new Option<string>("--identifiers")
+{
+    Description = "Comma-separated identifiers to search for within the symbol body (whole-word matching, e.g., 'userId,status').",
+    Required = true,
+};
+var hotPathContextLinesOption = new Option<int>("--context-lines")
+{
+    Description = "Lines of context before and after each match (0-10, default 3). Values outside range are clamped.",
+    DefaultValueFactory = _ => 3,
+};
+
+var hotPathCommand = new Command("get-hot-path",
+    "Return only the lines within a symbol that contain specific identifiers plus surrounding context. " +
+    "Use when tracing a variable or condition within a large function — costs ~50-100 tokens vs 500-2000 for the full body. " +
+    "Identifiers are matched as whole words only. Overlapping context windows are merged. Requires index.")
+{
+    hotPathPathOption,
+    hotPathNameOption,
+    hotPathIdentifiersOption,
+    hotPathContextLinesOption,
+};
+
+hotPathCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(hotPathPathOption)!;
+    var name = parseResult.GetValue(hotPathNameOption)!;
+    var identifiersRaw = parseResult.GetValue(hotPathIdentifiersOption)!;
+    var contextLines = Math.Clamp(parseResult.GetValue(hotPathContextLinesOption), 0, 10);
+    var json = parseResult.GetValue(jsonOption);
+
+    var identifiers = identifiersRaw
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    if (identifiers.Length == 0)
+    {
+        await WriteErrorAsync("No identifiers provided", "EMPTY_IDENTIFIERS", json, jsonSerializerOptions).ConfigureAwait(false);
+        return;
+    }
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+        if (symbol is null)
+        {
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
+        }
+
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+        if (file is null)
+        {
+            await WriteErrorAsync("File not found for symbol", "FILE_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        var pathValidator = provider.GetRequiredService<IPathValidator>();
+        string resolvedPath;
+        try
+        {
+            resolvedPath = pathValidator.ValidatePath(Path.Combine(path, file.RelativePath), path);
+        }
+        catch (ArgumentException)
+        {
+            await WriteErrorAsync("Path validation failed", "INVALID_PATH", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        // Determine scan range
+        int scanLineStart = symbol.BodyLineStart ?? symbol.LineStart;
+        int scanLineEnd = symbol.BodyLineEnd ?? symbol.LineEnd;
+        var totalLines = Math.Max(0, scanLineEnd - scanLineStart + 1);
+
+        // Read source and split into lines
+        var source = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+        var rawLines = source.Split('\n');
+
+        // Build whole-word patterns
+        var patterns = identifiers
+            .Select(id => (Id: id, Pattern: new System.Text.RegularExpressions.Regex(
+                $@"\b{System.Text.RegularExpressions.Regex.Escape(id)}\b",
+                System.Text.RegularExpressions.RegexOptions.None,
+                TimeSpan.FromMilliseconds(100))))
+            .ToList();
+
+        // Find matches
+        var seenMatches = new HashSet<(string, int)>();
+        var rawMatches = new List<(string Identifier, int LineNumber)>();
+        for (var lineNum = scanLineStart; lineNum <= scanLineEnd; lineNum++)
+        {
+            var idx = lineNum - symbol.LineStart;
+            if (idx < 0 || idx >= rawLines.Length) continue;
+            var lineText = rawLines[idx].TrimEnd('\r');
+            foreach (var (id, pattern) in patterns)
+            {
+                if (pattern.IsMatch(lineText) && seenMatches.Add((id, lineNum)))
+                    rawMatches.Add((id, lineNum));
+            }
+        }
+
+        if (json)
+        {
+            var matchObjects = BuildHotPathMatchObjects(rawMatches, rawLines, symbol, scanLineStart, scanLineEnd, contextLines);
+            var returnedLines = matchObjects.Sum(m => m.Context.Count);
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Symbol = symbol.Name, File = file.RelativePath, TotalLines = totalLines, ReturnedLines = returnedLines, Matches = matchObjects },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            if (rawMatches.Count == 0)
+            {
+                Console.WriteLine($"No matches found for {identifiers.Length} identifier(s) in '{symbol.Name}'.");
+                return;
+            }
+
+            Console.WriteLine($"// {symbol.Name} — {rawMatches.Count} match(es) for {identifiers.Length} identifier(s)");
+            Console.WriteLine($"// {file.RelativePath}  ({totalLines} total lines in scan range)");
+            Console.WriteLine();
+
+            var matchObjects = BuildHotPathMatchObjects(rawMatches, rawLines, symbol, scanLineStart, scanLineEnd, contextLines);
+            foreach (var m in matchObjects)
+            {
+                if (m.Context.Count > 0)
+                {
+                    foreach (var (lineNumber, text) in m.Context)
+                    {
+                        var marker = lineNumber == m.Line ? ">" : " ";
+                        Console.WriteLine($"  {marker} {lineNumber,6}: {text}");
+                    }
+
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine($"  > {m.Line,6}: (see context above — same window as previous match)");
+                    Console.WriteLine();
+                }
+            }
+
+            var uniqueLines = matchObjects.Sum(m => m.Context.Count);
+            await WriteHintAsync($"Returned {uniqueLines} unique line(s). Use 'get-symbol' to view the full body.", json).ConfigureAwait(false);
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(hotPathCommand);
+
 // ── get-symbols (batch) ─────────────────────────────────────
 
 var getSymbolsPathOption = CreatePathOption();
@@ -1504,7 +1677,11 @@ agentInstructionsCommand.SetAction(_ =>
            code by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
         5. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Get a single
            method without loading the parent class (~60% fewer tokens than get-symbol on parent).
-        6. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
+        6. `codecompress get-hot-path --path <project-root> --name <Name> --identifiers <id1,id2>` — Return
+           only lines in a symbol that contain specific identifiers plus context. Use when tracing a variable
+           or condition within a large function — 10-40x fewer tokens than get-symbol. Identifiers matched
+           as whole words. Add `--context-lines N` to control surrounding line count (0-10, default 3).
+        7. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
            multiple symbols in one call (max 50). Far more efficient than repeated get-symbol.
         7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
            for string literals, comments, or non-symbol patterns.
@@ -1533,7 +1710,8 @@ agentInstructionsCommand.SetAction(_ =>
         `{error: "message", code: "ERROR_CODE", retryable: false}`
 
         Error codes: INVALID_PATH, SYMBOL_NOT_FOUND, DIRECTORY_NOT_FOUND, MODULE_NOT_FOUND,
-        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS.
+        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS,
+        EMPTY_IDENTIFIERS, FILE_NOT_FOUND.
 
         All current errors are permanent (retryable: false) — fix the input rather than retrying.
 
@@ -1541,6 +1719,7 @@ agentInstructionsCommand.SetAction(_ =>
 
         - Use `get-symbols` for batches — single call vs N separate get-symbol calls.
         - Use `expand-symbol` for one method in a large class — ~60% fewer tokens.
+        - Use `get-hot-path` to trace a specific variable or condition — 10-40x fewer tokens than expand-symbol.
         - Use `search` (not search-text) for finding classes/functions — structured results.
         - Use `outline --path-filter src/` to scope — faster than full outline + client filtering.
         - Symbol names accept unqualified names (e.g., 'MyMethod') — auto-resolved if unique.
@@ -1555,6 +1734,8 @@ agentInstructionsCommand.SetAction(_ =>
         - --group-by: 'file' (default), 'kind', 'directory'. Other values rejected.
         - --direction: 'dependencies', 'dependents', 'both' (default). Other values rejected.
         - --names: max 50 comma-separated. Applies to: get-symbols.
+        - --context-lines: 0-10 (default 3), clamped. Applies to: get-hot-path.
+        - --identifiers: comma-separated non-empty identifiers, required. Applies to: get-hot-path.
 
         ## General Tips
 
@@ -1626,6 +1807,65 @@ static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSe
             await Console.Error.WriteLineAsync($"  Hint: {guidance}").ConfigureAwait(false);
         }
     }
+}
+
+static List<(string Identifier, int Line, List<(int LineNumber, string Text)> Context)> BuildHotPathMatchObjects(
+    List<(string Identifier, int LineNumber)> rawMatches,
+    string[] rawLines,
+    CodeCompress.Core.Models.Symbol symbol,
+    int scanLineStart,
+    int scanLineEnd,
+    int contextLines)
+{
+    var windowedMatches = rawMatches
+        .OrderBy(m => m.LineNumber)
+        .ThenBy(m => m.Identifier, StringComparer.Ordinal)
+        .Select(m => (
+            m.Identifier,
+            m.LineNumber,
+            WinStart: Math.Max(scanLineStart, m.LineNumber - contextLines),
+            WinEnd: Math.Min(scanLineEnd, m.LineNumber + contextLines)))
+        .ToList();
+
+    var mergedWindows = new List<(int Start, int End)>();
+    foreach (var (_, _, winStart, winEnd) in windowedMatches.OrderBy(m => m.WinStart))
+    {
+        if (mergedWindows.Count == 0 || winStart > mergedWindows[^1].End)
+            mergedWindows.Add((winStart, winEnd));
+        else
+        {
+            var last = mergedWindows[^1];
+            mergedWindows[^1] = (last.Start, Math.Max(last.End, winEnd));
+        }
+    }
+
+    var assignedWindows = new HashSet<int>();
+    var result = new List<(string Identifier, int Line, List<(int, string)> Context)>();
+
+    foreach (var (identifier, lineNumber, _, _) in windowedMatches)
+    {
+        var windowIdx = mergedWindows.FindIndex(w => w.Start <= lineNumber && lineNumber <= w.End);
+        List<(int, string)> context;
+        if (windowIdx >= 0 && assignedWindows.Add(windowIdx))
+        {
+            var (mStart, mEnd) = mergedWindows[windowIdx];
+            context = [];
+            for (var ln = mStart; ln <= mEnd; ln++)
+            {
+                var idx = ln - symbol.LineStart;
+                if (idx >= 0 && idx < rawLines.Length)
+                    context.Add((ln, rawLines[idx].TrimEnd('\r')));
+            }
+        }
+        else
+        {
+            context = [];
+        }
+
+        result.Add((identifier, lineNumber, context));
+    }
+
+    return result;
 }
 
 static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)
