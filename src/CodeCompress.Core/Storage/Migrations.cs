@@ -53,7 +53,8 @@ public static class Migrations
             file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
             requires_path TEXT NOT NULL,
             resolved_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
-            alias TEXT
+            alias TEXT,
+            edge_kind TEXT NOT NULL DEFAULT 'imports'
         )
         """,
         """
@@ -123,6 +124,9 @@ public static class Migrations
 
         // Add body line columns to existing databases that predate this migration
         await AddBodyLineColumnsIfNeededAsync(connection).ConfigureAwait(false);
+
+        // Add edge_kind column to existing databases that predate this migration
+        await AddEdgeKindColumnIfNeededAsync(connection).ConfigureAwait(false);
     }
 
     private static async Task AddBodyLineColumnsIfNeededAsync(SqliteConnection connection)
@@ -153,6 +157,29 @@ public static class Migrations
 #pragma warning restore CA2100
             await command.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
+
+        await transaction.CommitAsync().ConfigureAwait(false);
+    }
+
+    private static async Task AddEdgeKindColumnIfNeededAsync(SqliteConnection connection)
+    {
+        using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='dependencies'";
+        if (await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) is not string depsSql
+            || depsSql.Contains("edge_kind", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = transaction.ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100 // DDL statement is a static literal, not user input
+        command.CommandText = "ALTER TABLE dependencies ADD COLUMN edge_kind TEXT NOT NULL DEFAULT 'imports'";
+#pragma warning restore CA2100
+        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
         await transaction.CommitAsync().ConfigureAwait(false);
     }

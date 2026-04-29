@@ -580,6 +580,7 @@ var depsPathOption = CreatePathOption();
 var depsFileOption = new Option<string?>("--file") { Description = "Start from a specific file (relative path)" };
 var depsDirectionOption = new Option<string>("--direction") { Description = "Traversal direction. Allowed values: 'dependencies' (outgoing), 'dependents' (incoming), 'both' (default). Other values rejected.", DefaultValueFactory = _ => "both" };
 var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50, default 3). Values outside range are clamped.", DefaultValueFactory = _ => 3 };
+var depsEdgeKindOption = new Option<string?>("--edge-kind") { Description = "Filter edges by kind: imports, calls, implements, inherits, references. Omit for all." };
 
 var depsCommand = new Command("deps",
     "Show the import/require dependency graph. " +
@@ -589,6 +590,7 @@ var depsCommand = new Command("deps",
     depsFileOption,
     depsDirectionOption,
     depsDepthOption,
+    depsEdgeKindOption,
 };
 
 depsCommand.SetAction(async parseResult =>
@@ -597,12 +599,13 @@ depsCommand.SetAction(async parseResult =>
     var rootFile = parseResult.GetValue(depsFileOption) is { } rf ? PathValidator.NormalizeRelativePath(rf) : null;
     var direction = parseResult.GetValue(depsDirectionOption)!;
     var depth = Math.Clamp(parseResult.GetValue(depsDepthOption), 1, 50);
+    var edgeKind = parseResult.GetValue(depsEdgeKindOption);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, direction, depth).ConfigureAwait(false);
+        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, direction, depth, edgeKind).ConfigureAwait(false);
 
         if (json)
         {
@@ -610,16 +613,112 @@ depsCommand.SetAction(async parseResult =>
         }
         else
         {
-            Console.WriteLine($"Dependency graph ({graph.Nodes.Count} nodes, {graph.Edges.Count} edges):");
+            var kindSuffix = edgeKind is not null ? $" [{edgeKind}]" : string.Empty;
+            Console.WriteLine($"Dependency graph ({graph.Nodes.Count} nodes, {graph.Edges.Count} edges{kindSuffix}):");
             foreach (var edge in graph.Edges)
             {
-                Console.WriteLine($"  {edge.From} → {edge.To}" + (edge.Alias is not null ? $" (alias: {edge.Alias})" : ""));
+                var edgeLabel = edge.EdgeKind is not null ? $" [{edge.EdgeKind}]" : string.Empty;
+                Console.WriteLine($"  {edge.From} → {edge.To}{edgeLabel}" + (edge.Alias is not null ? $" (alias: {edge.Alias})" : ""));
             }
         }
     }
 });
 
 rootCommand.Subcommands.Add(depsCommand);
+
+// ── blast-radius ─────────────────────────────────────────────
+
+var blastRadiusPathOption = CreatePathOption();
+var blastRadiusFileOption = new Option<string?>("--file") { Description = "Relative path to the file to analyze" };
+var blastRadiusSymbolOption = new Option<string?>("--symbol") { Description = "Symbol name to analyze (alternative to --file)" };
+var blastRadiusMaxDepthOption = new Option<int>("--max-depth") { Description = "Maximum BFS depth (1-20, default 5). Values outside range are clamped.", DefaultValueFactory = _ => 5 };
+
+var blastRadiusCommand = new Command("blast-radius",
+    "Find all files affected if a given file or symbol changes. " +
+    "Performs reverse BFS over dependency edges. Requires index.")
+{
+    blastRadiusPathOption,
+    blastRadiusFileOption,
+    blastRadiusSymbolOption,
+    blastRadiusMaxDepthOption,
+};
+
+blastRadiusCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(blastRadiusPathOption)!;
+    var filePath = parseResult.GetValue(blastRadiusFileOption) is { } fp ? PathValidator.NormalizeRelativePath(fp) : null;
+    var symbolName = parseResult.GetValue(blastRadiusSymbolOption);
+    var maxDepth = Math.Clamp(parseResult.GetValue(blastRadiusMaxDepthOption), 1, 20);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var result = await scope.Store.GetBlastRadiusAsync(scope.RepoId, filePath, symbolName, maxDepth).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine($"Blast radius: {result.TotalAffected} file(s) affected");
+            foreach (var depth in result.Depths)
+            {
+                Console.WriteLine($"  Depth {depth.Depth}: {string.Join(", ", depth.Files)}");
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(blastRadiusCommand);
+
+// ── unused-symbols ──────────────────────────────────────────
+
+var unusedPathOption = CreatePathOption();
+var unusedLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-500, default 100). Values outside range are clamped.", DefaultValueFactory = _ => 100 };
+
+var unusedCommand = new Command("unused-symbols",
+    "Find public symbols with no incoming dependency edges (best-effort dead code detection). " +
+    "Excludes test files, Main entry point, and HTTP controller actions. Requires index.")
+{
+    unusedPathOption,
+    unusedLimitOption,
+};
+
+unusedCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(unusedPathOption)!;
+    var limit = Math.Clamp(parseResult.GetValue(unusedLimitOption), 1, 500);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var results = await scope.Store.FindUnusedSymbolsAsync(scope.RepoId, limit).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+        }
+        else
+        {
+            if (results.Count == 0)
+            {
+                Console.WriteLine("No potentially unused public symbols found.");
+                return;
+            }
+
+            Console.WriteLine($"Found {results.Count} potentially unused public symbol(s):");
+            foreach (var s in results)
+            {
+                Console.WriteLine($"  {s.Kind,-12} {s.Name,-30} {s.Signature}");
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(unusedCommand);
 
 // ── invalidate-cache ────────────────────────────────────────
 
@@ -1407,7 +1506,12 @@ agentInstructionsCommand.SetAction(_ =>
         7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
            for string literals, comments, or non-symbol patterns.
         8. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
-        9. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
+           Add `--edge-kind imports|calls|implements|inherits|references` to filter by edge type.
+        9. `codecompress blast-radius --path <project-root> --file <rel-path>` — Find all files
+           affected if a given file changes (reverse BFS). Use `--symbol <name>` for symbol input.
+        10. `codecompress unused-symbols --path <project-root>` — Best-effort dead code detection.
+            Returns public symbols with no incoming dependency edges.
+        11. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
 
         ## JSON Output (--json)
 

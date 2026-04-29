@@ -51,9 +51,11 @@ public interface ISymbolStore
     // Aggregation
     public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0);
     public Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath);
-    public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
+    public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth, string? edgeKind = null);
     public Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);
+    public Task<BlastRadiusResult> GetBlastRadiusAsync(string repoId, string? filePath, string? symbolName, int maxDepth = 5);
+    public Task<IReadOnlyList<SymbolSummary>> FindUnusedSymbolsAsync(string repoId, int limit = 100);
 
     // Topic outline
     public Task<ProjectOutline> SearchTopicOutlineAsync(string repoId, string query, int limit, string? pathFilter = null);

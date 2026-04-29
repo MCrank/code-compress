@@ -384,8 +384,7 @@ internal sealed class SymbolStoreQueryTests
 
     // ── GetProjectOutlineAsync PathFilter Tests ─────────────────────────
 
-    private static string OsPath(string forwardSlashPath) =>
-        forwardSlashPath.Replace('/', Path.DirectorySeparatorChar);
+    private static string OsPath(string forwardSlashPath) => forwardSlashPath;
 
     private static async Task<SqliteSymbolStore> SeedMultiFileDataAsync(SqliteConnection connection)
     {

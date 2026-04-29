@@ -22,6 +22,11 @@ internal sealed class DependencyTools
         "dependencies", "dependents", "both",
     };
 
+    private static readonly HashSet<string> ValidEdgeKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "imports", "calls", "implements", "inherits", "references",
+    };
+
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
 
@@ -35,12 +40,13 @@ internal sealed class DependencyTools
     }
 
     [McpServerTool(Name = "dependency_graph")]
-    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. Returns plain text: each file node followed by 'requires -> file1, file2' and 'required by -> file3' edges, with a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project).")]
+    [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. Returns plain text: each file node followed by 'requires -> file1, file2' and 'required by -> file3' edges, with a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), INVALID_EDGE_KIND (see edgeKind param), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project).")]
     public async Task<string> DependencyGraph(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Start traversal from a specific file (relative path). Omit for full project graph.")] string? rootFile = null,
         [Description("Traversal direction. Allowed values: 'dependencies' (outgoing imports), 'dependents' (incoming — who imports this file), 'both' (default). Other values are rejected.")] string direction = "both",
         [Description("Maximum traversal depth (1-50, default 50). Values outside this range are clamped. Omit for full depth.")] int? depth = null,
+        [Description("Filter edges by kind. Allowed values: 'imports', 'calls', 'implements', 'inherits', 'references'. Omit for all edge kinds.")] string? edgeKind = null,
         CancellationToken cancellationToken = default)
     {
         string validatedPath;
@@ -58,6 +64,13 @@ internal sealed class DependencyTools
             return SerializeError(
                 "Invalid direction. Must be one of: dependencies, dependents, both",
                 "INVALID_DIRECTION");
+        }
+
+        if (edgeKind is not null && !ValidEdgeKinds.Contains(edgeKind))
+        {
+            return SerializeError(
+                "Invalid edge kind. Must be one of: imports, calls, implements, inherits, references",
+                "INVALID_EDGE_KIND");
         }
 
         var normalizedRootFile = rootFile is not null ? PathValidator.NormalizeRelativePath(rootFile) : null;
@@ -80,7 +93,7 @@ internal sealed class DependencyTools
         await using (scope.ConfigureAwait(false))
         {
             var graph = await scope.Store.GetDependencyGraphAsync(
-                scope.RepoId, normalizedRootFile, direction, clampedDepth).ConfigureAwait(false);
+                scope.RepoId, normalizedRootFile, direction, clampedDepth, edgeKind).ConfigureAwait(false);
 
             // Non-existent root file returns empty graph
             if (normalizedRootFile is not null && graph.Nodes.Count == 0)
@@ -88,24 +101,127 @@ internal sealed class DependencyTools
                 return SerializeError("File not found in index", "FILE_NOT_FOUND");
             }
 
-            return FormatGraph(graph, normalizedRootFile, direction, clampedDepth);
+            return FormatGraph(graph, normalizedRootFile, direction, clampedDepth, edgeKind);
         }
     }
 
-    private static string FormatGraph(DependencyGraph graph, string? rootFile, string direction, int depth)
+    [McpServerTool(Name = "blast_radius")]
+    [Description("Perform a reverse BFS to find all files affected if a given file or symbol changes — answers 'what breaks if I change X?' Requires index_project to have been called first. Returns JSON with total_affected count and depths array (each entry: depth, files). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, NOT_FOUND (file or symbol not in index).")]
+    public async Task<string> BlastRadius(
+        [Description("ABSOLUTE path to the project root directory.")] string path,
+        [Description("Relative path to the file to analyze (e.g., 'src/Core/Service.cs'). Provide either filePath or symbolName, not both.")] string? filePath = null,
+        [Description("Symbol name to analyze (e.g., 'ProcessPayment'). Provide either filePath or symbolName, not both.")] string? symbolName = null,
+        [Description("Maximum BFS depth (1-20, default 5). Values outside this range are clamped.")] int maxDepth = 5,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var normalizedFilePath = filePath is not null ? PathValidator.NormalizeRelativePath(filePath) : null;
+
+        if (normalizedFilePath is not null)
+        {
+            try
+            {
+                _pathValidator.ValidateRelativePath(normalizedFilePath, validatedPath);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Path validation failed", "INVALID_PATH");
+            }
+        }
+
+        var clampedDepth = Math.Clamp(maxDepth, 1, 20);
+
+        if (normalizedFilePath is null && symbolName is null)
+        {
+            return SerializeError("Provide either filePath or symbolName", "INVALID_INPUT");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var result = await scope.Store.GetBlastRadiusAsync(
+                scope.RepoId, normalizedFilePath, symbolName, clampedDepth).ConfigureAwait(false);
+
+            if (!result.Found)
+            {
+                return SerializeError(
+                    normalizedFilePath is not null
+                        ? "File not found in index — verify the relative path and run index_project"
+                        : "Symbol not found in index — use search_symbols to find the correct name",
+                    "NOT_FOUND");
+            }
+
+            return JsonSerializer.Serialize(
+                new
+                {
+                    result.TotalAffected,
+                    Depths = result.Depths.Select(d => new { d.Depth, d.Files }),
+                },
+                SerializerOptions);
+        }
+    }
+
+    [McpServerTool(Name = "find_unused_symbols")]
+    [Description("Find public symbols with no incoming dependency edges — best-effort dead code detection. Excludes test files, Main entry point, HTTP controller action attributes. Requires index_project to have been called first. Returns JSON array of {name, kind, signature}. Errors return JSON {error, code, retryable}. Code: INVALID_PATH.")]
+    public async Task<string> FindUnusedSymbols(
+        [Description("ABSOLUTE path to the project root directory.")] string path,
+        [Description("Maximum number of results to return (1-500, default 100). Values outside this range are clamped.")] int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        var clampedLimit = Math.Clamp(limit, 1, 500);
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var results = await scope.Store.FindUnusedSymbolsAsync(scope.RepoId, clampedLimit).ConfigureAwait(false);
+
+            return JsonSerializer.Serialize(
+                results.Select(s => new { s.Name, s.Kind, s.Signature }),
+                SerializerOptions);
+        }
+    }
+
+    private static string SanitizePath(string path) =>
+        path.ReplaceLineEndings(string.Empty)
+            .Replace('\0', '_')
+            .Replace('[', '(')
+            .Replace(']', ')');
+
+    private static string FormatGraph(DependencyGraph graph, string? rootFile, string direction, int depth, string? edgeKind = null)
     {
         var sb = new StringBuilder();
+        var edgeKindSuffix = edgeKind is not null ? $", edge: {edgeKind}" : string.Empty;
 
         // Header
         if (rootFile is not null)
         {
+            var safeRootFile = SanitizePath(rootFile);
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"Dependency graph for \"{rootFile}\" (depth: {depth}, direction: {direction}):");
+                $"Dependency graph for \"{safeRootFile}\" (depth: {depth}, direction: {direction}{edgeKindSuffix}):");
         }
         else
         {
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"Dependency graph (full project, direction: {direction}):");
+                $"Dependency graph (full project, direction: {direction}{edgeKindSuffix}):");
         }
 
         sb.AppendLine();

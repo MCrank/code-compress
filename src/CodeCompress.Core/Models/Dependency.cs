@@ -5,4 +5,5 @@ public sealed record Dependency(
     long FileId,
     string RequiresPath,
     long? ResolvedFileId,
-    string? Alias);
+    string? Alias,
+    string EdgeKind = "imports");
