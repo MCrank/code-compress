@@ -28,7 +28,7 @@ internal sealed class DependencyGraphQueryTests
     private static Dependency MakeDep(long fileId, string requiresPath, long? resolvedFileId, string edgeKind = "imports") =>
         new(0, fileId, requiresPath, resolvedFileId, null, edgeKind);
 
-    private static Symbol MakeSymbol(long fileId, string name, string kind = "method", string visibility = "public") =>
+    private static Symbol MakeSymbol(long fileId, string name, string kind = "method", string visibility = "Public") =>
         new(0, fileId, name, kind, $"{visibility} {kind} {name}()", null, 0, 10, 1, 5, visibility, null, null, null);
 
     // ── Dependency edge_kind roundtrip ───────────────────────────────
@@ -305,7 +305,7 @@ internal sealed class DependencyGraphQueryTests
         var fileId = files[0].Id;
 
         await store.InsertSymbolsAsync([
-            MakeSymbol(fileId, "LegacyHelper", "method", "public"),
+            MakeSymbol(fileId, "LegacyHelper", "method", "Public"),
         ]).ConfigureAwait(false);
 
         var result = await store.FindUnusedSymbolsAsync(repo.Id, 100).ConfigureAwait(false);
@@ -325,7 +325,7 @@ internal sealed class DependencyGraphQueryTests
         var fileId = files[0].Id;
 
         await store.InsertSymbolsAsync([
-            MakeSymbol(fileId, "PrivateHelper", "method", "private"),
+            MakeSymbol(fileId, "PrivateHelper", "method", "Private"),
         ]).ConfigureAwait(false);
 
         var result = await store.FindUnusedSymbolsAsync(repo.Id, 100).ConfigureAwait(false);
@@ -345,7 +345,7 @@ internal sealed class DependencyGraphQueryTests
         var fileId = files[0].Id;
 
         await store.InsertSymbolsAsync([
-            MakeSymbol(fileId, "TestMethod", "method", "public"),
+            MakeSymbol(fileId, "TestMethod", "method", "Public"),
         ]).ConfigureAwait(false);
 
         var result = await store.FindUnusedSymbolsAsync(repo.Id, 100).ConfigureAwait(false);
@@ -365,7 +365,7 @@ internal sealed class DependencyGraphQueryTests
         var fileId = files[0].Id;
 
         await store.InsertSymbolsAsync([
-            new Symbol(0, fileId, "Main", "method", "public static void Main()", null, 0, 10, 1, 5, "public", null, null, null),
+            new Symbol(0, fileId, "Main", "method", "public static void Main()", null, 0, 10, 1, 5, "Public", null, null, null),
         ]).ConfigureAwait(false);
 
         var result = await store.FindUnusedSymbolsAsync(repo.Id, 100).ConfigureAwait(false);
@@ -385,7 +385,7 @@ internal sealed class DependencyGraphQueryTests
         var fileId = files[0].Id;
 
         var symbols = Enumerable.Range(1, 10)
-            .Select(i => MakeSymbol(fileId, $"Helper{i}", "method", "public"))
+            .Select(i => MakeSymbol(fileId, $"Helper{i}", "method", "Public"))
             .ToList();
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 

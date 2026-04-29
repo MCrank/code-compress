@@ -1772,7 +1772,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.repo_id = @repoId
-              AND s.visibility = 'public'
+              AND s.visibility = 'Public'
               AND s.kind NOT IN ('module', 'constant', 'namespace')
               AND f.relative_path NOT LIKE '%Test%'
               AND f.relative_path NOT LIKE '%Spec%'
