@@ -113,7 +113,7 @@ internal sealed class IndexEngineTests
         });
 
         SetupChangeSet(new ChangeSet(
-            ["src\\main.luau", "src\\utils.luau", "src\\lib.luau"],
+            ["src/main.luau", "src/utils.luau", "src/lib.luau"],
             [], [], []));
 
         var result = await _engine.IndexProjectAsync(_tempDir).ConfigureAwait(false);
@@ -252,7 +252,7 @@ internal sealed class IndexEngineTests
                 return Task.FromResult(new Dictionary<string, string> { [mainPath] = "hash1" });
             });
 
-        SetupChangeSet(new ChangeSet(["src\\main.luau"], [], [], []));
+        SetupChangeSet(new ChangeSet(["src/main.luau"], [], [], []));
 
         await _engine.IndexProjectAsync(
             _tempDir,
@@ -278,7 +278,7 @@ internal sealed class IndexEngineTests
             [mainPath] = "hash1",
         });
 
-        SetupChangeSet(new ChangeSet(["src\\main.luau"], [], [], []));
+        SetupChangeSet(new ChangeSet(["src/main.luau"], [], [], []));
 
         await _engine.IndexProjectAsync(
             _tempDir,
@@ -353,7 +353,7 @@ internal sealed class IndexEngineTests
             [mainPath] = "hash1",
         });
 
-        SetupChangeSet(new ChangeSet(["src\\main.luau"], [], [], []));
+        SetupChangeSet(new ChangeSet(["src/main.luau"], [], [], []));
 
         await _engine.IndexProjectAsync(_tempDir).ConfigureAwait(false);
 

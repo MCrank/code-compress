@@ -804,8 +804,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         if (pathFilter is not null)
         {
             // Normalize to OS-native separator to match stored relative_path values
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -886,8 +886,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -948,8 +948,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -1375,10 +1375,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
         string? normalizedPrefix = null;
         if (pathFilter is not null)
         {
-            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+            normalizedPrefix = pathFilter.Replace('\\', '/');
+            normalizedPrefix = normalizedPrefix.EndsWith('/')
                 ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
+                : normalizedPrefix + '/';
             countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
         }
 
@@ -2050,10 +2050,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
         string? normalizedPrefix = null;
         if (pathFilter is not null)
         {
-            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+            normalizedPrefix = pathFilter.Replace('\\', '/');
+            normalizedPrefix = normalizedPrefix.EndsWith('/')
                 ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
+                : normalizedPrefix + '/';
             countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
         }
 

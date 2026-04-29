@@ -112,7 +112,7 @@ public sealed partial class IndexEngine : IIndexEngine
 
         foreach (var (absPath, hash) in currentAbsoluteHashes)
         {
-            var relPath = Path.GetRelativePath(canonicalRoot, absPath);
+            var relPath = Path.GetRelativePath(canonicalRoot, absPath).Replace('\\', '/');
             currentHashes[relPath] = hash;
             absoluteByRelative[relPath] = absPath;
         }
@@ -357,7 +357,7 @@ public sealed partial class IndexEngine : IIndexEngine
             IgnoreInaccessible = true,
         }))
         {
-            var relPath = Path.GetRelativePath(canonicalRoot, absPath);
+            var relPath = Path.GetRelativePath(canonicalRoot, absPath).Replace('\\', '/');
 
             // Skip default excluded directories
             if (IsInExcludedDirectory(relPath, defaultExcludeSet))

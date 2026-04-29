@@ -638,8 +638,7 @@ internal sealed class EndToEndTests : IDisposable
     private string GetDirectoryPrefix(string fileName)
     {
         var relativePath = GetStoredRelativePath(fileName);
-        var separator = relativePath.Contains('/', StringComparison.Ordinal) ? '/' : '\\';
-        var lastSep = relativePath.LastIndexOf(separator);
+        var lastSep = relativePath.LastIndexOf('/');
         return lastSep >= 0 ? relativePath[..lastSep] : string.Empty;
     }
 
