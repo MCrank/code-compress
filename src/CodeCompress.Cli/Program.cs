@@ -247,22 +247,24 @@ rootCommand.Subcommands.Add(getSymbolCommand);
 var searchPathOption = CreatePathOption();
 var searchQueryOption = new Option<string>("--query")
 {
-    Description = "FTS5 search query (supports AND, OR, NOT, prefix*, *contains*)",
+    Description = "Search query (supports FTS5 operators AND/OR/NOT, prefix*, *contains*; multi-word queries like 'user profile' match camelCase/PascalCase symbols)",
     Required = true,
 };
 var searchKindOption = new Option<string?>("--kind") { Description = "Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)" };
 var searchPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
 var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
+var searchFuzzyOption = new Option<bool>("--fuzzy") { Description = "Enable typo-tolerant fuzzy matching (Levenshtein distance ≤ 2). Useful when exact symbol name is unknown or may have a typo." };
 
 var searchCommand = new Command("search",
     "Search the symbol index using FTS5 full-text search. " +
-    "Faster and more precise than grep. Requires index.")
+    "Supports camelCase/PascalCase token splitting and optional fuzzy matching. Faster and more precise than grep. Requires index.")
 {
     searchPathOption,
     searchQueryOption,
     searchKindOption,
     searchPathFilterOption,
     searchLimitOption,
+    searchFuzzyOption,
 };
 
 searchCommand.SetAction(async parseResult =>
@@ -272,6 +274,7 @@ searchCommand.SetAction(async parseResult =>
     var kind = parseResult.GetValue(searchKindOption);
     var pathFilter = parseResult.GetValue(searchPathFilterOption);
     var limit = Math.Clamp(parseResult.GetValue(searchLimitOption), 1, 100);
+    var fuzzy = parseResult.GetValue(searchFuzzyOption);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
@@ -280,13 +283,13 @@ searchCommand.SetAction(async parseResult =>
         IReadOnlyList<SymbolSearchResult> results;
         try
         {
-            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter, fuzzy: fuzzy).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException)
         {
             // FTS5 syntax error — retry with literal phrase
             var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
-            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, kind, limit, pathFilter).ConfigureAwait(false);
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, kind, limit, pathFilter, fuzzy: fuzzy).ConfigureAwait(false);
         }
 
         // Auto contains-match fallback for plain terms with zero results
@@ -295,7 +298,7 @@ searchCommand.SetAction(async parseResult =>
         {
             var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
             results = await scope.Store.SearchSymbolsAsync(
-                scope.RepoId, containsGlob.Fts5Query, kind, limit, pathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                scope.RepoId, containsGlob.Fts5Query, kind, limit, pathFilter, containsGlob.SqlLikePattern, fuzzy).ConfigureAwait(false);
             fallbackUsed = results.Count > 0;
         }
 

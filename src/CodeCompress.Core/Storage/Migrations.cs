@@ -76,28 +76,8 @@ public static class Migrations
         "CREATE INDEX IF NOT EXISTS ix_dependencies_file_id ON dependencies(file_id)",
         "CREATE INDEX IF NOT EXISTS ix_dependencies_resolved ON dependencies(resolved_file_id)",
         "CREATE INDEX IF NOT EXISTS ix_snapshots_repo_id ON index_snapshots(repo_id)",
-        "CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, content=symbols, content_rowid=id)",
+        """CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, tokenize="porter unicode61")""",
         "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(relative_path, content)",
-        """
-        CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
-            INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
-            VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
-        END
-        """,
-        """
-        CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
-            INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
-            VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
-        END
-        """,
-        """
-        CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
-            INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
-            VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
-            INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
-            VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
-        END
-        """,
     ];
 
     public static async Task ApplyAsync(SqliteConnection connection)
@@ -119,7 +99,7 @@ public static class Migrations
 
         await transaction.CommitAsync().ConfigureAwait(false);
 
-        // Upgrade FTS5 table if it predates the parent_symbol column
+        // Upgrade FTS5 table if it predates the porter unicode61 tokenizer
         await UpgradeFts5IfNeededAsync(connection).ConfigureAwait(false);
 
         // Add body line columns to existing databases that predate this migration
@@ -186,50 +166,28 @@ public static class Migrations
 
     private static async Task UpgradeFts5IfNeededAsync(SqliteConnection connection)
     {
-        // Check if parent_symbol is already a column in symbols_fts by attempting a column query
         using var checkCmd = connection.CreateCommand();
         checkCmd.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='symbols_fts'";
         if (await checkCmd.ExecuteScalarAsync().ConfigureAwait(false) is not string ftsSchema
-            || ftsSchema.Contains("parent_symbol", StringComparison.Ordinal))
+            || ftsSchema.Contains("porter", StringComparison.OrdinalIgnoreCase))
         {
-            return; // Either no FTS table or already upgraded
+            return; // No FTS table or already upgraded to porter tokenizer
         }
 
-        // Rebuild: drop old FTS table + triggers, then recreate with parent_symbol
-        var upgradeDdl = new[]
+        // Old schema: drop triggers and table, recreate with porter tokenizer, repopulate with split names
+        var dropDdl = new[]
         {
             "DROP TRIGGER IF EXISTS symbols_ai",
             "DROP TRIGGER IF EXISTS symbols_ad",
             "DROP TRIGGER IF EXISTS symbols_au",
             "DROP TABLE IF EXISTS symbols_fts",
-            "CREATE VIRTUAL TABLE symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, content=symbols, content_rowid=id)",
-            """
-            CREATE TRIGGER symbols_ai AFTER INSERT ON symbols BEGIN
-                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
-                VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
-            END
-            """,
-            """
-            CREATE TRIGGER symbols_ad AFTER DELETE ON symbols BEGIN
-                INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
-                VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
-            END
-            """,
-            """
-            CREATE TRIGGER symbols_au AFTER UPDATE ON symbols BEGIN
-                INSERT INTO symbols_fts(symbols_fts, rowid, name, parent_symbol, signature, doc_comment)
-                VALUES ('delete', old.id, old.name, old.parent_symbol, old.signature, old.doc_comment);
-                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
-                VALUES (new.id, new.name, new.parent_symbol, new.signature, new.doc_comment);
-            END
-            """,
-            "INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')",
+            """CREATE VIRTUAL TABLE symbols_fts USING fts5(name, parent_symbol, signature, doc_comment, tokenize="porter unicode61")""",
         };
 
         var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
         await using var tx = transaction.ConfigureAwait(false);
 
-        foreach (var ddl in upgradeDdl)
+        foreach (var ddl in dropDdl)
         {
             using var command = connection.CreateCommand();
             command.Transaction = (SqliteTransaction)transaction;
@@ -240,5 +198,60 @@ public static class Migrations
         }
 
         await transaction.CommitAsync().ConfigureAwait(false);
+
+        // Repopulate FTS5 with identifier-split names (separate transaction from DDL)
+        await RepopulateFts5Async(connection).ConfigureAwait(false);
+    }
+
+    internal static async Task RepopulateFts5Async(SqliteConnection connection)
+    {
+        // Read all symbols into memory first (can't read and write in same transaction)
+        var rows = new List<(long Id, string Name, string? ParentSymbol, string Signature, string? DocComment)>();
+
+        using (var selectCmd = connection.CreateCommand())
+        {
+            selectCmd.CommandText = "SELECT id, name, parent_symbol, signature, doc_comment FROM symbols";
+            using var reader = await selectCmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                rows.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    await reader.IsDBNullAsync(2).ConfigureAwait(false) ? null : reader.GetString(2),
+                    reader.GetString(3),
+                    await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4)));
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var tx = await connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var _ = tx.ConfigureAwait(false);
+
+        using var insertCmd = connection.CreateCommand();
+        insertCmd.Transaction = (SqliteTransaction)tx;
+#pragma warning disable CA2100 // DDL is a static literal, not user input
+        insertCmd.CommandText = "INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment) VALUES (@rowid, @name, @parentSymbol, @signature, @docComment)";
+#pragma warning restore CA2100
+        var pRowid = insertCmd.Parameters.Add(new SqliteParameter("@rowid", 0L));
+        var pName = insertCmd.Parameters.Add(new SqliteParameter("@name", string.Empty));
+        var pParent = insertCmd.Parameters.Add(new SqliteParameter("@parentSymbol", DBNull.Value));
+        var pSig = insertCmd.Parameters.Add(new SqliteParameter("@signature", string.Empty));
+        var pDoc = insertCmd.Parameters.Add(new SqliteParameter("@docComment", DBNull.Value));
+
+        foreach (var (id, name, parentSymbol, signature, docComment) in rows)
+        {
+            pRowid.Value = id;
+            pName.Value = IdentifierSplitter.Split(name);
+            pParent.Value = (object?)parentSymbol ?? DBNull.Value;
+            pSig.Value = signature;
+            pDoc.Value = (object?)docComment ?? DBNull.Value;
+            await insertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        await tx.CommitAsync().ConfigureAwait(false);
     }
 }
