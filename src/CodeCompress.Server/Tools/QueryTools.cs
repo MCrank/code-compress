@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
@@ -805,6 +806,223 @@ internal sealed class QueryTools
 
             return JsonSerializer.Serialize(response, SerializerOptions);
         }
+    }
+
+    [McpServerTool(Name = "get_hot_path")]
+    [Description("Returns only the lines within a symbol that contain specific identifiers plus surrounding context — use when tracing a variable, assignment, or conditional branch within a large function. Costs ~50–100 tokens vs 500–2000 for the full body. Identifiers are matched as whole words only (Regex.Escaped \\b boundaries prevent partial-word false positives). Falls back to the full symbol range if body line ranges are not available. Requires index_project to have been called first. Returns JSON: {symbol, file, total_lines, returned_lines, matches: [{identifier, line, context: [{line_number, text}]}]}. No matches returns {symbol, file, total_lines, returned_lines: 0, matches: []}. Overlapping context windows are merged — lines 7–15 are returned once, not duplicated; the first match in a merged window carries the context, subsequent matches in the same window have an empty context array. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND, EMPTY_IDENTIFIERS (supply at least one non-empty identifier string).")]
+    public async Task<string> GetHotPath(
+        [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
+        [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'OrderService:ProcessPayment') or unqualified names (e.g., 'ProcessPayment'). Unqualified names are resolved automatically.")] string symbolName,
+        [Description("Identifiers to search for within the symbol body using whole-word matching. Each value is Regex.Escaped before use — agent-supplied metacharacters cannot cause injection.")] string[] identifiers,
+        [Description("Lines of context to include before and after each match (0–10, default 3). Values outside this range are clamped.")] int contextLines = 3,
+        CancellationToken cancellationToken = default)
+    {
+        string validatedPath;
+        try
+        {
+            validatedPath = _pathValidator.ValidatePath(path, path);
+        }
+        catch (ArgumentException)
+        {
+            return SerializeError("Path validation failed", "INVALID_PATH");
+        }
+
+        contextLines = Math.Clamp(contextLines, 0, 10);
+
+        var validIdentifiers = identifiers?.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [];
+        if (validIdentifiers.Length == 0)
+        {
+            return SerializeError("Identifiers array must contain at least one non-empty value", "EMPTY_IDENTIFIERS");
+        }
+
+        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
+        await using (scope.ConfigureAwait(false))
+        {
+            var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, symbolName).ConfigureAwait(false);
+                if (candidates.Count == 1)
+                {
+                    symbol = candidates[0];
+                }
+                else if (candidates.Count > 1)
+                {
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            Error = "Multiple symbols match this name",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
+                        },
+                        SerializerOptions);
+                }
+                else
+                {
+                    return JsonSerializer.Serialize(
+                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
+                        SerializerOptions);
+                }
+            }
+
+            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+            var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+            if (file is null)
+            {
+                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = _pathValidator.ValidatePath(
+                    Path.Combine(validatedPath, file.RelativePath), validatedPath);
+            }
+            catch (ArgumentException)
+            {
+                return SerializeError("Path validation failed", "INVALID_PATH");
+            }
+
+            var hotPath = await ExtractHotPathAsync(resolvedPath, symbol, file.RelativePath, validIdentifiers, contextLines).ConfigureAwait(false);
+
+            return JsonSerializer.Serialize(
+                new
+                {
+                    hotPath.Symbol,
+                    hotPath.File,
+                    hotPath.TotalLines,
+                    hotPath.ReturnedLines,
+                    hotPath.Matches,
+                },
+                SerializerOptions);
+        }
+    }
+
+    private static async Task<HotPathResult> ExtractHotPathAsync(
+        string filePath,
+        Symbol symbol,
+        string fileRelativePath,
+        string[] identifiers,
+        int contextLines)
+    {
+        var source = await ReadSourceCodeAsync(filePath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
+        // Split on \n; TrimEnd('\r') handles \r\n line endings
+        var rawLines = source.Split('\n');
+
+        // Determine 1-based scan range (absolute line numbers in the file)
+        int scanLineStart, scanLineEnd;
+        if (symbol.BodyLineStart.HasValue && symbol.BodyLineEnd.HasValue)
+        {
+            scanLineStart = symbol.BodyLineStart.Value;
+            scanLineEnd = symbol.BodyLineEnd.Value;
+        }
+        else
+        {
+            scanLineStart = symbol.LineStart;
+            scanLineEnd = symbol.LineEnd;
+        }
+
+        var totalLines = Math.Max(0, scanLineEnd - scanLineStart + 1);
+
+        // Build whole-word patterns — Regex.Escape prevents agent-supplied metacharacters from injecting patterns
+        var patterns = identifiers
+            .Select(id => (Id: id, Pattern: new Regex(
+                $@"\b{Regex.Escape(id)}\b",
+                RegexOptions.None,
+                TimeSpan.FromMilliseconds(100))))
+            .ToList();
+
+        // Find all (identifier, 1-based absolute line number) matches within scan range
+        var seenMatches = new HashSet<(string, int)>();
+        var rawMatches = new List<(string Identifier, int LineNumber)>();
+
+        for (var lineNum = scanLineStart; lineNum <= scanLineEnd; lineNum++)
+        {
+            var idx = lineNum - symbol.LineStart;
+            if (idx < 0 || idx >= rawLines.Length)
+            {
+                continue;
+            }
+
+            var lineText = rawLines[idx].TrimEnd('\r');
+            foreach (var (id, pattern) in patterns)
+            {
+                if (pattern.IsMatch(lineText) && seenMatches.Add((id, lineNum)))
+                {
+                    rawMatches.Add((id, lineNum));
+                }
+            }
+        }
+
+        if (rawMatches.Count == 0)
+        {
+            return new HotPathResult(symbol.Name, fileRelativePath, totalLines, 0, []);
+        }
+
+        // Compute per-match windows, clamped to scan range, sorted by line number
+        var windowedMatches = rawMatches
+            .OrderBy(m => m.LineNumber)
+            .ThenBy(m => m.Identifier, StringComparer.Ordinal)
+            .Select(m => (
+                m.Identifier,
+                m.LineNumber,
+                WinStart: Math.Max(scanLineStart, m.LineNumber - contextLines),
+                WinEnd: Math.Min(scanLineEnd, m.LineNumber + contextLines)))
+            .ToList();
+
+        // Merge overlapping windows (windows that share at least one line)
+        var mergedWindows = new List<(int Start, int End)>();
+        foreach (var (_, _, winStart, winEnd) in windowedMatches.OrderBy(m => m.WinStart))
+        {
+            if (mergedWindows.Count == 0 || winStart > mergedWindows[^1].End)
+            {
+                mergedWindows.Add((winStart, winEnd));
+            }
+            else
+            {
+                var last = mergedWindows[^1];
+                mergedWindows[^1] = (last.Start, Math.Max(last.End, winEnd));
+            }
+        }
+
+        var returnedLines = mergedWindows.Sum(w => w.End - w.Start + 1);
+
+        // Build matches: first match per merged window gets the context lines; subsequent get empty
+        var assignedWindowIndices = new HashSet<int>();
+        var matches = new List<HotPathMatch>();
+
+        foreach (var (identifier, lineNumber, _, _) in windowedMatches)
+        {
+            var windowIdx = mergedWindows.FindIndex(w => w.Start <= lineNumber && lineNumber <= w.End);
+
+            IReadOnlyList<HotPathContextLine> context;
+            if (windowIdx >= 0 && assignedWindowIndices.Add(windowIdx))
+            {
+                var (mStart, mEnd) = mergedWindows[windowIdx];
+                var contextLineList = new List<HotPathContextLine>();
+                for (var ln = mStart; ln <= mEnd; ln++)
+                {
+                    var idx = ln - symbol.LineStart;
+                    if (idx >= 0 && idx < rawLines.Length)
+                    {
+                        contextLineList.Add(new HotPathContextLine(ln, rawLines[idx].TrimEnd('\r')));
+                    }
+                }
+
+                context = contextLineList;
+            }
+            else
+            {
+                context = [];
+            }
+
+            matches.Add(new HotPathMatch(identifier, lineNumber, context));
+        }
+
+        return new HotPathResult(symbol.Name, fileRelativePath, totalLines, returnedLines, matches);
     }
 
     private static string FormatTopicOutline(Core.Models.ProjectOutline outline, string query, int maxResults)

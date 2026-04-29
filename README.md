@@ -246,6 +246,7 @@ CodeCompress is designed to stay current with minimal effort:
 | `get_symbols` | Batch retrieve multiple symbols in one call (up to 50) |
 | `get_module_api` | Complete public API of a single file/module |
 | `expand_symbol` | Extract a single method from a large class (~60% fewer tokens than `get_symbol`) |
+| `get_hot_path` | Return only the lines within a symbol that contain specific identifiers plus surrounding context (10–40x fewer tokens than the full body) |
 | `search_symbols` | Full-text search across symbol names, signatures, parent types, and docs. Auto-retries with contains-match when exact FTS5 returns zero results. |
 | `search_text` | Raw text search across file contents (with glob filtering) |
 | `topic_outline` | Topic-based search with results grouped in outline format |
@@ -406,6 +407,9 @@ codecompress search-text --path /path/to/project --query "TODO"
 # Retrieve a nested method without loading the whole class (~60% token savings)
 codecompress expand-symbol --path /path/to/project --name MyClass:MyMethod
 
+# Return only lines matching specific identifiers within a symbol (~10-40x fewer tokens)
+codecompress get-hot-path --path /path/to/project --name MyClass:MyMethod --identifiers "userId,status"
+
 # Batch retrieve multiple symbols at once
 codecompress get-symbols --path /path/to/project --names "Foo,Bar,Baz"
 
@@ -462,6 +466,7 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | `outline` | `project_outline` | Compressed codebase overview |
 | `get-symbol` | `get_symbol` | Retrieve symbol source code |
 | `expand-symbol` | `expand_symbol` | Extract nested symbol (~60% fewer tokens) |
+| `get-hot-path` | `get_hot_path` | Return only lines matching identifiers within a symbol |
 | `get-symbols` | `get_symbols` | Batch retrieve multiple symbols |
 | `get-module-api` | `get_module_api` | Public API surface of a file |
 | `search` | `search_symbols` | FTS5 symbol search (auto contains-match fallback) |

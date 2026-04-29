@@ -1797,6 +1797,355 @@ internal sealed class QueryToolsTests
         return tempPath;
     }
 
+    // ── GetHotPath Tests ─────────────────────────────────────────────
+
+    [Test]
+    public async Task GetHotPathSingleIdentifierMatchesWithContext()
+    {
+        var lines = new[] { "line1", "line2", "line3", "line4", "has userId here", "line6", "line7", "line8", "line9", "line10" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "ProcessPayment", "Method", "void ProcessPayment()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 10, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "ProcessPayment").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 10, 1000, 2000) });
+
+            var result = await _tools.GetHotPath(dir, "ProcessPayment", ["userId"], contextLines: 2).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("symbol").GetString()).IsEqualTo("ProcessPayment");
+            await Assert.That(root.GetProperty("total_lines").GetInt32()).IsEqualTo(10);
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(5); // lines 3-7
+
+            var matches = root.GetProperty("matches");
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
+            var match = matches[0];
+            await Assert.That(match.GetProperty("identifier").GetString()).IsEqualTo("userId");
+            await Assert.That(match.GetProperty("line").GetInt32()).IsEqualTo(5);
+            var context = match.GetProperty("context");
+            await Assert.That(context.GetArrayLength()).IsEqualTo(5);
+            await Assert.That(context[0].GetProperty("line_number").GetInt32()).IsEqualTo(3);
+            await Assert.That(context[4].GetProperty("line_number").GetInt32()).IsEqualTo(7);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathMultipleIdentifiersReturnAllMatches()
+    {
+        var lines = new[] { "line1", "has userId here", "line3", "line4", "has status Pending here", "line6", "line7" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 7, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 7, 1000, 2000) });
+
+            // userId at line 2 → window [1,3]; status at line 5 → window [4,6]; no overlap
+            var result = await _tools.GetHotPath(dir, "Process", ["userId", "status"], contextLines: 1).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(6);
+
+            var matches = root.GetProperty("matches");
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(2);
+
+            var match0 = matches[0];
+            await Assert.That(match0.GetProperty("identifier").GetString()).IsEqualTo("userId");
+            await Assert.That(match0.GetProperty("line").GetInt32()).IsEqualTo(2);
+            await Assert.That(match0.GetProperty("context").GetArrayLength()).IsEqualTo(3);
+
+            var match1 = matches[1];
+            await Assert.That(match1.GetProperty("identifier").GetString()).IsEqualTo("status");
+            await Assert.That(match1.GetProperty("line").GetInt32()).IsEqualTo(5);
+            await Assert.That(match1.GetProperty("context").GetArrayLength()).IsEqualTo(3);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathOverlappingContextMergedNoDuplicateLines()
+    {
+        var lines = new[] { "line1", "line2", "line3", "line4", "has userId here", "line6", "has status Pending here", "line8", "line9", "line10" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 10, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 10, 1000, 2000) });
+
+            // userId at line 5 → window [2,8]; status at line 7 → window [4,10]; merged [2,10] = 9 lines
+            var result = await _tools.GetHotPath(dir, "Process", ["userId", "status"], contextLines: 3).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(9);
+
+            var matches = root.GetProperty("matches");
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(2);
+
+            // First match (userId at line 5) gets the full merged context [2-10]
+            var firstMatch = matches[0];
+            await Assert.That(firstMatch.GetProperty("identifier").GetString()).IsEqualTo("userId");
+            await Assert.That(firstMatch.GetProperty("context").GetArrayLength()).IsEqualTo(9);
+
+            // Second match (status at line 7) gets empty context — already covered by merged window
+            var secondMatch = matches[1];
+            await Assert.That(secondMatch.GetProperty("identifier").GetString()).IsEqualTo("status");
+            await Assert.That(secondMatch.GetProperty("context").GetArrayLength()).IsEqualTo(0);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathWholeWordMatchingOnly()
+    {
+        var lines = new[] { "has userIdHash here", "has userId here" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 2, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 2, 1000, 2000) });
+
+            var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 0).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var matches = root.GetProperty("matches");
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(1); // line 1 (userIdHash) NOT matched
+            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(2);
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(1);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathNoMatchesReturnsEmptyMatches()
+    {
+        var content = "line1\nline2\nline3\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 3, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 3, 1000, 2000) });
+
+            var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 3).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("matches").GetArrayLength()).IsEqualTo(0);
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(0);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathContextLinesDefaultsToThree()
+    {
+        var lines = new[] { "line1", "line2", "line3", "line4", "has userId here", "line6", "line7", "line8", "line9", "line10" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 10, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 10, 1000, 2000) });
+
+            // Default contextLines=3 → window [max(1,5-3), min(10,5+3)] = [2,8] = 7 lines
+            var result = await _tools.GetHotPath(dir, "Process", ["userId"]).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(7);
+            var context = root.GetProperty("matches")[0].GetProperty("context");
+            await Assert.That(context.GetArrayLength()).IsEqualTo(7);
+            await Assert.That(context[0].GetProperty("line_number").GetInt32()).IsEqualTo(2);
+            await Assert.That(context[6].GetProperty("line_number").GetInt32()).IsEqualTo(8);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathContextLinesClamped()
+    {
+        var content = "line1\nhas userId here\nline3\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 3, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 3, 1000, 2000) });
+
+            // contextLines=15 → clamped to 10 → window [max(1,2-10), min(3,2+10)] = [1,3] = 3 lines
+            var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 15).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(3);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathSymbolNotFoundReturnsError()
+    {
+        _store.GetSymbolByNameAsync("test-repo-id", "NonExistentMethod").Returns((Symbol?)null);
+        _store.GetSymbolCandidatesByNameAsync("test-repo-id", "NonExistentMethod", Arg.Any<int>())
+            .Returns(new List<Symbol>());
+
+        var result = await _tools.GetHotPath("/valid/path", "NonExistentMethod", ["userId"]).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+    }
+
+    [Test]
+    public async Task GetHotPathInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal"));
+
+        var result = await _tools.GetHotPath("../../etc/passwd", "Method", ["userId"]).ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task GetHotPathRegexInjectionPrevented()
+    {
+        // "user.id" with unescaped regex (. = any char) would also match "user_id"
+        // Regex.Escape ensures only the literal "user.id" is matched
+        var lines = new[] { "user_id = 5", "user.id = 5" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "Process", "Method", "void Process()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 2, "Public", null, null, null);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "Process").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 2, 1000, 2000) });
+
+            var result = await _tools.GetHotPath(dir, "Process", ["user.id"], contextLines: 0).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var matches = root.GetProperty("matches");
+            // Without Regex.Escape, "user.id" as regex (. = any char) would match "user_id" too
+            // With Regex.Escape, only the literal "user.id" on line 2 matches
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
+            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(2);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Test]
+    public async Task GetHotPathUsesBodyLineRangeWhenAvailable()
+    {
+        // Symbol spans lines 1-6; "userId" appears on line 1 (signature) and line 4 (body)
+        // BodyLineStart=2, BodyLineEnd=5 → only body lines scanned; line 1 excluded
+        var lines = new[] { "void userId()", "{", "line3", "has userId here", "line5", "}" };
+        var content = string.Join("\n", lines) + "\n";
+        var tempFile = CreateTempFile(content);
+        try
+        {
+            var dir = Path.GetDirectoryName(tempFile)!;
+            var fileName = Path.GetFileName(tempFile);
+            var symbol = new Symbol(1, 1, "UserId", "Method", "void userId()",
+                null, 0, Encoding.UTF8.GetByteCount(content), 1, 6, "Public", null, 2, 5);
+
+            _store.GetSymbolByNameAsync("test-repo-id", "UserId").Returns(symbol);
+            _store.GetFilesByRepoAsync("test-repo-id")
+                .Returns(new List<FileRecord> { new(1, "test-repo-id", fileName, "hash1", 100, 6, 1000, 2000) });
+
+            var result = await _tools.GetHotPath(dir, "UserId", ["userId"], contextLines: 0).ConfigureAwait(false);
+
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            await Assert.That(root.GetProperty("total_lines").GetInt32()).IsEqualTo(4); // body is lines 2-5
+            var matches = root.GetProperty("matches");
+            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
+            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(4); // body match only
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     // ── Mixed strategy error tests ───────────────────────────────────
 
     [Test]
