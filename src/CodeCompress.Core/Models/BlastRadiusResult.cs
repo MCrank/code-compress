@@ -5,5 +5,6 @@ public sealed record BlastRadiusDepth(
     IReadOnlyList<string> Files);
 
 public sealed record BlastRadiusResult(
+    bool Found,
     int TotalAffected,
     IReadOnlyList<BlastRadiusDepth> Depths);

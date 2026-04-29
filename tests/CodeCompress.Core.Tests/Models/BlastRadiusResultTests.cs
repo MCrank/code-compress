@@ -7,9 +7,16 @@ internal sealed class BlastRadiusResultTests
     [Test]
     public async Task EmptyResultHasZeroTotalAffected()
     {
-        var result = new BlastRadiusResult(0, []);
+        var result = new BlastRadiusResult(true, 0, []);
         await Assert.That(result.TotalAffected).IsEqualTo(0);
         await Assert.That(result.Depths).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task NotFoundResultHasFoundFalse()
+    {
+        var result = new BlastRadiusResult(false, 0, []);
+        await Assert.That(result.Found).IsFalse();
     }
 
     [Test]
@@ -20,8 +27,9 @@ internal sealed class BlastRadiusResultTests
             new(1, ["B.cs", "C.cs"]),
             new(2, ["D.cs"]),
         };
-        var result = new BlastRadiusResult(3, depths);
+        var result = new BlastRadiusResult(true, 3, depths);
 
+        await Assert.That(result.Found).IsTrue();
         await Assert.That(result.TotalAffected).IsEqualTo(3);
         await Assert.That(result.Depths).Count().IsEqualTo(2);
         await Assert.That(result.Depths[0].Depth).IsEqualTo(1);
@@ -35,8 +43,8 @@ internal sealed class BlastRadiusResultTests
     {
         var files = new List<string> { "B.cs" };
         var depths = new List<BlastRadiusDepth> { new(1, files) };
-        var r1 = new BlastRadiusResult(1, depths);
-        var r2 = new BlastRadiusResult(1, depths);
+        var r1 = new BlastRadiusResult(true, 1, depths);
+        var r2 = new BlastRadiusResult(true, 1, depths);
 
         await Assert.That(r1).IsEqualTo(r2);
     }

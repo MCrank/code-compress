@@ -140,11 +140,25 @@ internal sealed class DependencyTools
 
         var clampedDepth = Math.Clamp(maxDepth, 1, 20);
 
+        if (normalizedFilePath is null && symbolName is null)
+        {
+            return SerializeError("Provide either filePath or symbolName", "INVALID_INPUT");
+        }
+
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
         await using (scope.ConfigureAwait(false))
         {
             var result = await scope.Store.GetBlastRadiusAsync(
                 scope.RepoId, normalizedFilePath, symbolName, clampedDepth).ConfigureAwait(false);
+
+            if (!result.Found)
+            {
+                return SerializeError(
+                    normalizedFilePath is not null
+                        ? "File not found in index — verify the relative path and run index_project"
+                        : "Symbol not found in index — use search_symbols to find the correct name",
+                    "NOT_FOUND");
+            }
 
             return JsonSerializer.Serialize(
                 new

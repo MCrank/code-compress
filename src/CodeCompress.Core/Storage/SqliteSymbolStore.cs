@@ -1680,7 +1680,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var file = await GetFileByPathAsync(repoId, filePath).ConfigureAwait(false);
             if (file is null)
             {
-                return new BlastRadiusResult(0, []);
+                return new BlastRadiusResult(false, 0, []);
             }
 
             rootFileId = file.Id;
@@ -1690,7 +1690,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var symbol = await GetSymbolByNameAsync(repoId, symbolName).ConfigureAwait(false);
             if (symbol is null)
             {
-                return new BlastRadiusResult(0, []);
+                return new BlastRadiusResult(false, 0, []);
             }
 
             rootFileId = symbol.FileId;
@@ -1698,7 +1698,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (rootFileId is null)
         {
-            return new BlastRadiusResult(0, []);
+            return new BlastRadiusResult(false, 0, []);
         }
 
         // Load file lookups
@@ -1751,7 +1751,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
         }
 
         var totalAffected = depths.Sum(d => d.Files.Count);
-        return new BlastRadiusResult(totalAffected, depths);
+        return new BlastRadiusResult(true, totalAffected, depths);
     }
 
     public async Task<IReadOnlyList<SymbolSummary>> FindUnusedSymbolsAsync(string repoId, int limit = 100)
@@ -1773,7 +1773,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             JOIN files f ON s.file_id = f.id
             WHERE f.repo_id = @repoId
               AND s.visibility = 'Public'
-              AND s.kind NOT IN ('module', 'constant', 'namespace')
+              AND s.kind NOT IN ('Module', 'Constant', 'Namespace', 'ConfigKey', 'Export')
               AND f.relative_path NOT LIKE '%Test%'
               AND f.relative_path NOT LIKE '%Spec%'
               AND f.relative_path NOT LIKE '%Fixture%'
