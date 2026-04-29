@@ -1644,6 +1644,79 @@ assembleCommand.SetAction(async parseResult =>
 
 rootCommand.Subcommands.Add(assembleCommand);
 
+// ── prompts ─────────────────────────────────────────────────
+
+var promptsNameOption = new Option<string?>("--name")
+{
+    Description = "Show the full text of a specific prompt. " +
+                  "Valid names: explore_codebase, find_impact, review_changes, debug_symbol. " +
+                  "Omit to list all prompts.",
+};
+
+var promptsCommand = new Command("prompts",
+    "List available workflow prompts or show the full text of a specific prompt. " +
+    "Prompts guide AI agents through common CodeCompress workflows.")
+{
+    promptsNameOption,
+};
+
+promptsCommand.SetAction(parseResult =>
+{
+    var name = parseResult.GetValue(promptsNameOption);
+    var json = parseResult.GetValue(jsonOption);
+
+    if (name is null)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(CliPrompts.All.Select(p => new { p.Name, p.Description }), jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine("Available prompts (use --name <name> to view full text):\n");
+            foreach (var p in CliPrompts.All)
+            {
+                Console.WriteLine($"  {p.Name,-20}  {p.Description}");
+            }
+        }
+
+        return;
+    }
+
+    var prompt = CliPrompts.All.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+    if (prompt is null)
+    {
+        Environment.ExitCode = 1;
+        var validNames = string.Join(", ", CliPrompts.All.Select(p => p.Name));
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Error = "Prompt not found", Code = "PROMPT_NOT_FOUND", ValidNames = validNames },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            Console.Error.WriteLine($"Error: Prompt not found. Valid names: {validNames}");
+        }
+
+        return;
+    }
+
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new { prompt.Name, prompt.Description, prompt.Text }, jsonSerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine($"# {prompt.Name}");
+        Console.WriteLine($"# {prompt.Description}");
+        Console.WriteLine();
+        Console.WriteLine(prompt.Text);
+    }
+});
+
+rootCommand.Subcommands.Add(promptsCommand);
+
 // ── agent-instructions ──────────────────────────────────────
 
 var agentInstructionsCommand = new Command("agent-instructions",

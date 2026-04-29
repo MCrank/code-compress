@@ -1,5 +1,6 @@
 using System.Reflection;
 using CodeCompress.Server;
+using CodeCompress.Server.Prompts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,7 @@ builder.Services
             """;
     })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly()
+    .WithPrompts<PromptsProvider>();
 
 await builder.Build().RunAsync().ConfigureAwait(false);
