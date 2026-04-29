@@ -273,14 +273,14 @@ CodeCompress is designed to stay current with minimal effort:
 | Language | Extensions | Status | Parser |
 |----------|------------|--------|--------|
 | Luau (Roblox) | `.luau`, `.lua` | Available | Regex/pattern-based |
-| C# / .NET | `.cs` | Available | Regex/pattern-based |
+| C# / .NET | `.cs` | Available | Tree-sitter AST |
 | Blazor / Razor | `.razor` | Available | Directive extraction + C# delegation |
 | Terraform / HCL | `.tf`, `.tfvars` | Available | Regex/pattern-based |
-| Java | `.java` | Available | Regex/pattern-based |
-| Go | `.go` | Available | Regex/pattern-based |
-| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Regex/pattern-based |
-| Rust | `.rs` | Available | Regex/pattern-based |
-| Python | `.py`, `.pyi` | Available | Indentation-based |
+| Java | `.java` | Available | Tree-sitter AST |
+| Go | `.go` | Available | Tree-sitter AST |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Tree-sitter AST |
+| Rust | `.rs` | Available | Tree-sitter AST |
+| Python | `.py`, `.pyi` | Available | Tree-sitter AST |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
 | JSON Config | `.json` | Available | Structure-based |
 | YAML Config | `.yaml`, `.yml` | Available | Structure-based |

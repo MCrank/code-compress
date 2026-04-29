@@ -32,10 +32,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "Initialize", "Function", "function Initialize()", null, 0, 100, 1, 10, "Public", "Initializes the module"),
-            new(0, insertedFile.Id, "Helper", "Function", "local function Helper()", null, 100, 50, 11, 15, "Private", null),
-            new(0, insertedFile.Id, "MyClass", "Class", "class MyClass", null, 150, 200, 16, 40, "Public", "A class"),
-            new(0, insertedFile.Id, "DoWork", "Method", "function MyClass:DoWork()", "MyClass", 200, 80, 20, 30, "Public", "Does work"),
+            new(0, insertedFile!.Id, "Initialize", "Function", "function Initialize()", null, 0, 100, 1, 10, "Public", "Initializes the module", null, null),
+            new(0, insertedFile.Id, "Helper", "Function", "local function Helper()", null, 100, 50, 11, 15, "Private", null, null, null),
+            new(0, insertedFile.Id, "MyClass", "Class", "class MyClass", null, 150, 200, 16, 40, "Public", "A class", null, null),
+            new(0, insertedFile.Id, "DoWork", "Method", "function MyClass:DoWork()", "MyClass", 200, 80, 20, 30, "Public", "Does work", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -128,9 +128,9 @@ internal sealed class SymbolStoreQueryTests
         // It only appears in parent_symbol — so this test proves parent_symbol is FTS5-indexed
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "VcsConnection", "Class", "public class VcsConnection", null, 0, 500, 1, 50, "Public", "VCS connection manager"),
-            new(0, insertedFile.Id, "Activate", "Method", "public void Activate()", "VcsConnection", 100, 50, 10, 15, "Public", "Activates the connection"),
-            new(0, insertedFile.Id, "Deactivate", "Method", "public void Deactivate()", "VcsConnection", 200, 50, 20, 25, "Public", null),
+            new(0, insertedFile!.Id, "VcsConnection", "Class", "public class VcsConnection", null, 0, 500, 1, 50, "Public", "VCS connection manager", null, null),
+            new(0, insertedFile.Id, "Activate", "Method", "public void Activate()", "VcsConnection", 100, 50, 10, 15, "Public", "Activates the connection", null, null),
+            new(0, insertedFile.Id, "Deactivate", "Method", "public void Deactivate()", "VcsConnection", 200, 50, 20, 25, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -219,8 +219,8 @@ internal sealed class SymbolStoreQueryTests
         // Insert constructor FIRST (lower rowid), then class — without ordering, constructor would win
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "BaseEntity", "Method", "protected BaseEntity()", "BaseEntity", 100, 50, 10, 15, "Protected", null),
-            new(0, insertedFile.Id, "BaseEntity", "Class", "public abstract class BaseEntity", null, 0, 200, 1, 20, "Public", "Base entity class"),
+            new(0, insertedFile!.Id, "BaseEntity", "Method", "protected BaseEntity()", "BaseEntity", 100, 50, 10, 15, "Protected", null, null, null),
+            new(0, insertedFile.Id, "BaseEntity", "Class", "public abstract class BaseEntity", null, 0, 200, 1, 20, "Public", "Base entity class", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -245,8 +245,8 @@ internal sealed class SymbolStoreQueryTests
         // Insert method first, class second
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "Tenant", "Method", "private Tenant()", "Tenant", 100, 50, 10, 15, "Private", null),
-            new(0, insertedFile.Id, "Tenant", "Class", "public sealed class Tenant", null, 0, 200, 1, 20, "Public", "Tenant entity"),
+            new(0, insertedFile!.Id, "Tenant", "Method", "private Tenant()", "Tenant", 100, 50, 10, 15, "Private", null, null, null),
+            new(0, insertedFile.Id, "Tenant", "Class", "public sealed class Tenant", null, 0, 200, 1, 20, "Public", "Tenant entity", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -273,10 +273,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ProjectEndpoints", "Class", "public static class ProjectEndpoints", null, 0, 500, 1, 50, "Public", null),
-            new(0, insertedFile.Id, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", "ProjectEndpoints", 100, 100, 10, 20, "Public", null),
-            new(0, insertedFile.Id, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", "ProjectEndpoints", 200, 100, 21, 30, "Public", null),
-            new(0, insertedFile.Id, "MapOtherEndpoints", "Method", "public static void MapOtherEndpoints()", "ProjectEndpoints", 300, 100, 31, 40, "Public", null),
+            new(0, insertedFile!.Id, "ProjectEndpoints", "Class", "public static class ProjectEndpoints", null, 0, 500, 1, 50, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", "ProjectEndpoints", 100, 100, 10, 20, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", "ProjectEndpoints", 200, 100, 21, 30, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapOtherEndpoints", "Method", "public static void MapOtherEndpoints()", "ProjectEndpoints", 300, 100, 31, 40, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -407,11 +407,11 @@ internal sealed class SymbolStoreQueryTests
         var f5 = await store.GetFileByPathAsync("repo1", OsPath("src/servicesExtra/Bonus.luau")).ConfigureAwait(false);
 
         await store.InsertSymbolsAsync([
-            new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null),
-            new Symbol(0, f2!.Id, "Add", "Function", "function Add(a, b)", null, 0, 30, 1, 3, "Public", null),
-            new Symbol(0, f3!.Id, "FooModel", "Class", "class FooModel", null, 0, 40, 1, 4, "Public", null),
-            new Symbol(0, f4!.Id, "BarService", "Class", "class BarService", null, 0, 40, 1, 4, "Public", null),
-            new Symbol(0, f5!.Id, "BonusFunc", "Function", "function BonusFunc()", null, 0, 30, 1, 3, "Private", null),
+            new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null, null, null),
+            new Symbol(0, f2!.Id, "Add", "Function", "function Add(a, b)", null, 0, 30, 1, 3, "Public", null, null, null),
+            new Symbol(0, f3!.Id, "FooModel", "Class", "class FooModel", null, 0, 40, 1, 4, "Public", null, null, null),
+            new Symbol(0, f4!.Id, "BarService", "Class", "class BarService", null, 0, 40, 1, 4, "Public", null, null, null),
+            new Symbol(0, f5!.Id, "BonusFunc", "Function", "function BonusFunc()", null, 0, 30, 1, 3, "Private", null, null, null),
         ]).ConfigureAwait(false);
 
         return store;
@@ -1144,8 +1144,8 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ClaudeConfig", "ConfigKey", "ClaudeConfig: \"value\"", null, 0, 50, 1, 1, "Public", null),
-            new(0, insertedFile.Id, "ClaudeService", "Class", "class ClaudeService", null, 100, 200, 5, 20, "Public", null),
+            new(0, insertedFile!.Id, "ClaudeConfig", "ConfigKey", "ClaudeConfig: \"value\"", null, 0, 50, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "ClaudeService", "Class", "class ClaudeService", null, 100, 200, 5, 20, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -1172,10 +1172,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "CLAUDE_KEY", "Constant", "const CLAUDE_KEY", null, 0, 30, 1, 1, "Public", null),
-            new(0, insertedFile.Id, "HandleClaude", "Method", "void HandleClaude()", null, 50, 80, 5, 10, "Public", null),
-            new(0, insertedFile.Id, "IClaudeClient", "Interface", "interface IClaudeClient", null, 150, 100, 15, 25, "Public", null),
-            new(0, insertedFile.Id, "ClaudeRecord", "Record", "record ClaudeRecord", null, 300, 50, 30, 35, "Public", null),
+            new(0, insertedFile!.Id, "CLAUDE_KEY", "Constant", "const CLAUDE_KEY", null, 0, 30, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "HandleClaude", "Method", "void HandleClaude()", null, 50, 80, 5, 10, "Public", null, null, null),
+            new(0, insertedFile.Id, "IClaudeClient", "Interface", "interface IClaudeClient", null, 150, 100, 15, 25, "Public", null, null, null),
+            new(0, insertedFile.Id, "ClaudeRecord", "Record", "record ClaudeRecord", null, 300, 50, 30, 35, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -1207,9 +1207,9 @@ internal sealed class SymbolStoreQueryTests
         // Insert in reverse alphabetical order to prove sorting works
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ZService", "Class", "class ZService", null, 0, 50, 1, 5, "Public", null),
-            new(0, insertedFile.Id, "AService", "Class", "class AService", null, 100, 50, 10, 15, "Public", null),
-            new(0, insertedFile.Id, "MService", "Class", "class MService", null, 200, 50, 20, 25, "Public", null),
+            new(0, insertedFile!.Id, "ZService", "Class", "class ZService", null, 0, 50, 1, 5, "Public", null, null, null),
+            new(0, insertedFile.Id, "AService", "Class", "class AService", null, 100, 50, 10, 15, "Public", null, null, null),
+            new(0, insertedFile.Id, "MService", "Class", "class MService", null, 200, 50, 20, 25, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 

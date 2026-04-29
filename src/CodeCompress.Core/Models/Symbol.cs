@@ -12,4 +12,6 @@ public sealed record Symbol(
     int LineStart,
     int LineEnd,
     string Visibility,
-    string? DocComment);
+    string? DocComment,
+    int? BodyLineStart,
+    int? BodyLineEnd);

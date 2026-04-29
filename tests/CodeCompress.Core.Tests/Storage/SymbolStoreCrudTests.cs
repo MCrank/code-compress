@@ -26,7 +26,7 @@ internal sealed class SymbolStoreCrudTests
         new(id, repoId, path, "abc123hash", 1024, 50, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
     private static Symbol CreateTestSymbol(long fileId, string name = "TestFunction", int lineStart = 1, int lineEnd = 10) =>
-        new(0, fileId, name, "function", $"function {name}()", null, 0, 100, lineStart, lineEnd, "public", "A test function");
+        new(0, fileId, name, "function", $"function {name}()", null, 0, 100, lineStart, lineEnd, "public", "A test function", null, null);
 
     private static Dependency CreateTestDependency(long fileId, string requiresPath = "modules/utils", long? resolvedFileId = null, string? alias = null) =>
         new(0, fileId, requiresPath, resolvedFileId, alias);

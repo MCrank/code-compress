@@ -413,5 +413,5 @@ internal sealed class ContextToolsTests
     private static Symbol CreateSymbol(
         long id, long fileId, string name, string kind, string signature,
         string? parent = null, int byteOffset = 0, int byteLength = 100) =>
-        new(id, fileId, name, kind, signature, parent, byteOffset, byteLength, 1, 10, "Public", null);
+        new(id, fileId, name, kind, signature, parent, byteOffset, byteLength, 1, 10, "Public", null, null, null);
 }

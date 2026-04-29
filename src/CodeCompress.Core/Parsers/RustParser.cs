@@ -1,669 +1,264 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using CodeCompress.Core.Models;
+using TreeSitter;
 
 namespace CodeCompress.Core.Parsers;
 
-public sealed partial class RustParser : ILanguageParser
+public sealed class RustParser : ILanguageParser
 {
+    private const string SymbolQuery = """
+        [
+          (struct_item name: (type_identifier) @name body: (field_declaration_list) @body) @decl
+          (struct_item name: (type_identifier) @name) @decl
+          (enum_item name: (type_identifier) @name body: (enum_variant_list) @body) @decl
+          (trait_item name: (type_identifier) @name body: (declaration_list) @body) @decl
+          (impl_item type: (type_identifier) @name body: (declaration_list) @body) @decl
+          (function_item name: (identifier) @name body: (block) @body) @decl
+          (const_item name: (identifier) @name) @decl
+          (static_item name: (identifier) @name) @decl
+          (type_item name: (type_identifier) @name) @decl
+          (mod_item name: (identifier) @name body: (declaration_list) @body) @decl
+          (mod_item name: (identifier) @name) @decl
+          (macro_definition name: (identifier) @name) @decl
+        ]
+        """;
+
+    private static readonly HashSet<string> ContainerNodeTypes = new(StringComparer.Ordinal)
+    {
+        "impl_item", "trait_item"
+    };
+
     public string LanguageId => "rust";
 
     public IReadOnlyList<string> FileExtensions { get; } = [".rs"];
 
-    [GeneratedRegex(@"^\s*(?:pub\s+)?use\s+([\w:]+(?:::\{[^}]+\}|::\*)?)\s*;")]
-    private static partial Regex UsePattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?mod\s+(\w+)\s*;")]
-    private static partial Regex ModDeclPattern();
-
-    [GeneratedRegex(@"^\s*(?:#\[.*\]\s*)*(pub(?:\([\w]+\))?\s+)?struct\s+(\w+)(.*)$")]
-    private static partial Regex StructPattern();
-
-    [GeneratedRegex(@"^\s*(?:#\[.*\]\s*)*(pub(?:\([\w]+\))?\s+)?enum\s+(\w+)(.*)$")]
-    private static partial Regex EnumPattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?trait\s+(\w+)(.*)$")]
-    private static partial Regex TraitPattern();
-
-    [GeneratedRegex(@"^\s*impl(?:<[^>]*>)?\s+(?:(\w+)\s+for\s+)?(\w+)(.*)$")]
-    private static partial Regex ImplPattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?(?:async\s+)?fn\s+(\w+)(.*)$")]
-    private static partial Regex FnPattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?const\s+(\w+)\s*:(.*)$")]
-    private static partial Regex ConstPattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?static\s+(\w+)\s*:(.*)$")]
-    private static partial Regex StaticPattern();
-
-    [GeneratedRegex(@"^\s*(pub(?:\([\w]+\))?\s+)?type\s+(\w+)(.*)$")]
-    private static partial Regex TypeAliasPattern();
-
-    [GeneratedRegex(@"^\s*(?:#\[.*\]\s*)?macro_rules!\s+(\w+)")]
-    private static partial Regex MacroRulesPattern();
-
     public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
     {
         if (content.IsEmpty)
-        {
             return new ParseResult([], []);
-        }
 
-        var text = Encoding.UTF8.GetString(content);
+        var bytes = content.ToArray();
+        var text = Encoding.UTF8.GetString(bytes);
         var lines = text.Split('\n');
+
+        using var language = new Language("rust");
+        using var parser = new Parser(language);
+        using var tree = parser.Parse(text);
+        if (tree is null)
+            return new ParseResult([], []);
+
         var symbols = new List<SymbolInfo>();
-        var dependencies = new List<DependencyInfo>();
-        var lineByteOffsets = ComputeLineByteOffsets(content);
-        var parentStack = new List<PendingType>();
-        var docCommentLines = new List<string>();
-        var attributeLines = new List<string>();
-        var inBlockComment = false;
+        var deps = new List<DependencyInfo>();
 
-        for (var i = 0; i < lines.Length; i++)
+        ExtractDependencies(tree.RootNode, language, deps);
+
+        var declMap = new Dictionary<int, (Node Decl, Node? Name, Node? Body)>();
+        using var symQuery = new Query(language, SymbolQuery);
+        foreach (var match in symQuery.Execute(tree.RootNode).Matches)
         {
-            var line = lines[i].TrimEnd('\r');
-            var trimmed = line.Trim();
-            var lineNumber = i + 1;
-            var byteOffset = lineByteOffsets[i];
-
-            if (inBlockComment)
+            Node? decl = null, name = null, body = null;
+            foreach (var cap in match.Captures)
             {
-                if (trimmed.Contains("*/", StringComparison.Ordinal))
+                switch (cap.Name)
                 {
-                    inBlockComment = false;
+                    case "decl": decl = cap.Node; break;
+                    case "name": name = cap.Node; break;
+                    case "body": body = cap.Node; break;
                 }
-
-                continue;
             }
+            if (decl is null) continue;
 
-            if (trimmed.StartsWith("/*", StringComparison.Ordinal))
+            var key = decl.StartIndex;
+            if (!declMap.TryGetValue(key, out var existing))
+                declMap[key] = (decl, name, body);
+            else
+                declMap[key] = (existing.Decl, existing.Name ?? name, existing.Body ?? body);
+        }
+
+        foreach (var (_, (decl, nameNode, body)) in declMap.OrderBy(kv => kv.Key))
+        {
+            var symbolName = nameNode?.Text;
+            if (string.IsNullOrEmpty(symbolName)) continue;
+
+            // impl_item entries are only containers for parent resolution — not emitted as symbols
+            if (decl.Type == "impl_item") continue;
+
+            var kind = GetKind(decl);
+            var lineStart = decl.StartPosition.Row + 1;
+            var lineEnd = decl.EndPosition.Row + 1;
+            var sig = ExtractSignature(decl, body, bytes);
+            var parentName = FindParentName(decl, declMap);
+            if (decl.Type == "function_item" && parentName is not null)
+                kind = SymbolKind.Method;
+            var vis = DeriveVisibility(decl, bytes);
+            var doc = ExtractDocComment(lines, decl);
+
+            int? bodyLineStart = null, bodyLineEnd = null;
+            if (body is not null && body.Type is "block" or "field_declaration_list" or "declaration_list")
             {
-                if (!trimmed.Contains("*/", StringComparison.Ordinal))
-                {
-                    inBlockComment = true;
-                }
-
-                docCommentLines.Clear();
-                continue;
+                var bls = body.StartPosition.Row + 2;
+                var ble = body.EndPosition.Row;
+                if (bls <= ble) { bodyLineStart = bls; bodyLineEnd = ble; }
             }
 
-            // Doc comments: /// or //!
-            if (trimmed.StartsWith("///", StringComparison.Ordinal) || trimmed.StartsWith("//!", StringComparison.Ordinal))
-            {
-                docCommentLines.Add(trimmed);
-                continue;
-            }
-
-            if (trimmed.StartsWith("//", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(trimmed))
-            {
-                docCommentLines.Clear();
-                UpdateBraceDepth(trimmed, lineNumber, byteOffset, parentStack, symbols);
-                continue;
-            }
-
-            // Collect attributes
-            if (trimmed.StartsWith("#[", StringComparison.Ordinal))
-            {
-                attributeLines.Add(trimmed);
-                UpdateBraceDepth(trimmed, lineNumber, byteOffset, parentStack, symbols);
-                continue;
-            }
-
-            var matched = TryMatchUse(trimmed, dependencies)
-                          || TryMatchModDecl(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
-                          || TryMatchStruct(trimmed, lineNumber, byteOffset, docCommentLines, attributeLines, parentStack)
-                          || TryMatchEnum(trimmed, lineNumber, byteOffset, docCommentLines, attributeLines, parentStack)
-                          || TryMatchTrait(trimmed, lineNumber, byteOffset, docCommentLines, parentStack)
-                          || TryMatchImpl(trimmed, lineNumber, byteOffset, parentStack)
-                          || TryMatchMacroRules(trimmed, lineNumber, byteOffset, docCommentLines, parentStack)
-                          || TryMatchConst(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
-                          || TryMatchStatic(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
-                          || TryMatchTypeAlias(trimmed, lineNumber, byteOffset, docCommentLines, symbols)
-                          || TryMatchFn(trimmed, lineNumber, byteOffset, docCommentLines, parentStack, symbols);
-
-            if (matched || !trimmed.StartsWith("#[", StringComparison.Ordinal))
-            {
-                docCommentLines.Clear();
-                attributeLines.Clear();
-            }
-
-            UpdateBraceDepth(trimmed, lineNumber, byteOffset, parentStack, symbols);
+            symbols.Add(new SymbolInfo(
+                Name: symbolName,
+                Kind: kind,
+                Signature: sig,
+                ParentSymbol: parentName,
+                ByteOffset: decl.StartIndex,
+                ByteLength: decl.EndIndex - decl.StartIndex,
+                LineStart: lineStart,
+                LineEnd: lineEnd,
+                Visibility: vis,
+                DocComment: doc,
+                BodyLineStart: bodyLineStart,
+                BodyLineEnd: bodyLineEnd));
         }
 
-        return new ParseResult(symbols, dependencies);
+        return new ParseResult(symbols, deps);
     }
 
-    private static bool TryMatchUse(string trimmed, List<DependencyInfo> dependencies)
+    private static void ExtractDependencies(Node root, Language language, List<DependencyInfo> deps)
     {
-        var match = UsePattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        dependencies.Add(new DependencyInfo(RequirePath: match.Groups[1].Value, Alias: null));
-        return true;
+        using var q = new Query(language, "(use_declaration argument: (_) @path)");
+        foreach (var cap in q.Execute(root).Captures)
+            deps.Add(new DependencyInfo(RequirePath: cap.Node.Text.Trim(), Alias: null));
     }
 
-    private static bool TryMatchModDecl(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<SymbolInfo> symbols)
+    private static SymbolKind GetKind(Node decl) => decl.Type switch
     {
-        var match = ModDeclPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
+        "struct_item" => SymbolKind.Class,
+        "enum_item" => SymbolKind.Enum,
+        "trait_item" => SymbolKind.Interface,
+        "function_item" => SymbolKind.Function,
+        "const_item" or "static_item" => SymbolKind.Constant,
+        "type_item" => SymbolKind.Type,
+        "mod_item" => SymbolKind.Module,
+        "macro_definition" => SymbolKind.Function,
+        _ => SymbolKind.Function
+    };
 
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-        var docComment = BuildDocComment(docCommentLines);
-
-        symbols.Add(new SymbolInfo(
-            Name: name,
-            Kind: SymbolKind.Module,
-            Signature: trimmed.Trim(),
-            ParentSymbol: null,
-            ByteOffset: byteOffset,
-            ByteLength: Encoding.UTF8.GetByteCount(trimmed),
-            LineStart: lineNumber,
-            LineEnd: lineNumber,
-            Visibility: visibility,
-            DocComment: docComment));
-
-        return true;
-    }
-
-    private static bool TryMatchStruct(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<string> attributeLines,
-        List<PendingType> parentStack)
+    private static string ExtractSignature(Node decl, Node? body, byte[] bytes)
     {
-        var match = StructPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
+        // Include preceding attribute_item siblings in the signature
+        var attrs = GetPrecedingAttributes(decl);
 
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
+        var start = decl.StartIndex;
+        int end;
 
-        var signatureBuilder = new StringBuilder();
-        foreach (var attr in attributeLines)
-        {
-            signatureBuilder.Append(attr).Append(' ');
-        }
-
-        var sigLine = trimmed.Trim();
-        var braceIdx = FindOpenBraceInCode(sigLine);
-        var signature = braceIdx >= 0 ? sigLine[..braceIdx].TrimEnd() : sigLine.TrimEnd(';', ' ');
-        signature = string.Concat(signatureBuilder.ToString(), signature);
-
-        var docComment = BuildDocComment(docCommentLines);
-        var currentDepth = GetCurrentBraceDepth(parentStack);
-
-        if (trimmed.Contains('{', StringComparison.Ordinal))
-        {
-            parentStack.Add(new PendingType(name, SymbolKind.Class, signature, null, byteOffset, lineNumber, visibility, docComment, currentDepth, true));
-        }
-
-        // Tuple structs (end with ;) and unit structs are consumed but not pushed to stack
-        return true;
-    }
-
-    private static bool TryMatchEnum(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<string> attributeLines,
-        List<PendingType> parentStack)
-    {
-        var match = EnumPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-
-        var signatureBuilder = new StringBuilder();
-        foreach (var attr in attributeLines)
-        {
-            signatureBuilder.Append(attr).Append(' ');
-        }
-
-        var sigLine = trimmed.Trim();
-        var braceIdx = FindOpenBraceInCode(sigLine);
-        var signature = braceIdx >= 0 ? sigLine[..braceIdx].TrimEnd() : sigLine;
-        signature = string.Concat(signatureBuilder.ToString(), signature);
-
-        var docComment = BuildDocComment(docCommentLines);
-        var currentDepth = GetCurrentBraceDepth(parentStack);
-
-        parentStack.Add(new PendingType(name, SymbolKind.Enum, signature, null, byteOffset, lineNumber, visibility, docComment, currentDepth, true));
-        return true;
-    }
-
-    private static bool TryMatchTrait(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<PendingType> parentStack)
-    {
-        var match = TraitPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-
-        var sigLine = trimmed.Trim();
-        var braceIdx = FindOpenBraceInCode(sigLine);
-        var signature = braceIdx >= 0 ? sigLine[..braceIdx].TrimEnd() : sigLine;
-
-        var docComment = BuildDocComment(docCommentLines);
-        var currentDepth = GetCurrentBraceDepth(parentStack);
-
-        parentStack.Add(new PendingType(name, SymbolKind.Interface, signature, null, byteOffset, lineNumber, visibility, docComment, currentDepth, true));
-        return true;
-    }
-
-    private static bool TryMatchImpl(
-        string trimmed, int lineNumber, int byteOffset,
-        List<PendingType> parentStack)
-    {
-        var match = ImplPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        // impl Trait for Type — the type name is the container parent
-        var typeName = match.Groups[2].Value;
-        var currentDepth = GetCurrentBraceDepth(parentStack);
-
-        // impl blocks are containers — methods inside get parentName = typeName
-        // But we don't emit impl as a symbol itself — it's just a grouping construct
-        parentStack.Add(new PendingType(typeName, SymbolKind.Class, string.Empty, null, byteOffset, lineNumber, Visibility.Public, null, currentDepth, true));
-        return true;
-    }
-
-    private static bool TryMatchMacroRules(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<PendingType> parentStack)
-    {
-        var match = MacroRulesPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var name = match.Groups[1].Value;
-        var docComment = BuildDocComment(docCommentLines);
-        var currentDepth = GetCurrentBraceDepth(parentStack);
-
-        parentStack.Add(new PendingType(name, SymbolKind.Function, $"macro_rules! {name}", null, byteOffset, lineNumber, Visibility.Public, docComment, currentDepth, false));
-        return true;
-    }
-
-    private static bool TryMatchFn(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<PendingType> parentStack, List<SymbolInfo> symbols)
-    {
-        var match = FnPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-
-        var sigLine = trimmed.Trim();
-        var braceIdx = FindOpenBraceInCode(sigLine);
-        var signature = braceIdx >= 0 ? sigLine[..braceIdx].TrimEnd() : sigLine.TrimEnd(';', ' ');
-
-        var docComment = BuildDocComment(docCommentLines);
-        var parentName = GetCurrentContainerName(parentStack);
-        var kind = parentName is not null ? SymbolKind.Method : SymbolKind.Function;
-
-        if (trimmed.EndsWith(';') || !trimmed.Contains('{', StringComparison.Ordinal))
-        {
-            symbols.Add(new SymbolInfo(name, kind, signature, parentName, byteOffset,
-                Encoding.UTF8.GetByteCount(trimmed), lineNumber, lineNumber, visibility, docComment));
-        }
+        if (body is not null && body.Type is "block" or "field_declaration_list" or "declaration_list" or "enum_variant_list")
+            end = body.StartIndex;
         else
         {
-            var currentDepth = GetCurrentBraceDepth(parentStack);
-            parentStack.Add(new PendingType(name, kind, signature, parentName, byteOffset, lineNumber, visibility, docComment, currentDepth, false));
+            end = decl.EndIndex;
+            // Strip trailing semicolons
+            while (end > start && bytes[end - 1] is (byte)';' or (byte)' ' or (byte)'\r' or (byte)'\n' or (byte)'\t')
+                end--;
         }
 
-        return true;
+        if (end <= start) end = decl.EndIndex;
+        var baseSig = Encoding.UTF8.GetString(bytes, start, end - start).TrimEnd();
+
+        return attrs.Count > 0
+            ? string.Join(" ", attrs) + " " + baseSig
+            : baseSig;
     }
 
-    private static bool TryMatchConst(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<SymbolInfo> symbols)
+    private static List<string> GetPrecedingAttributes(Node decl)
     {
-        var match = ConstPattern().Match(trimmed);
-        if (!match.Success)
+        var result = new List<string>();
+        var parent = decl.Parent;
+        if (parent is null) return result;
+
+        var children = parent.Children;
+        var declIdx = -1;
+        for (var i = 0; i < children.Count; i++)
         {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-        var docComment = BuildDocComment(docCommentLines);
-
-        symbols.Add(new SymbolInfo(name, SymbolKind.Constant, trimmed.Trim().TrimEnd(';'), null, byteOffset,
-            Encoding.UTF8.GetByteCount(trimmed), lineNumber, lineNumber, visibility, docComment));
-        return true;
-    }
-
-    private static bool TryMatchStatic(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<SymbolInfo> symbols)
-    {
-        var match = StaticPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-        var docComment = BuildDocComment(docCommentLines);
-
-        symbols.Add(new SymbolInfo(name, SymbolKind.Constant, trimmed.Trim().TrimEnd(';'), null, byteOffset,
-            Encoding.UTF8.GetByteCount(trimmed), lineNumber, lineNumber, visibility, docComment));
-        return true;
-    }
-
-    private static bool TryMatchTypeAlias(
-        string trimmed, int lineNumber, int byteOffset,
-        List<string> docCommentLines, List<SymbolInfo> symbols)
-    {
-        var match = TypeAliasPattern().Match(trimmed);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var rest = match.Groups[3].Value;
-        // Only match actual type aliases (with =), not type in impl/trait position
-        if (!rest.Contains('=', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var visibility = DeriveVisibility(match.Groups[1].Value.Trim());
-        var name = match.Groups[2].Value;
-        var docComment = BuildDocComment(docCommentLines);
-
-        symbols.Add(new SymbolInfo(name, SymbolKind.Type, trimmed.Trim().TrimEnd(';'), null, byteOffset,
-            Encoding.UTF8.GetByteCount(trimmed), lineNumber, lineNumber, visibility, docComment));
-        return true;
-    }
-
-    private static Visibility DeriveVisibility(string pubModifier)
-    {
-        if (string.IsNullOrEmpty(pubModifier))
-        {
-            return Visibility.Private;
-        }
-
-        if (pubModifier.StartsWith("pub(", StringComparison.Ordinal))
-        {
-            return Visibility.Private; // pub(crate), pub(super) → internal/private
-        }
-
-        return pubModifier.StartsWith("pub", StringComparison.Ordinal) ? Visibility.Public : Visibility.Private;
-    }
-
-    private static int FindOpenBraceInCode(string text)
-    {
-        var inString = false;
-        var inRawString = false;
-        var pos = 0;
-
-        while (pos < text.Length)
-        {
-            var ch = text[pos];
-
-            if (inString)
+            if (children[i].StartIndex == decl.StartIndex)
             {
-                pos += ch == '\\' ? 2 : 1;
-                if (ch == '"')
-                {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            if (inRawString)
-            {
-                if (ch == '"')
-                {
-                    inRawString = false;
-                }
-
-                pos++;
-                continue;
-            }
-
-            switch (ch)
-            {
-                case '"':
-                    inString = true;
-                    pos++;
-                    break;
-                case 'r' when pos + 1 < text.Length && text[pos + 1] == '"':
-                    inRawString = true;
-                    pos += 2;
-                    break;
-                case '{':
-                    return pos;
-                default:
-                    pos++;
-                    break;
+                declIdx = i;
+                break;
             }
         }
 
-        return -1;
+        if (declIdx < 0) return result;
+
+        for (var i = declIdx - 1; i >= 0; i--)
+        {
+            if (children[i].Type == "attribute_item")
+                result.Insert(0, children[i].Text.Trim());
+            else
+                break;
+        }
+
+        return result;
     }
 
-    private static void UpdateBraceDepth(
-        string line, int lineNumber, int byteOffset,
-        List<PendingType> parentStack, List<SymbolInfo> symbols)
+    private static string? FindParentName(
+        Node decl,
+        Dictionary<int, (Node Decl, Node? Name, Node? Body)> declMap)
     {
-        var (opens, closes) = CountBraces(line);
-        if (opens == 0 && closes == 0)
+        var current = decl.Parent;
+        while (current is not null)
         {
-            return;
+            if (ContainerNodeTypes.Contains(current.Type))
+                return declMap.TryGetValue(current.StartIndex, out var e) && e.Name is not null
+                    ? e.Name.Text : null;
+            if (current.Type == "source_file") return null;
+            current = current.Parent;
         }
-
-        var effectiveDepth = GetCurrentBraceDepth(parentStack);
-        effectiveDepth += opens;
-
-        for (var c = 0; c < closes; c++)
-        {
-            effectiveDepth--;
-
-            for (var j = parentStack.Count - 1; j >= 0; j--)
-            {
-                if (parentStack[j].BraceDepthAtDeclaration == effectiveDepth)
-                {
-                    CompletePendingType(parentStack[j], lineNumber, byteOffset, line, symbols);
-                    parentStack.RemoveAt(j);
-                    break;
-                }
-            }
-        }
-
-        foreach (var pending in parentStack)
-        {
-            pending.CurrentBraceDepth = effectiveDepth;
-        }
-    }
-
-    private static (int Opens, int Closes) CountBraces(string line)
-    {
-        var opens = 0;
-        var closes = 0;
-        var inString = false;
-        var inRawString = false;
-        var inChar = false;
-        var pos = 0;
-
-        while (pos < line.Length)
-        {
-            var ch = line[pos];
-
-            if (inString)
-            {
-                pos += ch == '\\' ? 2 : 1;
-                if (ch == '"')
-                {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            if (inRawString)
-            {
-                if (ch == '"')
-                {
-                    inRawString = false;
-                }
-
-                pos++;
-                continue;
-            }
-
-            if (inChar)
-            {
-                pos += ch == '\\' ? 2 : 1;
-                if (ch == '\'')
-                {
-                    inChar = false;
-                }
-
-                continue;
-            }
-
-            switch (ch)
-            {
-                case '/' when pos + 1 < line.Length && line[pos + 1] == '/':
-                    return (opens, closes);
-                case '"':
-                    inString = true;
-                    pos++;
-                    break;
-                case 'r' when pos + 1 < line.Length && line[pos + 1] == '"':
-                    inRawString = true;
-                    pos += 2;
-                    break;
-                case '\'':
-                    // Rust: could be char literal or lifetime — heuristic: if followed by \, it's a char
-                    if (pos + 1 < line.Length && line[pos + 1] == '\\')
-                    {
-                        inChar = true;
-                    }
-
-                    pos++;
-                    break;
-                case '{':
-                    opens++;
-                    pos++;
-                    break;
-                case '}':
-                    closes++;
-                    pos++;
-                    break;
-                default:
-                    pos++;
-                    break;
-            }
-        }
-
-        return (opens, closes);
-    }
-
-    private static void CompletePendingType(
-        PendingType pending, int endLineNumber, int endByteOffset,
-        string endLine, List<SymbolInfo> symbols)
-    {
-        // Don't emit impl blocks as symbols — they're just containers
-        if (pending.Signature.Length == 0)
-        {
-            return;
-        }
-
-        var byteLength = endByteOffset + Encoding.UTF8.GetByteCount(endLine) - pending.ByteOffset;
-
-        symbols.Add(new SymbolInfo(pending.Name, pending.Kind, pending.Signature, pending.ParentName,
-            pending.ByteOffset, byteLength, pending.LineStart, endLineNumber, pending.Visibility, pending.DocComment));
-    }
-
-    private static string? BuildDocComment(List<string> docCommentLines)
-    {
-        return docCommentLines.Count == 0 ? null : string.Join("\n", docCommentLines);
-    }
-
-    private static string? GetCurrentContainerName(List<PendingType> parentStack)
-    {
-        for (var i = parentStack.Count - 1; i >= 0; i--)
-        {
-            if (parentStack[i].IsContainer)
-            {
-                return parentStack[i].Name;
-            }
-        }
-
         return null;
     }
 
-    private static int GetCurrentBraceDepth(List<PendingType> parentStack)
+    private static Visibility DeriveVisibility(Node decl, byte[] bytes)
     {
-        return parentStack.Count == 0 ? 0 : parentStack[^1].CurrentBraceDepth;
+        // Look at text immediately after start for pub/pub(...)
+        var children = decl.Children;
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child.Type == "visibility_modifier")
+            {
+                var visText = Encoding.UTF8.GetString(bytes, child.StartIndex, child.EndIndex - child.StartIndex).Trim();
+                if (visText == "pub") return Visibility.Public;
+                return Visibility.Private; // pub(crate), pub(super), etc.
+            }
+            // Stop at first non-attribute child that isn't a visibility modifier
+            if (child.Type != "attribute_item") break;
+        }
+        return Visibility.Private;
     }
 
-    private static int[] ComputeLineByteOffsets(ReadOnlySpan<byte> content)
+    private static string? ExtractDocComment(string[] lines, Node decl)
     {
-        var offsets = new List<int> { 0 };
-        for (var i = 0; i < content.Length; i++)
+        var result = new List<string>();
+        var idx = decl.StartPosition.Row - 1;
+
+        // Skip preceding attribute_item lines
+        while (idx >= 0)
         {
-            if (content[i] == (byte)'\n')
+            var line = lines[idx].TrimEnd('\r').Trim();
+            if (line.StartsWith("#[", StringComparison.Ordinal))
+                idx--;
+            else
+                break;
+        }
+
+        while (idx >= 0)
+        {
+            var line = lines[idx].TrimEnd('\r').Trim();
+            if (line.StartsWith("///", StringComparison.Ordinal) || line.StartsWith("//!", StringComparison.Ordinal))
             {
-                offsets.Add(i + 1);
+                result.Insert(0, line);
+                idx--;
+            }
+            else
+            {
+                break;
             }
         }
 
-        return [.. offsets];
-    }
-
-    private sealed class PendingType(
-        string Name, SymbolKind Kind, string Signature, string? ParentName,
-        int ByteOffset, int LineStart, Visibility Visibility, string? DocComment,
-        int BraceDepthAtDeclaration, bool IsContainer)
-    {
-        public string Name { get; } = Name;
-        public SymbolKind Kind { get; } = Kind;
-        public string Signature { get; } = Signature;
-        public string? ParentName { get; } = ParentName;
-        public int ByteOffset { get; } = ByteOffset;
-        public int LineStart { get; } = LineStart;
-        public Visibility Visibility { get; } = Visibility;
-        public string? DocComment { get; } = DocComment;
-        public int BraceDepthAtDeclaration { get; } = BraceDepthAtDeclaration;
-        public bool IsContainer { get; } = IsContainer;
-        public int CurrentBraceDepth { get; set; } = BraceDepthAtDeclaration;
+        return result.Count > 0 ? string.Join("\n", result) : null;
     }
 }

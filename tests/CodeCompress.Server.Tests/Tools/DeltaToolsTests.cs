@@ -416,5 +416,5 @@ internal sealed class DeltaToolsTests
         string? docComment = null,
         int byteOffset = 0,
         int byteLength = 100) =>
-        new(id, fileId, name, kind, signature, parent, byteOffset, byteLength, lineStart, lineStart + 5, visibility, docComment);
+        new(id, fileId, name, kind, signature, parent, byteOffset, byteLength, lineStart, lineStart + 5, visibility, docComment, null, null);
 }

@@ -146,6 +146,7 @@ Enforced via `.editorconfig`:
 | `Microsoft.Data.Sqlite` | SQLite access with FTS5 |
 | `Microsoft.Extensions.FileSystemGlobbing` | Glob pattern matching for file discovery |
 | `Microsoft.Extensions.Hosting` | Generic host for DI, logging |
+| `TreeSitter.DotNet` | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |
 | `TUnit` | Testing framework |
 | `NSubstitute` | Mocking |
 | `Verify` | Snapshot testing |

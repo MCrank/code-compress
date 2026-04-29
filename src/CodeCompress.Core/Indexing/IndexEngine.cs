@@ -476,7 +476,9 @@ public sealed partial class IndexEngine : IIndexEngine
                 s.LineStart,
                 s.LineEnd,
                 s.Visibility.ToString(),
-                s.DocComment));
+                s.DocComment,
+                s.BodyLineStart,
+                s.BodyLineEnd));
         }
 
         return symbols;
