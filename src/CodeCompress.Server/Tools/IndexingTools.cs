@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeCompress.Core.Registry;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
 using ModelContextProtocol.Server;
@@ -17,14 +18,17 @@ internal sealed partial class IndexingTools
 
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
+    private readonly IRegistryService _registryService;
 
-    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory)
+    public IndexingTools(IPathValidator pathValidator, IProjectScopeFactory scopeFactory, IRegistryService registryService)
     {
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(registryService);
 
         _pathValidator = pathValidator;
         _scopeFactory = scopeFactory;
+        _registryService = registryService;
     }
 
     [McpServerTool(Name = "index_project")]
@@ -145,29 +149,15 @@ internal sealed partial class IndexingTools
             return SerializeError("Path validation failed", "INVALID_PATH");
         }
 
-        var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
-        await using (scope.ConfigureAwait(false))
-        {
-            var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
-            var fileIds = files.Select(f => f.Id).ToList();
+        await _registryService.DeregisterAsync(validatedPath).ConfigureAwait(false);
 
-            foreach (var fileId in fileIds)
+        return JsonSerializer.Serialize(
+            new
             {
-                await scope.Store.DeleteSymbolsByFileAsync(fileId).ConfigureAwait(false);
-                await scope.Store.DeleteDependenciesByFileAsync(fileId).ConfigureAwait(false);
-                await scope.Store.DeleteFileAsync(fileId).ConfigureAwait(false);
-            }
-
-            await scope.Store.DeleteRepositoryAsync(scope.RepoId).ConfigureAwait(false);
-
-            return JsonSerializer.Serialize(
-                new
-                {
-                    Success = true,
-                    Message = "Cache invalidated. Next index operation will perform a full reparse.",
-                },
-                SerializerOptions);
-        }
+                Success = true,
+                Message = "Cache invalidated. Next index operation will perform a full reparse.",
+            },
+            SerializerOptions);
     }
 
     internal static string SanitizeLabel(string? label)

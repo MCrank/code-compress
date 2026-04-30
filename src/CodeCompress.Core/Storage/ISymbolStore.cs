@@ -7,6 +7,7 @@ public interface ISymbolStore
     // Repository
     public Task UpsertRepositoryAsync(Repository repo);
     public Task<Repository?> GetRepositoryAsync(string repoId);
+    public Task<IReadOnlyList<Repository>> GetAllRepositoriesAsync();
     public Task DeleteRepositoryAsync(string repoId);
 
     // Files

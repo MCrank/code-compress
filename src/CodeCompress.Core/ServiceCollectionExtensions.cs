@@ -1,5 +1,7 @@
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Parsers;
+using CodeCompress.Core.Registry;
+using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -34,6 +36,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGitIgnoreFilter, GitIgnoreFilter>();
         services.AddSingleton<IIndexEngine, IndexEngine>();
         services.AddSingleton<IProjectRootResolver, ProjectRootResolver>();
+
+        // Storage
+        services.AddSingleton<IConnectionFactory, SqliteConnectionFactory>();
+
+        // Registry
+        services.AddSingleton<IRegistryService, RegistryService>();
 
         return services;
     }
