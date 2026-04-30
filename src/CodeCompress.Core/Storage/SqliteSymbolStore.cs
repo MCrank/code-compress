@@ -83,6 +83,36 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return null;
     }
 
+    public async Task<IReadOnlyList<Repository>> GetAllRepositoriesAsync()
+    {
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT id, root_path, name, language, last_indexed, file_count, symbol_count
+            FROM repositories ORDER BY last_indexed DESC
+            """;
+#pragma warning restore CA2100
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<Repository>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new Repository(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6)));
+        }
+
+        return results;
+    }
+
     public async Task DeleteRepositoryAsync(string repoId)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -1470,6 +1500,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
         ArgumentNullException.ThrowIfNull(parentSymbolName);
 
         using var command = _connection.CreateCommand();
+#pragma warning disable CA2100 // SQL is a static literal, not user input
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
@@ -1480,6 +1511,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             WHERE s.parent_symbol = @parent AND f.repo_id = @repoId
             ORDER BY s.line_start
             """;
+#pragma warning restore CA2100
 
         command.Parameters.AddWithValue("@parent", parentSymbolName);
         command.Parameters.AddWithValue("@repoId", repoId);

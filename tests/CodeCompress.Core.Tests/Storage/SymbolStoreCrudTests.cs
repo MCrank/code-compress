@@ -112,6 +112,35 @@ internal sealed class SymbolStoreCrudTests
         await Assert.That(remainingSymbols).Count().IsEqualTo(0);
     }
 
+    [Test]
+    public async Task GetAllRepositoriesAsyncReturnsEmptyWhenNoneIndexed()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+
+        var result = await store.GetAllRepositoriesAsync().ConfigureAwait(false);
+
+        await Assert.That(result).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetAllRepositoriesAsyncReturnsAllIndexedRepos()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo1 = CreateTestRepo("repo-1");
+        var repo2 = new Repository("repo-2", "/other/path", "OtherProject", "csharp", 999L, 5, 10);
+
+        await store.UpsertRepositoryAsync(repo1).ConfigureAwait(false);
+        await store.UpsertRepositoryAsync(repo2).ConfigureAwait(false);
+
+        var result = await store.GetAllRepositoriesAsync().ConfigureAwait(false);
+
+        await Assert.That(result).Count().IsEqualTo(2);
+        await Assert.That(result.Select(r => r.Id)).Contains("repo-1");
+        await Assert.That(result.Select(r => r.Id)).Contains("repo-2");
+    }
+
     // ── File Tests ──────────────────────────────────────────────────────
 
     [Test]

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Models;
+using CodeCompress.Core.Registry;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
@@ -17,6 +18,7 @@ internal sealed class IndexingToolsTests
     private IProjectScope _scope = null!;
     private IIndexEngine _engine = null!;
     private ISymbolStore _store = null!;
+    private IRegistryService _registryService = null!;
     private IndexingTools _tools = null!;
 
     [Before(Test)]
@@ -27,13 +29,14 @@ internal sealed class IndexingToolsTests
         _scope = Substitute.For<IProjectScope>();
         _engine = Substitute.For<IIndexEngine>();
         _store = Substitute.For<ISymbolStore>();
+        _registryService = Substitute.For<IRegistryService>();
         _scope.Engine.Returns(_engine);
         _scope.Store.Returns(_store);
         _scope.RepoId.Returns("test-repo-id");
         _scopeFactory.CreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_scope);
         _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>()).Returns(callInfo => callInfo.ArgAt<string>(0));
 
-        _tools = new IndexingTools(_pathValidator, _scopeFactory);
+        _tools = new IndexingTools(_pathValidator, _scopeFactory, _registryService);
     }
 
     [Test]
@@ -198,13 +201,6 @@ internal sealed class IndexingToolsTests
     [Test]
     public async Task InvalidateCacheValidPathReturnsSuccess()
     {
-        var files = new List<FileRecord>
-        {
-            new(1, "test-repo-id", "file1.lua", "hash1", 100, 10, 1000, 2000),
-            new(2, "test-repo-id", "file2.lua", "hash2", 200, 20, 1000, 2000),
-        };
-        _store.GetFilesByRepoAsync("test-repo-id").Returns(files);
-
         var result = await _tools.InvalidateCache("/valid/path").ConfigureAwait(false);
 
         using var doc = JsonDocument.Parse(result);
@@ -213,10 +209,7 @@ internal sealed class IndexingToolsTests
         await Assert.That(root.GetProperty("message").GetString())
             .IsEqualTo("Cache invalidated. Next index operation will perform a full reparse.");
 
-        await _store.Received(2).DeleteSymbolsByFileAsync(Arg.Any<long>()).ConfigureAwait(false);
-        await _store.Received(2).DeleteDependenciesByFileAsync(Arg.Any<long>()).ConfigureAwait(false);
-        await _store.Received(2).DeleteFileAsync(Arg.Any<long>()).ConfigureAwait(false);
-        await _store.Received(1).DeleteRepositoryAsync("test-repo-id").ConfigureAwait(false);
+        await _registryService.Received(1).DeregisterAsync("/valid/path").ConfigureAwait(false);
     }
 
     [Test]

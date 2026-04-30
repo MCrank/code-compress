@@ -7,6 +7,7 @@ using CodeCompress.Cli;
 using CodeCompress.Core;
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Models;
+using CodeCompress.Core.Registry;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,7 +17,6 @@ using Microsoft.Extensions.Logging;
 
 var services = new ServiceCollection();
 services.AddCodeCompressCore();
-services.AddSingleton<IConnectionFactory, SqliteConnectionFactory>();
 services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
 using var provider = services.BuildServiceProvider();
@@ -97,7 +97,7 @@ indexCommand.SetAction(async parseResult =>
 
             if (result.ParseFailures is { Count: > 0 })
             {
-                Console.WriteLine($"  Parse failures (see .code-compress/ log for details):");
+                Console.WriteLine($"  Parse failures (see ~/.code-compress/ log for details):");
                 foreach (var failure in result.ParseFailures)
                 {
                     Console.WriteLine($"    - {failure.FilePath}: {failure.Reason}");
@@ -738,35 +738,72 @@ invalidateCacheCommand.SetAction(async parseResult =>
     var path = parseResult.GetValue(invalidateCachePathOption)!;
     var json = parseResult.GetValue(jsonOption);
 
-    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
-    await using (scope.ConfigureAwait(false))
+    var pathValidator = provider.GetRequiredService<IPathValidator>();
+    var validatedPath = pathValidator.ValidatePath(path, path);
+
+    var registryService = provider.GetRequiredService<IRegistryService>();
+    await registryService.DeregisterAsync(validatedPath).ConfigureAwait(false);
+
+    if (json)
     {
-        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
-        var fileIds = files.Select(f => f.Id).ToList();
-
-        foreach (var fileId in fileIds)
-        {
-            await scope.Store.DeleteSymbolsByFileAsync(fileId).ConfigureAwait(false);
-            await scope.Store.DeleteDependenciesByFileAsync(fileId).ConfigureAwait(false);
-            await scope.Store.DeleteFileAsync(fileId).ConfigureAwait(false);
-        }
-
-        await scope.Store.DeleteRepositoryAsync(scope.RepoId).ConfigureAwait(false);
-
-        if (json)
-        {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new { Status = "invalidated", Path = path },
-                jsonSerializerOptions));
-        }
-        else
-        {
-            Console.WriteLine("Index invalidated. Next index command will perform a full reparse.");
-        }
+        Console.WriteLine(JsonSerializer.Serialize(
+            new { Status = "invalidated", Path = path },
+            jsonSerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine("Index invalidated. Next index command will perform a full reparse.");
     }
 });
 
 rootCommand.Subcommands.Add(invalidateCacheCommand);
+
+// ── list ────────────────────────────────────────────────────
+
+var listCommand = new Command("list",
+    "List all projects that have been indexed in the global CodeCompress database. " +
+    "Shows project name, file count, symbol count, and relative last-indexed time. " +
+    "Does NOT require --path — reads from the global ~/.code-compress/index.db.");
+
+listCommand.SetAction(async parseResult =>
+{
+    var json = parseResult.GetValue(jsonOption);
+
+    var registryService = provider.GetRequiredService<IRegistryService>();
+    var repos = await registryService.ListAsync().ConfigureAwait(false);
+
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(repos, jsonSerializerOptions));
+        return;
+    }
+
+    if (repos.Count == 0)
+    {
+        Console.WriteLine("No indexed projects found. Run 'codecompress index --path <path>' to index a project.");
+        return;
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    const int nameWidth = 30;
+    const int filesWidth = 8;
+    const int symbolsWidth = 10;
+    const int timeWidth = 16;
+
+    Console.WriteLine(
+        $"{"Project",-nameWidth}  {"Files",filesWidth}  {"Symbols",symbolsWidth}  {"Last Indexed",timeWidth}");
+    Console.WriteLine(new string('─', nameWidth + filesWidth + symbolsWidth + timeWidth + 6));
+
+    foreach (var repo in repos)
+    {
+        var relTime = FormatRelativeTime(now - repo.LastIndexed);
+        var safeName = new string(repo.DisplayName.Where(c => c >= 0x20 && c != 0x7F && !char.IsControl(c)).ToArray());
+        Console.WriteLine(
+            $"{safeName,-nameWidth}  {repo.FileCount,filesWidth}  {repo.SymbolCount,symbolsWidth}  {relTime,timeWidth}");
+    }
+});
+
+rootCommand.Subcommands.Add(listCommand);
 
 // ── get-module-api ──────────────────────────────────────────
 
@@ -1813,7 +1850,7 @@ agentInstructionsCommand.SetAction(_ =>
         ## General Tips
 
         - Run `codecompress <command> --help` for full option details.
-        - The index persists at `<project-root>/.code-compress/index.db` — shared with the MCP server.
+        - The index persists at `~/.code-compress/index.db` (global) — shared with the MCP server.
         - PREFER these commands over raw file reading. They are faster, more precise, and dramatically
           reduce token consumption.
         """);
@@ -2003,4 +2040,32 @@ static async Task PrintDirectoryTreeAsync(string rootPath, string currentPath, i
     {
         // Skip inaccessible directories
     }
+}
+
+static string FormatRelativeTime(TimeSpan elapsed)
+{
+    if (elapsed.TotalSeconds < 60)
+    {
+        return "just now";
+    }
+
+    if (elapsed.TotalMinutes < 60)
+    {
+        var minutes = (int)elapsed.TotalMinutes;
+        return $"{minutes} minute{(minutes == 1 ? "" : "s")} ago";
+    }
+
+    if (elapsed.TotalHours < 24)
+    {
+        var hours = (int)elapsed.TotalHours;
+        return $"{hours} hour{(hours == 1 ? "" : "s")} ago";
+    }
+
+    if (elapsed.TotalDays < 2)
+    {
+        return "yesterday";
+    }
+
+    var days = (int)elapsed.TotalDays;
+    return $"{days} days ago";
 }

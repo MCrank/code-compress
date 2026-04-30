@@ -191,7 +191,7 @@ Developer <── Terminal ────>   CodeCompress CLI ──────�
                                                  Index Engine
                                                    /      \
                                           Language       SQLite Store
-                                          Parsers        .code-compress/
+                                          Parsers      ~/.code-compress/
                                     (C#, Java, Go, TS,  index.db
                                     Rust, Python, …)
 ```
@@ -228,6 +228,7 @@ CodeCompress is designed to stay current with minimal effort:
 | `index_project` | Index a project directory (incremental by default) |
 | `snapshot_create` | Create a named snapshot for tracking changes over time |
 | `invalidate_cache` | Force a full re-index on next `index_project` call |
+| `list_repos` | List all projects indexed in the global database |
 
 ### Context Assembly
 
@@ -312,18 +313,18 @@ Adding a new language requires implementing a single `ILanguageParser` interface
 
 ## Where is my data stored?
 
-All index data is stored **locally** in the project directory:
+All index data is stored in a **single global database** in your home directory:
 
 ```
-<project-root>/.code-compress/index.db
+~/.code-compress/index.db
 ```
 
-- One SQLite database per project, stored alongside the code
-- Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots
+- One SQLite database shared across all indexed projects
+- Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots for every indexed project
 - **No data leaves your machine** — no network calls, no telemetry
-- Add `.code-compress/` to your `.gitignore` (WAL and SHM files should already be excluded)
+- Nothing is stored in your project directories — no `.gitignore` entries needed
 
-To clear the index for a project, delete its `.code-compress/` directory.
+To clear the index for a specific project, call `invalidate_cache` (MCP) or `codecompress invalidate-cache --path <root>` (CLI). To list all indexed projects, use `list_repos` (MCP) or `codecompress list` (CLI).
 
 ## Security
 
@@ -363,7 +364,7 @@ raw files — it saves 80-90% tokens.
 ## Tips
 
 - Add `--json` to any CLI command for machine-readable output (snake_case keys).
-- The index persists at `<project-root>/.code-compress/index.db` — shared between MCP server and CLI.
+- The index persists at `~/.code-compress/index.db` (global) — shared between MCP server and CLI.
 - PREFER these tools over raw file reading. They are faster, more precise, and dramatically
   reduce token consumption.
 ````
@@ -391,7 +392,7 @@ claude mcp add --transport stdio codecompress -- dotnet run --project /absolute/
 
 ## CLI Tool
 
-The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `.code-compress/index.db` database.
+The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `~/.code-compress/index.db` global database.
 
 ### Installation
 

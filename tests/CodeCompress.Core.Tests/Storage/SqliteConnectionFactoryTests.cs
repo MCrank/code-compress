@@ -50,38 +50,24 @@ internal sealed class SqliteConnectionFactoryTests
     }
 
     [Test]
-    public async Task CreateConnectionAsyncRejectsNullPath()
+    public async Task GlobalCodeCompressDirIsUnderUserProfile()
     {
-        var factory = new SqliteConnectionFactory();
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".code-compress");
 
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => factory.CreateConnectionAsync(null!));
+        await Assert.That(SqliteConnectionFactory.GlobalCodeCompressDir).IsEqualTo(expected);
     }
 
     [Test]
-    public async Task CreateConnectionAsyncRejectsEmptyPath()
+    public async Task CreateConnectionAsyncCreatesGlobalDb()
     {
         var factory = new SqliteConnectionFactory();
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => factory.CreateConnectionAsync(""));
-    }
-
-    [Test]
-    public async Task CreateConnectionAsyncRejectsWhitespacePath()
-    {
-        var factory = new SqliteConnectionFactory();
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => factory.CreateConnectionAsync("   "));
-    }
-
-    [Test]
-    public async Task CreateConnectionAsyncRejectsPathTraversal()
-    {
-        var factory = new SqliteConnectionFactory();
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => factory.CreateConnectionAsync("/valid/../../etc/passwd"));
+        var connection = await factory.CreateConnectionAsync("/any/project/root").ConfigureAwait(false);
+        await using (connection.ConfigureAwait(false))
+        {
+            var expectedDbPath = Path.Combine(SqliteConnectionFactory.GlobalCodeCompressDir, "index.db");
+            await Assert.That(connection.DataSource).IsEqualTo(expectedDbPath);
+        }
     }
 }
