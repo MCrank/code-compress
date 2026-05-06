@@ -1,0 +1,73 @@
+@page "/files"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+
+<PageTitle>Files — CodeCompress</PageTitle>
+
+<div class="cc-page">
+    <div class="cc-page-header">
+        <div class="cc-page-header-left">
+            <h1>Files</h1>
+            <p class="cc-page-subtitle">All indexed source files across all repositories</p>
+        </div>
+    </div>
+
+    <BbDataGrid TData="FileEntry"
+                Items="_files"
+                IsLoading="_loading"
+                ShowSearch="true"
+                SearchPlaceholder="Filter files…"
+                InitialPageSize="25"
+                AriaLabel="All indexed files"
+                ItemKey="@(e => e.RepoName + e.File.RelativePath)">
+        <Columns>
+            <BbDataGridTemplateColumn Title="File Path" Sortable="true" SortBy="@(e => (object)e.File.RelativePath)"
+                                      Filterable="true" FilterBy="@(e => (object)e.File.RelativePath)">
+                <ChildContent Context="entry">
+                    <span class="cc-table-path" title="@entry.File.RelativePath" data-testid="file-row">@entry.File.RelativePath</span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridTemplateColumn Title="Ext" Width="72px">
+                <ChildContent Context="entry">
+                    <BbBadge Variant="BadgeVariant.Outline">@ExtensionOf(entry.File.RelativePath)</BbBadge>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridPropertyColumn Property="@(e => e.File.LineCount)" Title="Lines" Sortable="true"
+                                      CellClass="cc-col-right" HeaderClass="cc-col-right" Width="80px" />
+            <BbDataGridPropertyColumn Property="@(e => e.RepoName)" Title="Repository" Sortable="true" Filterable="true" />
+        </Columns>
+        <EmptyTemplate>
+            <BbEmpty Title="No files indexed yet"
+                     Description="Index a repository first to browse its files here."
+                     Size="EmptySize.Default">
+                <Icon><LucideIcon Name="file-code" Size="40" /></Icon>
+            </BbEmpty>
+        </EmptyTemplate>
+    </BbDataGrid>
+</div>
+
+@code {
+    private sealed record FileEntry(FileRecord File, string RepoName);
+
+    private IReadOnlyList<FileEntry> _files = [];
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var repos = await Facade.GetRepositoriesAsync();
+        var all = new List<FileEntry>();
+        foreach (var repo in repos)
+        {
+            var files = await Facade.GetFilesAsync(repo.ProjectRoot);
+            all.AddRange(files.Select(f => new FileEntry(f, repo.DisplayName)));
+        }
+        _files = all;
+        _loading = false;
+    }
+
+    private static string ExtensionOf(string path)
+    {
+        var ext = System.IO.Path.GetExtension(path);
+        return string.IsNullOrEmpty(ext) ? "–" : ext;
+    }
+}

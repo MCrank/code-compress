@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsTestProject>true</IsTestProject>
+    <!-- bunit's HtmlSanitizer dep pins AngleSharp but a newer version resolves — suppress the warning -->
+    <!-- CA2007: test assertions don't need ConfigureAwait -->
+    <NoWarn>NU1608;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodeCompress.Web\CodeCompress.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="bunit" />
+  </ItemGroup>
+
+</Project>
