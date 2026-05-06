@@ -1,0 +1,95 @@
+@page "/repo/{RepoId}/graph"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+
+<PageTitle>@(_repoName is not null ? $"{_repoName} — Graph" : "Graph") — CodeCompress</PageTitle>
+
+@if (_pathError)
+{
+    <div class="cc-page">
+        <BbAlert Variant="AlertVariant.Danger" AccentBorder>
+            <Icon><LucideIcon Name="alert-circle" Size="16" /></Icon>
+            <ChildContent>
+                <BbAlertTitle>Invalid repository</BbAlertTitle>
+                <BbAlertDescription>The repository ID is invalid or not found in the index.</BbAlertDescription>
+            </ChildContent>
+        </BbAlert>
+    </div>
+}
+else
+{
+    <div class="cc-page" style="height: 100%">
+        <div class="cc-page-header">
+            <div class="cc-page-header-left">
+                <BbBreadcrumb>
+                    <BbBreadcrumbList AutoSeparator>
+                        <BbBreadcrumbItem>
+                            <BbBreadcrumbLink Href="@($"/repo/{RepoId}")">@(_repoName ?? RepoId)</BbBreadcrumbLink>
+                        </BbBreadcrumbItem>
+                        <BbBreadcrumbItem>
+                            <BbBreadcrumbPage>Dependency Graph</BbBreadcrumbPage>
+                        </BbBreadcrumbItem>
+                    </BbBreadcrumbList>
+                </BbBreadcrumb>
+                <h1>Dependency Graph</h1>
+                @if (_repoPath is not null)
+                {
+                    <p class="cc-page-subtitle"><span class="cc-repo-path-display">@_repoPath</span></p>
+                }
+            </div>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="cc-loading" data-testid="loading">Loading graph data…</div>
+        }
+        else
+        {
+            <BbCard Class="cc-graph-canvas-placeholder">
+                <BbCardContent>
+                    <BbEmpty Title="Interactive graph coming in GH-193"
+                             Description="@GraphDescription"
+                             Size="EmptySize.Large">
+                        <Icon><LucideIcon Name="git-graph" Size="48" /></Icon>
+                    </BbEmpty>
+                </BbCardContent>
+            </BbCard>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string RepoId { get; set; } = string.Empty;
+
+    private string? _repoName;
+    private string? _repoPath;
+    private bool _loading = true;
+    private bool _pathError;
+    private int _fileCount;
+
+    private string GraphDescription =>
+        _fileCount > 0
+            ? $"File-level dependency canvas with pan, zoom, and drag will be implemented here. This repository has {_fileCount} files to visualize."
+            : "File-level dependency canvas with pan, zoom, and drag will be implemented here.";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _pathError = false;
+        _loading = true;
+
+        var repos = await Facade.GetRepositoriesAsync();
+        var repo = repos.FirstOrDefault(r => string.Equals(r.RepoId, RepoId, StringComparison.Ordinal));
+
+        if (repo is null)
+        {
+            _pathError = true;
+            _loading = false;
+            return;
+        }
+
+        _repoName = repo.DisplayName;
+        _repoPath = repo.ProjectRoot;
+        _fileCount = repo.FileCount;
+        _loading = false;
+    }
+}

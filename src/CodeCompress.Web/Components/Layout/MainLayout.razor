@@ -1,5 +1,4 @@
 @inherits LayoutComponentBase
-@using BlazorBlueprint.Primitives.Services
 
 <div class="cc-shell">
     <header class="cc-topbar">
@@ -7,6 +6,22 @@
             <span class="cc-brand-icon">⬡</span>
             <span class="cc-brand-name">CodeCompress</span>
         </a>
+
+        <div class="cc-topbar-center">
+            <div class="cc-topbar-search">
+                <span class="cc-topbar-search-icon">
+                    <LucideIcon Name="search" Size="14" />
+                </span>
+                <input class="cc-topbar-search-input"
+                       type="search"
+                       placeholder="Search symbols, files, repos…"
+                       aria-label="Global search" />
+            </div>
+        </div>
+
+        <div class="cc-topbar-right">
+            <ThemeToggle />
+        </div>
     </header>
 
     <div class="cc-body">
@@ -23,3 +38,4 @@
 <BbPortalHost />
 <BbToastProvider />
 <BbDialogProvider />
+

@@ -16,7 +16,12 @@ public static class WebHostFactory
         builder.Services.AddRazorComponents()
             .AddInteractiveServerComponents();
 
-        builder.Services.AddBlazorBlueprintComponents();
+        builder.Services.AddBlazorBlueprintComponents(configureTheme: options =>
+        {
+            options.DefaultDarkMode = true;
+            options.DetectSystemPreference = false;
+            options.PersistToLocalStorage = true;
+        });
         builder.Services.AddCodeCompressCore();
         builder.Services.AddScoped<IIndexFacade, IndexFacade>();
 

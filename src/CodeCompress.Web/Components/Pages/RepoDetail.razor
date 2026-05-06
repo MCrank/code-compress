@@ -1,113 +1,172 @@
 @page "/repo/{RepoId}"
 @rendermode InteractiveServer
 @inject IIndexFacade Facade
-@inject NavigationManager Nav
 
 <PageTitle>@(_repoName ?? "Repository") — CodeCompress</PageTitle>
 
 @if (_pathError)
 {
     <div class="cc-page">
-        <div class="cc-error" data-testid="path-error">
-            <h2>Invalid path</h2>
-            <p>The repository path is invalid or outside an allowed root.</p>
-        </div>
+        <BbAlert Variant="AlertVariant.Danger" AccentBorder>
+            <Icon><LucideIcon Name="alert-circle" Size="16" /></Icon>
+            <ChildContent>
+                <BbAlertTitle>Invalid repository</BbAlertTitle>
+                <BbAlertDescription>The repository ID is invalid or not found in the index.</BbAlertDescription>
+            </ChildContent>
+        </BbAlert>
     </div>
 }
 else
 {
     <div class="cc-page">
         <div class="cc-page-header">
-            <a href="/" class="cc-breadcrumb">Dashboard</a>
-            <span class="cc-breadcrumb-sep">/</span>
-            <h1 data-testid="repo-detail-name">@(_repoName ?? RepoId)</h1>
+            <div class="cc-page-header-left">
+                <BbBreadcrumb>
+                    <BbBreadcrumbList AutoSeparator>
+                        <BbBreadcrumbItem>
+                            <BbBreadcrumbLink Href="/">Dashboard</BbBreadcrumbLink>
+                        </BbBreadcrumbItem>
+                        <BbBreadcrumbItem>
+                            <BbBreadcrumbPage>@(_repoName ?? RepoId)</BbBreadcrumbPage>
+                        </BbBreadcrumbItem>
+                    </BbBreadcrumbList>
+                </BbBreadcrumb>
+            </div>
+
+            @if (_repo is not null)
+            {
+                <div class="cc-page-actions">
+                    <BbButton Variant="ButtonVariant.Outline" OnClick="ReIndexAsync" Disabled="_reindexing">
+                        @if (_reindexing)
+                        {
+                            <LucideIcon Name="loader-circle" Size="14" />
+                            <span>Indexing…</span>
+                        }
+                        else
+                        {
+                            <LucideIcon Name="refresh-cw" Size="14" />
+                            <span>Re-index</span>
+                        }
+                    </BbButton>
+                    <a href="/repo/@RepoId/graph" class="cc-link-btn" title="Open interactive dependency graph">
+                        <LucideIcon Name="git-graph" Size="14" />
+                        <span>View Graph</span>
+                    </a>
+                </div>
+            }
         </div>
 
         @if (_repo is not null)
         {
-            <div class="cc-stat-row">
-                <div class="cc-stat" data-testid="detail-file-count">
-                    <span class="cc-stat-value">@_repo.FileCount</span>
-                    <span class="cc-stat-label">Files</span>
-                </div>
-                <div class="cc-stat" data-testid="detail-symbol-count">
-                    <span class="cc-stat-value">@_repo.SymbolCount</span>
-                    <span class="cc-stat-label">Symbols</span>
-                </div>
-                <div class="cc-stat" data-testid="detail-last-indexed">
-                    <span class="cc-stat-value">@FormatAge(_repo.LastIndexed)</span>
-                    <span class="cc-stat-label">Last indexed</span>
-                </div>
-            </div>
-
-            <div class="cc-section-actions">
-                <BbButton Variant="ButtonVariant.Outline" OnClick="ReIndexAsync" Disabled="_reindexing">
-                    @if (_reindexing)
-                    {
-                        <span>Indexing…</span>
-                    }
-                    else
-                    {
-                        <LucideIcon Name="LucideIcons.RefreshCw" Size="14" />
-                        <span>Re-index</span>
-                    }
-                </BbButton>
-            </div>
+            <BbCard>
+                <BbCardContent>
+                    <div class="cc-stat-row">
+                        <div class="cc-stat" data-testid="detail-file-count">
+                            <span class="cc-stat-value">@_repo.FileCount</span>
+                            <span class="cc-stat-label">Files</span>
+                        </div>
+                        <div class="cc-stat" data-testid="detail-symbol-count">
+                            <span class="cc-stat-value">@_repo.SymbolCount</span>
+                            <span class="cc-stat-label">Symbols</span>
+                        </div>
+                        <div class="cc-stat" data-testid="detail-last-indexed">
+                            <span class="cc-stat-value">@FormatAge(_repo.LastIndexed)</span>
+                            <span class="cc-stat-label">Last indexed</span>
+                        </div>
+                    </div>
+                </BbCardContent>
+            </BbCard>
         }
 
-        <div class="cc-section">
-            <h2>Symbol search</h2>
-            <div class="cc-search-bar">
-                <input class="cc-search-input" type="search" placeholder="Search symbols…"
-                       @bind="_query" @bind:event="oninput" @onkeydown="OnSearchKeyDown"
-                       data-testid="symbol-search-input" />
-                <BbButton OnClick="SearchAsync">
-                    <LucideIcon Name="LucideIcons.Search" Size="14" />
-                    <span>Search</span>
-                </BbButton>
-            </div>
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle>Symbol search</BbCardTitle>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbInputGroup>
+                    <BbInputGroupAddon>
+                        <LucideIcon Name="search" Size="14" />
+                    </BbInputGroupAddon>
+                    <BbInputGroupInput @bind-Value="_query"
+                                       Placeholder="Search symbols…"
+                                       UpdateTiming="UpdateTiming.Immediate"
+                                       @onkeydown="OnSearchKeyDown"
+                                       AriaLabel="Symbol search"
+                                       data-testid="symbol-search-input" />
+                    <BbInputGroupAddon Align="InputGroupAlign.InlineEnd">
+                        <BbInputGroupButton OnClick="SearchAsync"
+                                            Disabled="_searching || string.IsNullOrWhiteSpace(_query)"
+                                            AriaLabel="Search">
+                            <LucideIcon Name="search" Size="14" />
+                            Search
+                        </BbInputGroupButton>
+                    </BbInputGroupAddon>
+                </BbInputGroup>
 
-            @if (_searching)
-            {
-                <div class="cc-loading" data-testid="search-loading">Searching…</div>
-            }
-            else if (_searchResults is not null)
-            {
-                @if (_searchResults.Count == 0)
-                {
-                    <p class="cc-empty-inline" data-testid="search-empty">No symbols found.</p>
-                }
-                else
-                {
-                    <div class="cc-symbol-list">
-                        @foreach (var r in _searchResults)
-                        {
-                            <div class="cc-symbol-row" data-testid="symbol-result">
-                                <BbBadge class="cc-kind-badge">@r.Symbol.Kind</BbBadge>
+                <BbDataGrid TData="SymbolSearchResult"
+                            Items="_searchResults ?? []"
+                            IsLoading="_searching"
+                            ShowPagination="false"
+                            Class="mt-4"
+                            AriaLabel="Symbol search results">
+                    <Columns>
+                        <BbDataGridTemplateColumn Title="Kind" Width="72px">
+                            <ChildContent Context="r">
+                                <BbBadge Variant="BadgeVariant.Outline" Class="@($"cc-kind-badge cc-kind-badge--{KindCss(r.Symbol.Kind)}")">@KindAbbr(r.Symbol.Kind)</BbBadge>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridTemplateColumn Title="Symbol" Sortable="true" SortBy="@(r => (object)r.Symbol.Name)">
+                            <ChildContent Context="r">
                                 <span class="cc-symbol-name" data-testid="symbol-name">@r.Symbol.Name</span>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridTemplateColumn Title="Signature">
+                            <ChildContent Context="r">
                                 <span class="cc-symbol-sig" title="@r.Symbol.Signature">@TruncateSig(r.Symbol.Signature)</span>
-                                <span class="cc-symbol-path" title="@r.FilePath">@Path.GetFileName(r.FilePath)</span>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridTemplateColumn Title="File" Sortable="true" SortBy="@(r => (object)Path.GetFileName(r.FilePath))">
+                            <ChildContent Context="r">
+                                <span class="cc-table-path" title="@r.FilePath">@Path.GetFileName(r.FilePath)</span>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                    </Columns>
+                    <EmptyTemplate>
+                        @if (_searchResults is null)
+                        {
+                            <BbEmpty Title="Search for symbols"
+                                     Description="Enter a name above to search symbols in this repository."
+                                     Size="EmptySize.Small" />
+                        }
+                        else
+                        {
+                            <BbEmpty Title="No symbols found"
+                                     Description="Try a different search term."
+                                     Size="EmptySize.Small" />
+                        }
+                    </EmptyTemplate>
+                </BbDataGrid>
+            </BbCardContent>
+        </BbCard>
+
+        @if (_snapshots is { Count: > 0 })
+        {
+            <BbCard>
+                <BbCardHeader>
+                    <BbCardTitle>Snapshots</BbCardTitle>
+                </BbCardHeader>
+                <BbCardContent>
+                    <div class="cc-snapshot-list">
+                        @foreach (var snap in _snapshots)
+                        {
+                            <div class="cc-snapshot-row" data-testid="snapshot-row">
+                                <span class="cc-snapshot-label" data-testid="snapshot-label">@snap.SnapshotLabel</span>
+                                <span class="cc-snapshot-date">@DateTimeOffset.FromUnixTimeSeconds(snap.CreatedAt).ToString("g")</span>
                             </div>
                         }
                     </div>
-                }
-            }
-        </div>
-
-        @if (_snapshots is not null && _snapshots.Count > 0)
-        {
-            <div class="cc-section">
-                <h2>Snapshots</h2>
-                <div class="cc-snapshot-list">
-                    @foreach (var snap in _snapshots)
-                    {
-                        <div class="cc-snapshot-row" data-testid="snapshot-row">
-                            <span class="cc-snapshot-label" data-testid="snapshot-label">@snap.SnapshotLabel</span>
-                            <span class="cc-snapshot-date">@DateTimeOffset.FromUnixTimeSeconds(snap.CreatedAt).ToString("g")</span>
-                        </div>
-                    }
-                </div>
-            </div>
+                </BbCardContent>
+            </BbCard>
         }
     </div>
 }
@@ -117,9 +176,9 @@ else
 
     private string? _projectRoot;
     private string? _repoName;
-    private CodeCompress.Core.Registry.RepositoryRecord? _repo;
-    private IReadOnlyList<CodeCompress.Core.Models.IndexSnapshot>? _snapshots;
-    private IReadOnlyList<CodeCompress.Core.Models.SymbolSearchResult>? _searchResults;
+    private RepositoryRecord? _repo;
+    private IReadOnlyList<IndexSnapshot>? _snapshots;
+    private IReadOnlyList<SymbolSearchResult>? _searchResults;
     private string _query = string.Empty;
     private bool _searching;
     private bool _reindexing;
@@ -153,10 +212,7 @@ else
 
     private async Task SearchAsync()
     {
-        if (_projectRoot is null || string.IsNullOrWhiteSpace(_query))
-        {
-            return;
-        }
+        if (_projectRoot is null || string.IsNullOrWhiteSpace(_query)) return;
 
         _searching = true;
         try
@@ -171,18 +227,12 @@ else
 
     private async Task OnSearchKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
-        {
-            await SearchAsync();
-        }
+        if (e.Key == "Enter") await SearchAsync();
     }
 
     private async Task ReIndexAsync()
     {
-        if (_projectRoot is null)
-        {
-            return;
-        }
+        if (_projectRoot is null) return;
 
         _reindexing = true;
         try
@@ -196,6 +246,28 @@ else
             _reindexing = false;
         }
     }
+
+    private static string KindCss(string kind) => kind.ToLowerInvariant() switch
+    {
+        "function" or "method" => "fn",
+        "class"                => "cls",
+        "interface"            => "ifc",
+        "enum"                 => "enm",
+        "variable"             => "var",
+        "property"             => "prop",
+        _                      => "fn",
+    };
+
+    private static string KindAbbr(string kind) => kind.ToLowerInvariant() switch
+    {
+        "function" or "method" => "fn",
+        "class"                => "cls",
+        "interface"            => "ifc",
+        "enum"                 => "enm",
+        "variable"             => "var",
+        "property"             => "prop",
+        _                      => kind[..Math.Min(3, kind.Length)],
+    };
 
     private static string FormatAge(DateTimeOffset dt)
     {

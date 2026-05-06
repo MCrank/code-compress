@@ -1,0 +1,125 @@
+@page "/repositories"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+
+<PageTitle>Repositories — CodeCompress</PageTitle>
+
+<div class="cc-page">
+    <div class="cc-page-header">
+        <div class="cc-page-header-left">
+            <h1>Repositories</h1>
+            <p class="cc-page-subtitle">All indexed repositories</p>
+        </div>
+    </div>
+
+    <BbDataGrid TData="RepositoryRecord"
+                Items="_repos"
+                IsLoading="_loading"
+                ShowPagination="false"
+                ShowSearch="true"
+                SearchPlaceholder="Filter repositories…"
+                AriaLabel="All indexed repositories"
+                ItemKey="@(r => r.RepoId)">
+        <Columns>
+            <BbDataGridTemplateColumn Title="Name" Sortable="true" SortBy="@(r => (object)r.DisplayName)"
+                                      Filterable="true" FilterBy="@(r => (object)r.DisplayName)">
+                <ChildContent Context="repo">
+                    <a href="/repo/@repo.RepoId" class="cc-table-name" data-testid="repo-name">@repo.DisplayName</a>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridPropertyColumn Property="@(r => r.ProjectRoot)" Title="Path" NoWrap="true" Filterable="true" />
+            <BbDataGridPropertyColumn Property="@(r => r.FileCount)" Title="Files" Sortable="true"
+                                      CellClass="cc-col-right" HeaderClass="cc-col-right" />
+            <BbDataGridPropertyColumn Property="@(r => r.SymbolCount)" Title="Symbols" Sortable="true"
+                                      CellClass="cc-col-right" HeaderClass="cc-col-right" />
+            <BbDataGridTemplateColumn Title="Status">
+                <ChildContent Context="repo">
+                    @{ var status = GetStatus(repo, _reindexing.Contains(repo.ProjectRoot)); }
+                    <span class="cc-badge cc-badge--@status" data-testid="repo-status">
+                        <span class="cc-badge-dot"></span>
+                        @status
+                    </span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridTemplateColumn Title="Last Indexed" Sortable="true" SortBy="@(r => (object)r.LastIndexed)">
+                <ChildContent Context="repo">
+                    <span data-testid="last-indexed">@FormatAge(repo.LastIndexed)</span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridTemplateColumn Title="Actions" Width="120px">
+                <ChildContent Context="repo">
+                    <div class="cc-table-actions">
+                        <button class="cc-icon-btn"
+                                title="Re-index"
+                                disabled="@_reindexing.Contains(repo.ProjectRoot)"
+                                @onclick="() => ReIndexAsync(repo.ProjectRoot)"
+                                data-testid="reindex-btn">
+                            <LucideIcon Name="refresh-cw" Size="14" />
+                        </button>
+                        <a href="/repo/@repo.RepoId/graph" class="cc-icon-btn" title="View Graph" data-testid="view-graph-btn">
+                            <LucideIcon Name="git-graph" Size="14" />
+                        </a>
+                        <a href="/repo/@repo.RepoId" class="cc-icon-btn" title="View Details" data-testid="details-btn">
+                            <LucideIcon Name="arrow-right" Size="14" />
+                        </a>
+                    </div>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+        </Columns>
+        <EmptyTemplate>
+            <BbEmpty Title="No repositories indexed yet"
+                     Description="Run codecompress index --path &lt;path&gt; to add a repository to the index."
+                     Size="EmptySize.Default">
+                <Icon><LucideIcon Name="folder-git-2" Size="40" /></Icon>
+            </BbEmpty>
+        </EmptyTemplate>
+    </BbDataGrid>
+</div>
+
+@code {
+    private IReadOnlyList<RepositoryRecord> _repos = [];
+    private bool _loading = true;
+    private readonly HashSet<string> _reindexing = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _repos = await Facade.GetRepositoriesAsync();
+        _loading = false;
+    }
+
+    private async Task ReIndexAsync(string projectRoot)
+    {
+        _reindexing.Add(projectRoot);
+        try
+        {
+            await Facade.ReIndexAsync(projectRoot);
+            _repos = await Facade.GetRepositoriesAsync();
+        }
+        finally
+        {
+            _reindexing.Remove(projectRoot);
+        }
+    }
+
+    private static string GetStatus(RepositoryRecord repo, bool indexing)
+    {
+        if (indexing) return "indexing";
+        if (repo.LastError is not null) return "error";
+        var age = DateTimeOffset.UtcNow - repo.LastIndexed;
+        if (age.TotalDays > 7) return "stale";
+        return "indexed";
+    }
+
+    private static string FormatAge(DateTimeOffset dt)
+    {
+        var age = DateTimeOffset.UtcNow - dt;
+        return age switch
+        {
+            { TotalSeconds: < 60 } => "just now",
+            { TotalMinutes: < 60 } a => $"{(int)a.TotalMinutes}m ago",
+            { TotalHours: < 24 } a => $"{(int)a.TotalHours}h ago",
+            { TotalDays: < 2 } => "yesterday",
+            var a => $"{(int)a.TotalDays}d ago",
+        };
+    }
+}

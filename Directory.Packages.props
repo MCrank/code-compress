@@ -18,6 +18,8 @@
     <PackageVersion Include="Verify" Version="31.13.2" />
     <PackageVersion Include="BlazorBlueprint.Components" Version="3.10.0" />
     <PackageVersion Include="BlazorBlueprint.Primitives" Version="3.10.0" />
+    <PackageVersion Include="Z.Blazor.Diagrams" Version="3.0.4.1" />
+    <PackageVersion Include="Z.Blazor.Diagrams.Algorithms" Version="3.0.4.1" />
     <PackageVersion Include="bunit" Version="2.7.2" />
   </ItemGroup>
 

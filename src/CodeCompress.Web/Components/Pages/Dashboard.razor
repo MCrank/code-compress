@@ -6,70 +6,175 @@
 
 <div class="cc-page">
     <div class="cc-page-header">
-        <h1>Dashboard</h1>
-        <p class="cc-page-subtitle">Indexed repositories</p>
+        <div class="cc-page-header-left">
+            <h1>Dashboard</h1>
+            <p class="cc-page-subtitle">Symbol index overview</p>
+        </div>
+        <div class="cc-page-actions">
+            <BbButton Variant="ButtonVariant.Outline"
+                      OnClick="ReIndexAllAsync"
+                      Disabled="_reindexingAll || _loading">
+                @if (_reindexingAll)
+                {
+                    <LucideIcon Name="loader-circle" Size="14" />
+                    <span>Indexing…</span>
+                }
+                else
+                {
+                    <LucideIcon Name="refresh-cw" Size="14" />
+                    <span>Re-index All</span>
+                }
+            </BbButton>
+        </div>
     </div>
 
-    @if (_loading)
+    @if (!_loading)
     {
-        <div class="cc-loading" data-testid="loading">Loading repositories…</div>
-    }
-    else if (_repos.Count == 0)
-    {
-        <div class="cc-empty" data-testid="empty-state">
-            <p>No repositories indexed yet.</p>
-            <p>Run <code>codecompress index --path &lt;path&gt;</code> to add one.</p>
+        <div class="cc-stats-grid" data-testid="stats-grid">
+            <BbCard Class="cc-stat-card cc-stat-card--repos">
+                <BbCardHeader>
+                    <BbCardDescription>Total Repositories</BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <p class="cc-stat-card-value" data-testid="stat-repos">@_repos.Count</p>
+                    <p class="cc-stat-card-delta">@(_repos.Count == 1 ? "1 project" : $"{_repos.Count} projects")</p>
+                </BbCardContent>
+            </BbCard>
+            <BbCard Class="cc-stat-card cc-stat-card--files">
+                <BbCardHeader>
+                    <BbCardDescription>Files Indexed</BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <p class="cc-stat-card-value" data-testid="stat-files">@TotalFiles</p>
+                    <p class="cc-stat-card-delta">across all repositories</p>
+                </BbCardContent>
+            </BbCard>
+            <BbCard Class="cc-stat-card cc-stat-card--symbols">
+                <BbCardHeader>
+                    <BbCardDescription>Symbols Extracted</BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <p class="cc-stat-card-value" data-testid="stat-symbols">@TotalSymbols</p>
+                    <p class="cc-stat-card-delta">functions, classes, types…</p>
+                </BbCardContent>
+            </BbCard>
+            <BbCard Class="cc-stat-card cc-stat-card--lastrun">
+                <BbCardHeader>
+                    <BbCardDescription>Last Index Run</BbCardDescription>
+                </BbCardHeader>
+                <BbCardContent>
+                    <p class="cc-stat-card-value" data-testid="stat-lastrun" style="font-size: var(--text-2xl)">@LastIndexed</p>
+                    <p class="cc-stat-card-delta">
+                        @if (HasErrors)
+                        {
+                            <span class="cc-status-dot cc-status-dot--error"></span><span>@ErrorCount repo(s) with errors</span>
+                        }
+                        else if (_repos.Count > 0)
+                        {
+                            <span class="cc-status-dot cc-status-dot--success"></span><span>All healthy</span>
+                        }
+                        else
+                        {
+                            <span>No repos yet</span>
+                        }
+                    </p>
+                </BbCardContent>
+            </BbCard>
         </div>
+
+        <BbCard>
+            <BbCardHeader>
+                <BbCardTitle>Repositories</BbCardTitle>
+                <BbCardAction>
+                    <a href="/repositories" class="cc-link-btn">
+                        <LucideIcon Name="arrow-right" Size="12" />
+                        <span>View all</span>
+                    </a>
+                </BbCardAction>
+            </BbCardHeader>
+            <BbCardContent>
+                <BbDataGrid TData="RepositoryRecord"
+                            Items="_repos"
+                            ShowPagination="false"
+                            AriaLabel="Indexed repositories"
+                            ItemKey="@(r => r.RepoId)">
+                    <Columns>
+                        <BbDataGridTemplateColumn Title="Name" Sortable="true" SortBy="@(r => (object)r.DisplayName)">
+                            <ChildContent Context="repo">
+                                <a href="/repo/@repo.RepoId" class="cc-table-name" data-testid="repo-name">@repo.DisplayName</a>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridPropertyColumn Property="@(r => r.ProjectRoot)" Title="Path" NoWrap="true" />
+                        <BbDataGridPropertyColumn Property="@(r => r.FileCount)" Title="Files" Sortable="true" CellClass="cc-col-right" HeaderClass="cc-col-right" />
+                        <BbDataGridPropertyColumn Property="@(r => r.SymbolCount)" Title="Symbols" Sortable="true" CellClass="cc-col-right" HeaderClass="cc-col-right" />
+                        <BbDataGridTemplateColumn Title="Status">
+                            <ChildContent Context="repo">
+                                @{ var status = GetStatus(repo, _reindexing.Contains(repo.ProjectRoot)); }
+                                <span class="cc-badge cc-badge--@status" data-testid="repo-status">
+                                    <span class="cc-badge-dot"></span>
+                                    @status
+                                </span>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridTemplateColumn Title="Last Indexed" Sortable="true" SortBy="@(r => (object)r.LastIndexed)">
+                            <ChildContent Context="repo">
+                                <span data-testid="last-indexed">@FormatAge(repo.LastIndexed)</span>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                        <BbDataGridTemplateColumn Title="Actions" Width="120px">
+                            <ChildContent Context="repo">
+                                <div class="cc-table-actions">
+                                    <button class="cc-icon-btn"
+                                            title="Re-index"
+                                            disabled="@_reindexing.Contains(repo.ProjectRoot)"
+                                            @onclick="() => ReIndexAsync(repo.ProjectRoot)"
+                                            data-testid="reindex-btn">
+                                        <LucideIcon Name="refresh-cw" Size="14" />
+                                    </button>
+                                    <a href="/repo/@repo.RepoId/graph" class="cc-icon-btn" title="View Graph" data-testid="view-graph-btn">
+                                        <LucideIcon Name="git-graph" Size="14" />
+                                    </a>
+                                    <a href="/repo/@repo.RepoId" class="cc-icon-btn" title="View Details" data-testid="details-btn">
+                                        <LucideIcon Name="arrow-right" Size="14" />
+                                    </a>
+                                </div>
+                            </ChildContent>
+                        </BbDataGridTemplateColumn>
+                    </Columns>
+                    <EmptyTemplate>
+                        <div class="cc-empty-state" data-testid="empty-state">
+                            <span class="cc-empty-state-icon">
+                                <LucideIcon Name="folder-git-2" Size="48" />
+                            </span>
+                            <h3>No repositories indexed yet</h3>
+                            <p>Run <code>codecompress index --path &lt;path&gt;</code> to add a repository to the index.</p>
+                        </div>
+                    </EmptyTemplate>
+                </BbDataGrid>
+            </BbCardContent>
+        </BbCard>
     }
     else
     {
-        <div class="cc-repo-grid">
-            @foreach (var repo in _repos)
-            {
-                <div class="cc-repo-card" data-testid="repo-card">
-                    <div class="cc-repo-card-header">
-                        <a href="/repo/@repo.RepoId"
-                           class="cc-repo-name" data-testid="repo-name">@repo.DisplayName</a>
-                        <BbBadge>Active</BbBadge>
-                    </div>
-                    <p class="cc-repo-path" title="@repo.ProjectRoot">@repo.ProjectRoot</p>
-                    <div class="cc-repo-stats">
-                        <span data-testid="file-count"><b>@repo.FileCount</b> files</span>
-                        <span data-testid="symbol-count"><b>@repo.SymbolCount</b> symbols</span>
-                        <span data-testid="last-indexed">@FormatAge(repo.LastIndexed)</span>
-                    </div>
-                    @if (repo.LastError is not null)
-                    {
-                        <p class="cc-repo-error" data-testid="repo-error">@repo.LastError</p>
-                    }
-                    <div class="cc-repo-actions">
-                        <BbButton Variant="ButtonVariant.Outline" OnClick="() => ReIndexAsync(repo.ProjectRoot)"
-                                  Disabled="_reindexing.Contains(repo.ProjectRoot)">
-                            @if (_reindexing.Contains(repo.ProjectRoot))
-                            {
-                                <span>Indexing…</span>
-                            }
-                            else
-                            {
-                                <LucideIcon Name="LucideIcons.RefreshCw" Size="14" />
-                                <span>Re-index</span>
-                            }
-                        </BbButton>
-                        <a href="/repo/@repo.RepoId" class="cc-link-btn">
-                            <LucideIcon Name="LucideIcons.ArrowRight" Size="14" />
-                            <span>Details</span>
-                        </a>
-                    </div>
-                </div>
-            }
-        </div>
+        <div class="cc-loading" data-testid="loading">Loading…</div>
     }
 </div>
 
 @code {
-    private IReadOnlyList<CodeCompress.Core.Registry.RepositoryRecord> _repos = [];
+    private IReadOnlyList<RepositoryRecord> _repos = [];
     private bool _loading = true;
+    private bool _reindexingAll;
     private readonly HashSet<string> _reindexing = [];
+
+    private int TotalFiles   => _repos.Sum(r => r.FileCount);
+    private int TotalSymbols => _repos.Sum(r => r.SymbolCount);
+    private int ErrorCount   => _repos.Count(r => r.LastError is not null);
+    private bool HasErrors   => ErrorCount > 0;
+
+    private string LastIndexed =>
+        _repos.Count == 0
+            ? "Never"
+            : FormatAge(_repos.Max(r => r.LastIndexed));
 
     protected override async Task OnInitializedAsync()
     {
@@ -89,6 +194,37 @@
         {
             _reindexing.Remove(projectRoot);
         }
+    }
+
+    private async Task ReIndexAllAsync()
+    {
+        _reindexingAll = true;
+        try
+        {
+            _reindexing.UnionWith(_repos.Select(r => r.ProjectRoot));
+
+            foreach (var root in _repos.Select(r => r.ProjectRoot))
+            {
+                await Facade.ReIndexAsync(root);
+                _reindexing.Remove(root);
+            }
+
+            _repos = await Facade.GetRepositoriesAsync();
+        }
+        finally
+        {
+            _reindexingAll = false;
+            _reindexing.Clear();
+        }
+    }
+
+    private static string GetStatus(RepositoryRecord repo, bool indexing)
+    {
+        if (indexing) return "indexing";
+        if (repo.LastError is not null) return "error";
+        var age = DateTimeOffset.UtcNow - repo.LastIndexed;
+        if (age.TotalDays > 7) return "stale";
+        return "indexed";
     }
 
     private static string FormatAge(DateTimeOffset dt)
