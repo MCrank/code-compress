@@ -1,3 +1,4 @@
+using BlazorBlueprint.Components;
 using Bunit;
 using CodeCompress.Core.Registry;
 using CodeCompress.Web.Components.Pages;
@@ -9,6 +10,12 @@ namespace CodeCompress.Web.Tests;
 
 internal sealed class DashboardTests : BunitContext
 {
+    [Before(Test)]
+    public void Setup()
+    {
+        Services.AddBlazorBlueprintComponents();
+    }
+
     [Test]
     public async Task Dashboard_ShowsRepositoryNamesFromFacade()
     {
@@ -45,9 +52,9 @@ internal sealed class DashboardTests : BunitContext
         Services.AddSingleton(facade);
 
         var cut = Render<Dashboard>();
-        await cut.WaitForStateAsync(() => cut.FindAll("[data-testid='file-count']").Count > 0, TimeSpan.FromSeconds(3));
+        await cut.WaitForStateAsync(() => cut.FindAll("[data-testid='stat-files']").Count > 0, TimeSpan.FromSeconds(3));
 
-        await Assert.That(cut.Find("[data-testid='file-count']").TextContent).Contains("42");
-        await Assert.That(cut.Find("[data-testid='symbol-count']").TextContent).Contains("789");
+        await Assert.That(cut.Find("[data-testid='stat-files']").TextContent).Contains("42");
+        await Assert.That(cut.Find("[data-testid='stat-symbols']").TextContent).Contains("789");
     }
 }
