@@ -1,24 +1,25 @@
 ---
 name: parser-expert
-description: Language parser development expert for CodeCompress. Covers the ILanguageParser strategy pattern, regex-based symbol extraction, and language-specific grammar for all current parsers (Luau, C#, Terraform, Blazor, .NET Project, JSON) and planned parsers (Python, Go, Rust).
+description: Language parser development expert for CodeCompress. Use this skill whenever adding, modifying, or debugging a language parser — covers tree-sitter AST-based parsing (C#, TypeScript/JS, Python, Go, Rust, Java), regex-based parsing (Luau, Terraform, Blazor), the ILanguageParser strategy pattern, query S-expression syntax, SymbolInfo/DependencyInfo extraction, byte offset tracking, and integration test patterns. Invoke for any parser work: new language support, fixing symbol extraction bugs, adding a new SymbolKind, or updating edge-case handling in an existing parser.
 argument-hint: [language-or-parser-file]
 disable-model-invocation: true
 ---
 
 # Parser Expert — CodeCompress
 
-You are a language parser development expert for the CodeCompress project. Guide the implementation, debugging, and testing of regex-based parsers that extract symbols from source files across multiple languages.
+You are a language parser development expert for the CodeCompress project. Guide the implementation, debugging, and testing of language parsers that extract symbols from source files.
 
 For .NET project conventions, see [dotnet-reference.md](../../references/dotnet-reference.md).
 
 ## Documentation Lookup Policy (Mandatory)
 
-**Never rely on training data for language grammar rules.** Always verify syntax rules.
+**Never rely on training data for language grammar rules or tree-sitter node types.** Always verify.
 
 Use the **Context7 MCP** and **Ref MCP** for:
-- Language specification references (C# spec, Python grammar, Go spec, Rust reference)
-- .NET Regex API documentation
-- `[GeneratedRegex]` source generator patterns
+- Language grammar specs (C# spec, Python grammar, Go spec, Rust reference, Java spec)
+- TreeSitter.DotNet API documentation
+- Tree-sitter node type reference for each language grammar
+- .NET Regex API and `[GeneratedRegex]` source generator patterns
 
 ## Parser Architecture
 
@@ -35,7 +36,9 @@ public interface ILanguageParser
 }
 ```
 
-### ParseResult Model
+The `IndexEngine` auto-resolves parsers by file extension via DI. Adding a new parser = one class + one DI registration — no other wiring needed.
+
+### ParseResult and Models
 
 ```csharp
 public sealed record ParseResult(
@@ -43,291 +46,399 @@ public sealed record ParseResult(
     IReadOnlyList<DependencyInfo> Dependencies);
 ```
 
-### SymbolInfo — What Each Symbol Contains
+**SymbolInfo fields:**
 
 | Field | Type | Purpose |
 |-------|------|---------|
 | `Name` | `string` | Symbol name (e.g., `ProcessAttack`) |
-| `QualifiedName` | `string` | Parent-qualified name (e.g., `CombatService.ProcessAttack`) |
-| `Kind` | `SymbolKind` | Function, Method, Class, Record, Enum, etc. |
-| `Signature` | `string` | Full declaration signature |
+| `Kind` | `SymbolKind` | Class, Method, Function, Interface, Record, Enum, Constant, Module, Type, Export, ConfigKey |
+| `Signature` | `string` | Full declaration (no body) |
+| `ParentSymbol` | `string?` | Enclosing symbol name (null for top-level) |
+| `ByteOffset` | `int` | Byte position in file — used by `get_symbol`/`expand_symbol` for seek |
+| `ByteLength` | `int` | Byte length from declaration to end |
+| `LineStart` | `int` | 1-indexed declaration line |
+| `LineEnd` | `int` | 1-indexed closing line |
 | `Visibility` | `Visibility` | Public, Private, Protected, Internal |
-| `DocComment` | `string?` | Documentation comment (XML, triple-dash, etc.) |
-| `FilePath` | `string` | Relative path to source file |
-| `ByteOffset` | `int` | Byte position in file (for seek-based retrieval) |
-| `ByteLength` | `int` | Byte length of symbol body |
-| `LineStart` | `int` | Line number of declaration |
-| `LineEnd` | `int` | Line number of closing brace/end |
-| `ParentName` | `string?` | Enclosing symbol name (null for top-level) |
+| `DocComment` | `string?` | Doc comment preceding declaration |
+| `BodyLineStart` | `int?` | First line of body (after opening brace) — for `expand_symbol` |
+| `BodyLineEnd` | `int?` | Last line of body (before closing brace) — for `expand_symbol` |
 
-### SymbolKind Enum
+`ByteOffset` and `ByteLength` are critical — the `get_symbol` and `expand_symbol` tools use them to seek directly to a symbol without re-reading the file. If they're wrong, symbol retrieval breaks silently.
 
-`Function`, `Method`, `Class`, `Record`, `Enum`, `Type`, `Interface`, `Export`, `Constant`, `Module`
-
-### Visibility Enum
-
-`Public`, `Private`, `Protected`, `Internal`
-
-### Registration
-
-Adding a new language parser requires:
-1. Create the parser class implementing `ILanguageParser`
-2. Register in DI: `services.AddSingleton<ILanguageParser, MyParser>();` in `ServiceCollectionExtensions.AddCodeCompressCore()`
-3. The `IndexEngine` auto-resolves parsers by file extension — no other wiring needed
-
-## Regex-Based Parsing Approach
-
-All parsers use **regex pattern matching, NOT AST parsing**. This is by design:
-- Fast (no parser generator overhead)
-- Zero external dependencies
-- Handles partial/malformed files gracefully
-- Consistent approach across languages
-
-### Common Patterns
+### DI Registration
 
 ```csharp
-// Source-generated regex (preferred — compile-time, AOT-compatible)
-[GeneratedRegex(@"^(?<vis>public|private|protected|internal)\s+(?<kind>class|interface|struct|record|enum)\s+(?<name>\w+)",
-    RegexOptions.Multiline)]
-private static partial Regex TypeDeclarationRegex();
+// In ServiceCollectionExtensions.AddCodeCompressCore():
+services.AddSingleton<ILanguageParser, MyNewParser>();
+```
 
-// Parse content
-public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
+## Parser Taxonomy
+
+| Approach | When to use | Examples |
+|----------|------------|---------|
+| **Tree-sitter** | Languages with complex nesting, generics, operators, multi-line constructs | C#, TypeScript/JS, Python, Go, Rust, Java |
+| **Regex + state machine** | Simpler scripting languages or config DSLs where token structure is predictable | Luau, Terraform, Blazor (directives) |
+| **Structured format library** | Data formats with a dedicated .NET parser | JSON (`JsonDocument`), YAML (`YamlDotNet`), XML (`.csproj` via `XDocument`) |
+
+**Always prefer tree-sitter** for a new programming language. Regex parsers are fragile against edge cases (nested strings, multi-line declarations, operator overloads). Tree-sitter provides an exact AST — no edge case surprises.
+
+## Tree-Sitter Parsers
+
+### Available Built-in Languages
+
+The `TreeSitter.DotNet` package ships pre-compiled grammars. Instantiate with the exact string identifier:
+
+| Language | Constructor argument |
+|----------|-------------------|
+| C# | `new Language("c-sharp")` |
+| TypeScript | `new Language("typescript")` |
+| JavaScript | `new Language("javascript")` |
+| Python | `new Language("python")` |
+| Go | `new Language("go")` |
+| Rust | `new Language("rust")` |
+| Java | `new Language("java")` |
+
+All `Language`, `Parser`, `Tree`, and `Query` objects are `IDisposable` — always `using`.
+
+### Core Pattern: Parse → Query → Two-Pass Build
+
+Every tree-sitter parser follows this exact structure:
+
+```csharp
+public sealed class MyParser : ILanguageParser
 {
-    var text = Encoding.UTF8.GetString(content);
-    var symbols = new List<SymbolInfo>();
-    var dependencies = new List<DependencyInfo>();
+    // S-expression query — define once as a const
+    private const string SymbolQuery = """
+        [
+          (class_declaration name: (identifier) @name body: (declaration_list) @body) @decl
+          (method_declaration name: (identifier) @name body: (block) @body) @decl
+          (method_declaration name: (identifier) @name) @decl
+        ]
+        """;
 
-    // ... regex matching and symbol extraction
+    public string LanguageId => "my-language";
+    public IReadOnlyList<string> FileExtensions { get; } = [".ext"];
 
-    return new ParseResult(symbols, dependencies);
+    public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
+    {
+        if (content.IsEmpty)
+            return new ParseResult([], []);
+
+        var bytes = content.ToArray();
+        var text = Encoding.UTF8.GetString(bytes);
+        var lines = text.Split('\n');
+
+        // 1. Build AST
+        using var language = new Language("my-language");
+        using var parser = new Parser(language);
+        using var tree = parser.Parse(text);
+        if (tree is null)
+            return new ParseResult([], []);
+
+        var symbols = new List<SymbolInfo>();
+        var deps = new List<DependencyInfo>();
+
+        ExtractDependencies(tree.RootNode, language, deps);
+
+        // 2. Pass 1 — collect all declarations into a map (byte offset → node tuple)
+        //    The same node can appear in multiple matches (e.g., method with and without body).
+        //    Merge by keeping the first decl, filling in name/body as they appear.
+        var declMap = new Dictionary<int, (Node Decl, Node? Name, Node? Body)>();
+        using var symQuery = new Query(language, SymbolQuery);
+        foreach (var match in symQuery.Execute(tree.RootNode).Matches)
+        {
+            Node? decl = null, name = null, body = null;
+            foreach (var cap in match.Captures)
+            {
+                switch (cap.Name)
+                {
+                    case "decl": decl = cap.Node; break;
+                    case "name": name = cap.Node; break;
+                    case "body": body = cap.Node; break;
+                }
+            }
+            if (decl is null) continue;
+
+            var key = decl.StartIndex;
+            if (!declMap.TryGetValue(key, out var existing))
+                declMap[key] = (decl, name, body);
+            else
+                declMap[key] = (existing.Decl, existing.Name ?? name, existing.Body ?? body);
+        }
+
+        // 3. Pass 2 — build SymbolInfo in document order
+        foreach (var (_, (decl, nameNode, body)) in declMap.OrderBy(kv => kv.Key))
+        {
+            var symbolName = nameNode?.Text;
+            if (string.IsNullOrEmpty(symbolName)) continue;
+
+            var kind = GetKind(decl, body);
+            var byteOffset = decl.StartIndex;
+            var byteLength = decl.EndIndex - decl.StartIndex;
+            var lineStart = decl.StartPosition.Row + 1;   // tree-sitter rows are 0-indexed
+            var lineEnd = decl.EndPosition.Row + 1;
+            var sig = ExtractSignature(decl, body, bytes);
+            var parentName = FindParentName(decl, declMap);
+            var vis = DeriveVisibility(decl, parentName is not null);
+            var doc = ExtractDocComment(lines, lineStart);
+
+            // BodyLineStart/BodyLineEnd for expand_symbol (skip brace lines)
+            int? bodyLineStart = null, bodyLineEnd = null;
+            if (body is not null)
+            {
+                var bls = body.StartPosition.Row + 2;
+                var ble = body.EndPosition.Row;
+                if (bls <= ble) { bodyLineStart = bls; bodyLineEnd = ble; }
+            }
+
+            symbols.Add(new SymbolInfo(
+                Name: symbolName,
+                Kind: kind,
+                Signature: sig,
+                ParentSymbol: parentName,
+                ByteOffset: byteOffset,
+                ByteLength: byteLength,
+                LineStart: lineStart,
+                LineEnd: lineEnd,
+                Visibility: vis,
+                DocComment: doc,
+                BodyLineStart: bodyLineStart,
+                BodyLineEnd: bodyLineEnd));
+        }
+
+        return new ParseResult(symbols, deps);
+    }
+```
+
+### Query S-Expression Syntax
+
+Tree-sitter queries use S-expressions (Lisp-like syntax). Learn by reading existing parsers, not from memory.
+
+```
+; Match a node type, optionally binding field children
+(class_declaration name: (identifier) @name body: (declaration_list) @body) @decl
+
+; Wildcard child — any node type
+(namespace_declaration name: (_) @name) @decl
+
+; OR: match any of several patterns
+[ (class_declaration ...) @decl  (interface_declaration ...) @decl ]
+
+; Nested: match a grandchild pattern
+(type_declaration (type_spec name: (type_identifier) @name type: (struct_type) @body)) @decl
+```
+
+**Capture names used in this project:**
+- `@decl` — the full declaration node (provides byte offsets, line numbers)
+- `@name` — the identifier node (provides symbol name via `.Text`)
+- `@body` — the body/block node (provides BodyLineStart/End and signature boundary)
+
+**Node type strings** are language-grammar-specific. Always verify against the tree-sitter grammar or by inspecting `node.Type` on a parsed tree. There is no central constants class — each parser hardcodes its own node type strings.
+
+### Node API Reference
+
+```csharp
+Node node = ...;
+
+node.Type           // Grammar node type, e.g. "class_declaration"
+node.Text           // Source text of this node (UTF-8 decoded)
+node.StartIndex     // Byte offset of start (same unit as SymbolInfo.ByteOffset)
+node.EndIndex       // Byte offset of end
+node.StartPosition.Row  // 0-indexed line number — add 1 for SymbolInfo.LineStart
+node.EndPosition.Row    // 0-indexed line number
+node.Parent         // Parent node (walk up for parent resolution)
+node.Children       // IReadOnlyList<Node> of all children (named + anonymous)
+```
+
+**Signature extraction** — slice the byte array directly using offsets:
+```csharp
+var sig = Encoding.UTF8.GetString(bytes, decl.StartIndex, body.StartIndex - decl.StartIndex).TrimEnd();
+```
+
+**Parent resolution** — walk `node.Parent` upward, stopping when you hit a container or stop node:
+```csharp
+private static readonly HashSet<string> ContainerNodeTypes = new(StringComparer.Ordinal)
+{
+    "class_declaration", "struct_declaration", "interface_declaration"
+};
+
+private static string? FindParentName(Node decl, Dictionary<int, (Node, Node?, Node?)> declMap)
+{
+    var current = decl.Parent;
+    while (current is not null)
+    {
+        if (ContainerNodeTypes.Contains(current.Type))
+            return declMap.TryGetValue(current.StartIndex, out var e) ? e.Item2?.Text : null;
+        current = current.Parent;
+    }
+    return null;
 }
 ```
 
-### Byte Offset Tracking — CRITICAL
+### Dependency Extraction
 
-The MCP `get_symbol` and `expand_symbol` tools use byte offsets to seek directly to a symbol in a file. Every `SymbolInfo` MUST have accurate:
-- `ByteOffset` — byte position of the symbol declaration in the file
-- `ByteLength` — byte length from declaration to closing brace/end
+Use a separate query — don't mix into the symbol query:
 
-**Convert string index to byte offset:** `Encoding.UTF8.GetByteCount(text[..charIndex])`
+```csharp
+private static void ExtractDependencies(Node root, Language language, List<DependencyInfo> deps)
+{
+    using var q = new Query(language, "(using_directive) @u");
+    foreach (var node in q.Execute(root).Captures.Select(cap => cap.Node))
+    {
+        // parse node.Text to extract the import path/name
+        deps.Add(new DependencyInfo(RequirePath: ..., Alias: null));
+    }
+}
+```
 
-### Scope/Nesting Tracking
+Note: `.Execute().Captures` (flat list) is fine for dependency queries where you just need matching nodes. `.Execute().Matches` (grouped by match) is needed for symbol queries where you need all captures from the same pattern instance together.
 
-Most languages need brace-depth or indent-level tracking to determine:
-- Which symbols are children of which parent
-- Where a symbol body ends (closing brace)
-- Correct `ParentName` assignment
+## Current Parsers Reference
 
-**Brace-based languages (C#, Go, Rust, Terraform):** Track `{`/`}` depth, accounting for strings and comments.
+### Tree-Sitter Parsers
 
-**Indentation-based languages (Python):** Track indent level changes.
+| Parser | Language ID | Extensions | Key node types |
+|--------|------------|-----------|---------------|
+| `CSharpParser` | `csharp` | `.cs` | `class_declaration`, `method_declaration`, `interface_declaration`, `record_declaration`, `property_declaration`, `namespace_declaration` |
+| `TypeScriptJavaScriptParser` | `typescript` / `javascript` | `.ts`, `.tsx`, `.js`, `.jsx` | `class_declaration`, `method_definition`, `function_declaration`, `lexical_declaration`, `interface_declaration` |
+| `PythonParser` | `python` | `.py` | `class_definition`, `function_definition`, `decorated_definition` |
+| `GoParser` | `go` | `.go` | `function_declaration`, `method_declaration`, `type_declaration`, `const_spec`, `var_spec` |
+| `RustParser` | `rust` | `.rs` | `struct_item`, `trait_item`, `function_item`, `impl_item`, `enum_item`, `type_item` |
+| `JavaParser` | `java` | `.java` | `class_declaration`, `method_declaration`, `interface_declaration`, `enum_declaration` |
 
-### Doc Comment Extraction
+### Regex-Based Parsers
 
-Extract the comment block immediately preceding a symbol declaration:
-- **C#:** `///` XML doc comments
-- **Luau:** `---` triple-dash comments
-- **Terraform:** `#` comments before blocks
-- **Python:** `"""` docstrings after `def`/`class`
-- **Go:** `//` comments before declarations
-- **Rust:** `///` and `//!` doc comments
+**Luau** (`.luau`, `.lua`) — Regex + line-by-line state machine. Tracks `function`/`end` nesting depth. Doc comments: `---` triple-dash. Dependencies: `require()` calls.
 
-## Current Parsers — Language-Specific Reference
+**TerraformParser** (`.tf`, `.tfvars`) — Regex + brace-depth tracking for HCL. Symbol types: resources, data sources, variables, outputs, modules, providers. Doc comments: `#` comments before blocks.
+> Gotcha: dotted names like `aws_instance.web` conflict with `GetSymbolByNameAsync`'s `parent.child` splitting logic — use `GetSymbolsByFileAsync` for exact Terraform symbol lookups.
 
-### Luau (Roblox) — `LuauParser.cs`
+**BlazorRazorParser** (`.razor`) — Regex for `@page`, `@inject`, `@using`, `@inherits` directives; delegates C# code sections to `CSharpParser` instance internally.
 
-| Property | Value |
-|----------|-------|
-| Language ID | `luau` |
-| Extensions | `.luau`, `.lua` |
+### Structured Format Parsers
 
-**Symbol types:** Functions (`function foo()`), local functions, methods (`:Method()`), module table assignments, constants
-**Scoping:** Nesting depth via `function`/`end` blocks
-**Doc comments:** `---` triple-dash
-**Dependencies:** `require()` calls
-**Gotchas:**
-- Self-referencing methods: `function Module:Method()` — the receiver is implicit
-- Nested function expressions
-- Module return patterns: `return Module` at file end
-- Vararg `...` parameter
+**DotNetProjectParser** (`.csproj`, `.fsproj`, `.vbproj`, `.props`) — `XDocument` traversal. Extracts package references, project references, build properties.
 
-### C# — `CSharpParser.cs`
+**JsonConfigParser** (`.json`) — `JsonDocument` traversal. Config keys as symbols with qualified names (e.g., `ConnectionStrings.Default`).
 
-| Property | Value |
-|----------|-------|
-| Language ID | `csharp` |
-| Extensions | `.cs` |
+**YamlConfigParser** (`.yaml`, `.yml`) — `YamlDotNet` `YamlStream`. Same key-as-symbol approach as JSON.
 
-**Symbol types:** Namespaces, classes, interfaces, structs, records, enums, methods, properties, constants, delegates
-**Scoping:** Brace-depth `{`/`}` tracking — must handle:
-- String literals (skip braces inside `"..."`, `@"..."`, `$"..."`, `"""..."""` raw strings)
-- Comments (skip braces inside `//...`, `/* ... */`)
+## Adding a New Tree-Sitter Parser
+
+### Step 1: Explore the grammar (mandatory before writing a single query)
+
+Tree-sitter node type names vary per language and must be exact. To discover them:
+1. Use Context7/Ref MCP to find the tree-sitter grammar for the language
+2. Parse a small sample file and inspect `tree.RootNode` children to see actual node types
+3. Cross-reference with the language's tree-sitter grammar repository
+
+### Step 2: Write the S-expression query
+
+Cover all symbol kinds you intend to extract. For each, capture `@decl`, `@name`, and optionally `@body`. Use the OR bracket syntax `[...]` when multiple node types map to the same kind.
+
+### Step 3: Implement `GetKind(Node decl, Node? body)`
+
+Map language node types to `SymbolKind` via a switch expression:
+
+```csharp
+private static SymbolKind GetKind(Node decl, Node? body) => decl.Type switch
+{
+    "class_definition" => SymbolKind.Class,
+    "function_definition" when /* top-level */ => SymbolKind.Function,
+    "function_definition" => SymbolKind.Method,
+    _ => SymbolKind.Function
+};
+```
+
+### Step 4: Handle visibility
+
+Visibility rules differ per language:
+- **Go:** capitalized name = `Public`, lowercase = `Private`
+- **Python:** leading `_` = `Private`, `__` = `Private`, otherwise `Public`
+- **Rust:** explicit `pub`/`pub(crate)` = `Public`, omitted = `Private`
+- **Java/C#:** explicit keyword required
+
+### Step 5: Doc comment extraction
+
+Extract from the `lines` array, walking backwards from `lineStart - 1`:
+- Look for consecutive comment lines (language-specific prefix)
+- Stop at the first non-comment line
+
+### Step 6: Add to DI + write tests + add sample project
+
+See "Sample Project + Integration Test Pattern" section below.
+
+## Regex Parser Patterns (for Luau/Terraform-style parsers)
+
+When tree-sitter isn't suitable, use source-generated regex:
+
+```csharp
+[GeneratedRegex(@"^(?<vis>public|private|protected|internal)\s+(?<kind>class|interface|record)\s+(?<name>\w+)",
+    RegexOptions.Multiline)]
+private static partial Regex TypeDeclarationRegex();
+```
+
+**Byte offset for regex matches:** Convert the character-indexed `match.Index` to a byte offset using:
+```csharp
+var byteOffset = Encoding.UTF8.GetByteCount(text[..match.Index]);
+```
+
+**Nesting tracking:** For brace-based languages, track `{`/`}` depth while skipping:
+- String literals (`"..."`, `@"..."`, `$"..."`)
 - Character literals (`'{'`)
-- Verbatim strings (`@"contains { and }"`)
-
-**Doc comments:** `/// <summary>...</summary>` XML format
-**Generics:** `<T>`, `<T, U>` — don't confuse angle brackets with comparison operators
-**Attributes:** `[Foo]`, `[Foo(args)]` — extract but don't treat as separate symbols
-**Record types:** `record Foo(int X, string Y)` — primary constructor
-**Expression-bodied members:** `=> expr;` — single line, no braces
-**File-scoped namespaces:** `namespace Foo;` — affects all subsequent declarations
-**Modifiers:** `public`, `private`, `protected`, `internal`, `static`, `abstract`, `sealed`, `override`, `virtual`, `async`, `readonly`, `partial`
-**Pattern matching:** `is`, `switch` expressions — not symbols but affect brace depth
-
-### Terraform — `TerraformParser.cs`
-
-| Property | Value |
-|----------|-------|
-| Language ID | `terraform` |
-| Extensions | `.tf`, `.tfvars` |
-
-**Symbol types:** Resources, data sources, variables, outputs, modules, providers, locals, terraform blocks
-**Scoping:** HCL brace-depth tracking
-**Doc comments:** `#` comments before blocks
-**Dependencies:** Module `source` references
-**Gotchas:**
-- **Dotted names** (`aws_instance.web`) conflict with `GetSymbolByNameAsync`'s `parent.child` splitting logic. Use `GetSymbolsByFileAsync` for exact name lookup.
-- `.tfvars` files have different parsing (variable assignments, not block declarations)
-- Heredoc strings (`<<EOF ... EOF`) — skip brace counting inside
-
-### Blazor Razor — `BlazorRazorParser.cs`
-
-| Property | Value |
-|----------|-------|
-| Language ID | `blazor` |
-| Extensions | `.razor` |
-
-**Symbol types:** `@page` directives, `@inject` directives, `@using` directives, `@inherits`/`@implements`
-**Delegation:** Delegates to `CSharpParser` for `@code { }` and `@functions { }` sections
-**Gotchas:** Mixed HTML and C# content, Razor syntax (`@if`, `@foreach`)
-
-### .NET Project Files — `DotNetProjectParser.cs`
-
-| Property | Value |
-|----------|-------|
-| Language ID | `dotnet-project` |
-| Extensions | `.csproj`, `.fsproj`, `.vbproj`, `.props` |
-
-**Parsing:** XML-based using `XDocument` (not regex)
-**Symbol types:** Package references (name + version), build properties (TargetFramework, etc.), project references
-**Dependencies:** `<ProjectReference>` entries
-
-### JSON Config — `JsonConfigParser.cs`
-
-| Property | Value |
-|----------|-------|
-| Language ID | `json-config` |
-| Extensions | `.json` |
-
-**Parsing:** `JsonDocument` traversal (not regex)
-**Symbol types:** Config keys as symbols, nested keys with qualified names (e.g., `ConnectionStrings.Default`)
-
-## Planned Parsers — Skeleton Guidance
-
-### Python
-
-| Property | Value |
-|----------|-------|
-| Extensions | `.py` |
-
-**Key challenges:**
-- **Indentation-based scoping** — whitespace is significant. Track indent level to determine nesting.
-- **Symbol types:** `def` (functions/methods), `class`, module-level variables, `@decorator` annotations
-- **Doc comments:** Docstrings `"""..."""` immediately after `def`/`class`
-- **Type hints:** `def foo(x: int) -> str:` — include in signature
-- **Dependencies:** `import` and `from ... import` statements
-- **Edge cases:** Decorators spanning multiple lines, `async def`, nested classes, `__init__` methods, `@property`, `@staticmethod`, `@classmethod`
-
-### Go
-
-| Property | Value |
-|----------|-------|
-| Extensions | `.go` |
-
-**Key challenges:**
-- **Visibility by capitalization** — `Exported` (public) vs `unexported` (private)
-- **Symbol types:** `func`, `type` (struct, interface), `const`, `var`, methods with receivers `func (r *Receiver) Method()`
-- **Doc comments:** `//` comments directly before declarations (Go convention)
-- **Dependencies:** `import` statements (single and grouped `import (...)`)
-- **Edge cases:** Multiple return values, init functions, embedded structs, interface composition
-
-### Rust
-
-| Property | Value |
-|----------|-------|
-| Extensions | `.rs` |
-
-**Key challenges:**
-- **Visibility:** `pub`, `pub(crate)`, `pub(super)`, default private
-- **Symbol types:** `fn`, `struct`, `enum`, `trait`, `impl` blocks, `type` aliases, `const`, `static`, `mod`
-- **Doc comments:** `///` (outer) and `//!` (inner/module-level)
-- **Dependencies:** `use` statements, `mod` declarations, `extern crate`
-- **Edge cases:** Lifetime annotations (`<'a>`), generic bounds (`where T: Trait`), macros (`macro_rules!`), derive macros (`#[derive(Debug, Clone)]`), `impl` blocks associate methods with types (method's parent is the type, not the impl block)
+- Comments (`// ...`, `/* ... */`)
 
 ## Sample Project + Integration Test Pattern
 
-**Every new parser MUST include both.** This is enforced by the `implement-plan` skill (Step 6).
+Every new parser requires both. These are not optional — they're enforced by `implement-plan`.
 
 ### Sample Project — `samples/{language}-sample-project/`
 
-Requirements:
-- **Realistic files** that look like real-world code, not minimal test fixtures
-- Cover **ALL symbol kinds** the parser handles
-- Cover **edge cases**: nested blocks, comments as doc comments, heredocs, special characters in strings
-- **Self-contained** — no external dependencies required to parse
-- Follow existing patterns: `samples/csharp-sample-project/`, `samples/luau-sample-project/`, `samples/terraform-sample-project/`
+- Realistic code that looks like a real project, not a minimal fixture
+- Cover **all symbol kinds** the parser handles
+- Include **edge cases**: nested blocks, strings with special chars, multi-line declarations, decorators
+- Self-contained — no external dependencies needed to parse
 
 ### Integration Tests — `tests/CodeCompress.Integration.Tests/{Language}EndToEndTests.cs`
-
-Follow the pattern in `CSharpEndToEndTests.cs`:
 
 ```csharp
 internal sealed class PythonEndToEndTests
 {
     [Test]
-    public async Task IndexPythonSampleProject()
-    {
-        // In-memory SQLite + IndexEngine + parser
-        // Index the sample project
-        // Assert: correct file count, symbol count
-    }
+    public async Task IndexPythonSampleProject() { /* correct file/symbol count */ }
 
     [Test]
-    public async Task OutlineContainsAllSymbolKinds()
-    {
-        // Verify all expected SymbolKind values appear
-    }
+    public async Task OutlineContainsAllSymbolKinds() { /* all SymbolKind values appear */ }
 
     [Test]
-    public async Task SpecificSymbolHasCorrectMetadata()
-    {
-        // Verify a known symbol has correct Kind, Visibility, DocComment
-    }
+    public async Task SpecificSymbolHasCorrectMetadata() { /* known symbol has right Kind, Visibility, DocComment */ }
 
     [Test]
-    public async Task SearchFindsSymbols()
-    {
-        // Verify FTS5 search returns expected results
-    }
+    public async Task ByteOffsetsAreAccurate() { /* seek to offset, read bytes, verify content matches symbol text */ }
 
     [Test]
-    public async Task DependenciesAreTracked()
-    {
-        // Verify import/require edges in dependency graph
-    }
+    public async Task SearchFindsSymbols() { /* FTS5 search returns expected results */ }
+
+    [Test]
+    public async Task DependenciesAreTracked() { /* import/require edges appear in dependency graph */ }
 }
 ```
 
-**Important:** For Terraform-style dotted symbol names, use `GetSymbolsByFileAsync` instead of `GetSymbolByNameAsync` (which splits on `.`).
+**Byte offset accuracy test** is particularly important — it catches off-by-one errors that would silently break `get_symbol`:
+```csharp
+var symbol = result.Symbols.First(s => s.Name == "MyClass");
+var slice = Encoding.UTF8.GetString(bytes, symbol.ByteOffset, symbol.ByteLength);
+await Assert.That(slice).Contains("class MyClass");
+```
 
 ## Sub-Agent Context Requirements
 
 When this skill is invoked as a sub-agent, the caller must provide:
 
-1. **The target language** and its grammar rules
-2. **The `ILanguageParser` interface** definition
-3. **An example parser implementation** (e.g., CSharpParser source code) showing the project's patterns
-4. **Sample source files** in the target language for testing
-5. **Language-specific edge cases** to handle
-6. **The ParseResult/SymbolInfo/DependencyInfo model** definitions
+1. **The `ILanguageParser` interface** — full definition
+2. **A complete existing tree-sitter parser** (e.g., `GoParser.cs` or `CSharpParser.cs` full source)
+3. **The `SymbolInfo` / `ParseResult` / `DependencyInfo` model definitions**
+4. **The target language's grammar** — node type names for relevant constructs
+5. **Sample source files** in the target language for the sample project
+6. **Language-specific edge cases** to handle (visibility rules, doc comment style, dependency syntax)
+7. **An example integration test** (e.g., `CSharpEndToEndTests.cs`)
