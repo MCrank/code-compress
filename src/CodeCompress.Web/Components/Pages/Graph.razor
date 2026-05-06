@@ -1,12 +1,13 @@
 @page "/repo/{RepoId}/graph"
 @rendermode InteractiveServer
 @inject IIndexFacade Facade
+@inject GraphDataService GraphService
 
 <PageTitle>@(_repoName is not null ? $"{_repoName} — Graph" : "Graph") — CodeCompress</PageTitle>
 
 @if (_pathError)
 {
-    <div class="cc-page">
+    <div class="cc-page" data-testid="graph-error">
         <BbAlert Variant="AlertVariant.Danger" AccentBorder>
             <Icon><LucideIcon Name="alert-circle" Size="16" /></Icon>
             <ChildContent>
@@ -18,7 +19,7 @@
 }
 else
 {
-    <div class="cc-page" style="height: 100%">
+    <div class="cc-page cc-graph-page">
         <div class="cc-page-header">
             <div class="cc-page-header-left">
                 <BbBreadcrumb>
@@ -45,15 +46,62 @@ else
         }
         else
         {
-            <BbCard Class="cc-graph-canvas-placeholder">
-                <BbCardContent>
-                    <BbEmpty Title="Interactive graph coming in GH-193"
-                             Description="@GraphDescription"
-                             Size="EmptySize.Large">
-                        <Icon><LucideIcon Name="git-graph" Size="48" /></Icon>
-                    </BbEmpty>
-                </BbCardContent>
-            </BbCard>
+            <div class="cc-graph-toolbar" data-testid="graph-toolbar">
+                <button class="cc-icon-btn cc-graph-toolbar-btn"
+                        title="Fit to view"
+                        @onclick="FitView"
+                        data-testid="fit-view-btn">
+                    <LucideIcon Name="maximize-2" Size="14" />
+                    <span>Fit</span>
+                </button>
+                <button class="cc-icon-btn cc-graph-toolbar-btn"
+                        title="Zoom in"
+                        @onclick="ZoomIn"
+                        data-testid="zoom-in-btn">
+                    <LucideIcon Name="zoom-in" Size="14" />
+                </button>
+                <button class="cc-icon-btn cc-graph-toolbar-btn"
+                        title="Zoom out"
+                        @onclick="ZoomOut"
+                        data-testid="zoom-out-btn">
+                    <LucideIcon Name="zoom-out" Size="14" />
+                </button>
+                <span class="cc-graph-toolbar-stat">
+                    <LucideIcon Name="file" Size="12" />
+                    @_nodeCount nodes
+                </span>
+                <span class="cc-graph-toolbar-stat">
+                    <LucideIcon Name="arrow-right" Size="12" />
+                    @_edgeCount edges
+                </span>
+            </div>
+
+            <div class="cc-graph-canvas-wrapper" data-testid="graph-canvas">
+                @if (_diagram is not null)
+                {
+                    <CascadingValue Value="_diagram">
+                        <DiagramCanvas />
+                    </CascadingValue>
+                }
+            </div>
+
+            <div class="cc-graph-legend" data-testid="graph-legend">
+                <span class="cc-graph-legend-title">Edge types:</span>
+                <span class="cc-graph-legend-item">
+                    <svg width="32" height="10" aria-hidden="true">
+                        <line x1="0" y1="5" x2="26" y2="5" stroke="currentColor" stroke-width="1.5" />
+                        <polygon points="22,2 30,5 22,8" fill="currentColor" />
+                    </svg>
+                    imports
+                </span>
+                <span class="cc-graph-legend-item cc-graph-legend-item--dashed">
+                    <svg width="32" height="10" aria-hidden="true">
+                        <line x1="0" y1="5" x2="26" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4,3" />
+                        <polygon points="22,2 30,5 22,8" fill="currentColor" />
+                    </svg>
+                    calls
+                </span>
+            </div>
         }
     </div>
 }
@@ -61,21 +109,19 @@ else
 @code {
     [Parameter] public string RepoId { get; set; } = string.Empty;
 
+    private BlazorDiagram? _diagram;
     private string? _repoName;
     private string? _repoPath;
     private bool _loading = true;
     private bool _pathError;
-    private int _fileCount;
-
-    private string GraphDescription =>
-        _fileCount > 0
-            ? $"File-level dependency canvas with pan, zoom, and drag will be implemented here. This repository has {_fileCount} files to visualize."
-            : "File-level dependency canvas with pan, zoom, and drag will be implemented here.";
+    private int _nodeCount;
+    private int _edgeCount;
 
     protected override async Task OnParametersSetAsync()
     {
         _pathError = false;
         _loading = true;
+        _diagram = null;
 
         var repos = await Facade.GetRepositoriesAsync();
         var repo = repos.FirstOrDefault(r => string.Equals(r.RepoId, RepoId, StringComparison.Ordinal));
@@ -89,7 +135,25 @@ else
 
         _repoName = repo.DisplayName;
         _repoPath = repo.ProjectRoot;
-        _fileCount = repo.FileCount;
+
+        var (nodes, edges) = await GraphService.GetGraphAsync(repo.ProjectRoot);
+        _nodeCount = nodes.Count;
+        _edgeCount = edges.Count;
+        _diagram = DiagramBuilder.Build(nodes, edges);
         _loading = false;
+    }
+
+    private void FitView() => _diagram?.ZoomToFit(40);
+
+    private void ZoomIn()
+    {
+        if (_diagram is not null)
+            _diagram.SetZoom(Math.Min(_diagram.Zoom * 1.25, 4.0));
+    }
+
+    private void ZoomOut()
+    {
+        if (_diagram is not null)
+            _diagram.SetZoom(Math.Max(_diagram.Zoom / 1.25, 0.1));
     }
 }

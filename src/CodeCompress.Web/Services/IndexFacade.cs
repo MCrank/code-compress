@@ -96,6 +96,13 @@ public sealed class IndexFacade : IIndexFacade
             await store.GetFilesByRepoAsync(repoId).ConfigureAwait(false)).ConfigureAwait(false);
     }
 
+    public async Task<DependencyGraph> GetDependencyGraphAsync(string projectRoot, CancellationToken ct = default)
+    {
+        var validatedPath = _pathValidator.ValidatePath(projectRoot, projectRoot);
+        return await WithStoreAsync(validatedPath, async (store, repoId) =>
+            await store.GetDependencyGraphAsync(repoId, null, "both", 50).ConfigureAwait(false)).ConfigureAwait(false);
+    }
+
     private async Task<TResult> WithStoreAsync<TResult>(
         string projectRoot,
         Func<ISymbolStore, string, Task<TResult>> operation)

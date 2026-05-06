@@ -11,4 +11,5 @@ public interface IIndexFacade
     public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string projectRoot, string query, string? kind, int limit, CancellationToken ct = default);
     public Task<IReadOnlyList<IndexSnapshot>> GetSnapshotsAsync(string projectRoot, CancellationToken ct = default);
     public Task<IReadOnlyList<FileRecord>> GetFilesAsync(string projectRoot, CancellationToken ct = default);
+    public Task<DependencyGraph> GetDependencyGraphAsync(string projectRoot, CancellationToken ct = default);
 }

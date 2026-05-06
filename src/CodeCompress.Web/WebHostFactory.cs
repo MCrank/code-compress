@@ -2,6 +2,7 @@ using BlazorBlueprint.Components;
 using CodeCompress.Core;
 using CodeCompress.Web.Components;
 using CodeCompress.Web.Services;
+using CodeCompress.Web.Services.Graph;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,6 +25,7 @@ public static class WebHostFactory
         });
         builder.Services.AddCodeCompressCore();
         builder.Services.AddScoped<IIndexFacade, IndexFacade>();
+        builder.Services.AddScoped<GraphDataService>();
 
         builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
 
