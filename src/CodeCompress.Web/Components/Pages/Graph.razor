@@ -1,5 +1,5 @@
 @page "/repo/{RepoId}/graph"
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject IIndexFacade Facade
 @inject GraphDataService GraphService
 
