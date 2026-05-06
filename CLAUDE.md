@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CodeCompress is an MCP (Model Context Protocol) server that indexes codebases and provides AI agents with compressed, surgical access to code symbols via SQLite-backed persistent indexes. It reduces AI agent token consumption by 80-90% when loading codebase context.
+CodeCompress is an MCP (Model Context Protocol) server that indexes codebases and provides AI agents with compressed, surgical access to code symbols via a single global SQLite-backed index. It reduces AI agent token consumption by 80-90% when loading codebase context.
 
 **Platform:** .NET 10 / C# 14 / Cross-platform
 **License:** MIT
@@ -14,15 +14,18 @@ CodeCompress is an MCP (Model Context Protocol) server that indexes codebases an
 ```bash
 # Restore, build, and run all tests
 dotnet build CodeCompress.slnx
-dotnet test CodeCompress.slnx
+dotnet test CodeCompress.slnx -- --output Normal --disable-logo
 
 # Run a specific test project
-dotnet test tests/CodeCompress.Core.Tests
-dotnet test tests/CodeCompress.Server.Tests
-dotnet test tests/CodeCompress.Integration.Tests
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo
+dotnet test tests/CodeCompress.Server.Tests -- --output Normal --disable-logo
+dotnet test tests/CodeCompress.Integration.Tests -- --output Normal --disable-logo
 
-# Run a single test by name
-dotnet test --filter "FullyQualifiedName~ClassName.MethodName"
+# Filter by class name  (pattern: /{assembly}/{namespace}/{class}/{method})
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo --treenode-filter "/*/*/TestClassName/*"
+
+# Filter by specific test method
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo --treenode-filter "/*/*/TestClassName/MethodName"
 
 # Run the MCP server (stdio transport)
 dotnet run --project src/CodeCompress.Server
@@ -31,45 +34,121 @@ dotnet run --project src/CodeCompress.Server
 dotnet run --project src/CodeCompress.Cli
 ```
 
+> **TUnit flag syntax:** TUnit runs on Microsoft.Testing.Platform. Flags like `--output`, `--disable-logo`, and `--treenode-filter` are MTP/TUnit args — they must follow the `--` separator when using `dotnet test`. Do NOT use `--filter "FullyQualifiedName~..."` (legacy VSTest syntax — not supported).
+
 ## Architecture
 
 ### Core Components
 
-- **CodeCompress.Core** — Core library: parsers, indexing engine, SQLite storage, models, path validation
-- **CodeCompress.Server** — MCP server executable with `[McpServerToolType]` tool classes
+- **CodeCompress.Core** — Core library: parsers, indexing engine, SQLite storage, models, path validation, registry
+- **CodeCompress.Server** — MCP server executable with `[McpServerToolType]` tool classes and `[McpServerPromptType]` prompt classes
 - **CodeCompress.Cli** — Optional standalone CLI for testing/debugging
 
 ### Key Patterns
 
 - **Language Parsers** — Strategy pattern via `ILanguageParser`. Each parser declares its `LanguageId` and `FileExtensions`. The `IndexEngine` auto-resolves parsers by file extension via DI. Adding a new language = one class, no other changes.
 - **Tool Router** — Attribute-based `[McpServerTool]` methods in tool classes under `Server/Tools/`
+- **MCP Prompts** — `[McpServerPrompt]` methods in `Server/Prompts/PromptsProvider.cs` expose named workflows (e.g. `ExploreCodebase`, `FindImpact`) that guide agents through multi-tool sequences. This is the progressive tool disclosure mechanism — agents discover the right tool sequence via prompts rather than being exposed to all 22 tools at once.
 - **Symbol Store** — `ISymbolStore` / `SqliteSymbolStore` — repository pattern over `Microsoft.Data.Sqlite` with FTS5 virtual tables for full-text search
 - **Index Engine** — `IIndexEngine` / `IndexEngine` — singleton service. Orchestrates file discovery, hashing, change detection, parsing, and storage updates via `Parallel.ForEachAsync`
+- **Project Scope** — `IProjectScopeFactory` / `ProjectScopeFactory` — creates short-lived `IProjectScope` instances per tool call. Each scope validates the path, resolves or registers the repo, and wires up the `IIndexEngine` and `ISymbolStore` for that project. Tools use `await using var scope = await _scopeFactory.CreateAsync(...)` and never hold long-lived engine/store references.
+- **Registry Service** — `IRegistryService` / `RegistryService` — manages the global repository registry in the shared `~/.code-compress/index.db`. Tracks all indexed projects with file/symbol counts and last-indexed timestamps. `list_repos` exposes this to agents.
 - **File Hasher** — `IFileHasher` / `FileHasher` — parallel SHA-256 file hashing with `ArrayPool<byte>` buffering
 - **Change Tracker** — `IChangeTracker` / `ChangeTracker` — pure-function diff of current vs stored hashes, produces `ChangeSet` (new/modified/deleted/unchanged)
 - **Path Validation** — `PathValidator` (static) for path traversal prevention; `IPathValidator` / `PathValidatorService` wrapper for DI/testability
+- **GitIgnore Filter** — `IGitIgnoreFilter` / `GitIgnoreFilter` — filters discovered paths against `.gitignore` rules before indexing
+- **Project Root Resolver** — `IProjectRootResolver` / `ProjectRootResolver` — walks up the directory tree to find the `.git` root
 - **MCP Server Host** — `GenericHost` + `ModelContextProtocol` SDK, stdio transport
 - **DI Registration** — `ServiceCollectionExtensions.AddCodeCompressCore()` registers all Core services
 
 ### Data Flow
 
 ```
-AI Agent → MCP Protocol (stdio) → Tool Router → Index Engine → File Hasher (parallel SHA-256)
-                                                             → Change Tracker (diff logic)
-                                                             → Language Parsers (per extension)
-                                                             → Symbol Store (SQLite)
+AI Agent → MCP Prompts (workflow discovery) → Tool Router → Project Scope Factory
+                                                          → Path Validator
+                                                          → Registry Service (global repo list)
+                                                          → Index Engine → File Hasher (parallel SHA-256)
+                                                                        → GitIgnore Filter
+                                                                        → Change Tracker (diff logic)
+                                                                        → Language Parsers (per extension)
+                                                                        → Symbol Store (SQLite, global DB)
 ```
 
 ### Database
 
-SQLite stored at `.code-compress/index.db` in the project directory. Tables: `repositories`, `files`, `symbols`, `dependencies`, `index_snapshots`. FTS5 virtual tables: `symbols_fts`, `file_content_fts`.
+Single global SQLite database at **`~/.code-compress/index.db`** — shared across all indexed projects. All tool calls use this one DB regardless of which project root is being queried.
 
-### MCP Tools (4 categories)
+Tables:
 
-1. **Indexing:** `index_project`, `snapshot_create`, `invalidate_cache`
-2. **Query:** `project_outline`, `get_symbol`, `get_symbols`, `get_module_api`, `search_symbols`, `search_text`
-3. **Delta:** `changes_since`, `file_tree`
-4. **Dependency:** `dependency_graph`
+| Table | Purpose |
+|-------|---------|
+| `repositories` | Registry of all indexed projects (id, root_path, name, file_count, symbol_count, last_indexed) |
+| `files` | Source files per repo (relative_path, content_hash, byte_length, line_count) |
+| `symbols` | Parsed code symbols (name, kind, signature, parent_symbol, byte offsets, visibility, doc_comment) |
+| `dependencies` | Import/require edges between files — `edge_kind` is typed: `imports`, `calls`, `implements`, `inherits`, `references` |
+| `index_snapshots` | Named baselines for change tracking (stores file hashes + serialized symbol summaries as JSON) |
+
+FTS5 virtual tables: `symbols_fts` (name, parent_symbol, signature, doc_comment — porter unicode61 tokenizer), `file_content_fts` (relative_path, content).
+
+### MCP Tools (6 categories, 22 tools)
+
+**Indexing**
+| Tool | Purpose |
+|------|---------|
+| `index_project` | Build/update symbol database — **must call first** |
+| `snapshot_create` | Create named baseline before making changes |
+| `invalidate_cache` | Delete all indexed data for a project (forces full reparse) |
+| `list_repos` | List all projects in the global registry |
+
+**Query**
+| Tool | Purpose |
+|------|---------|
+| `project_outline` | Compressed overview of all symbols, grouped by file/kind/directory |
+| `topic_outline` | Search for a topic and return matching symbols in outline format |
+| `get_symbol` | Retrieve full source code by qualified name (byte-offset seeking) |
+| `expand_symbol` | Retrieve a single method without loading the parent class (~60% fewer tokens) |
+| `get_symbols` | Batch-retrieve source for multiple symbols (max 50) |
+| `get_module_api` | Public API surface of a single module/file |
+| `search_symbols` | FTS5 search by name/type — PascalCase/camelCase-aware with fuzzy fallback |
+| `search_text` | Search raw file contents (literals, comments, config values) |
+| `get_hot_path` | Extract only lines containing specific identifiers with surrounding context (~10-40× token savings vs full symbol) |
+| `assemble_context` | One-shot: search symbols + retrieve source + overview (collapses 5-10 round-trips into 1) |
+
+**Delta**
+| Tool | Purpose |
+|------|---------|
+| `changes_since` | Symbol-level diff since a named snapshot (new/modified/deleted) |
+| `file_tree` | Annotated directory tree with file/line counts — does **not** require `index_project` |
+
+**Dependency**
+| Tool | Purpose |
+|------|---------|
+| `dependency_graph` | File import/dependency relationships |
+| `blast_radius` | Reverse BFS — what files/symbols break if X changes |
+| `find_unused_symbols` | Detect public symbols with no incoming dependency edges |
+| `project_dependencies` | Inter-project dependencies in .NET solutions |
+| `find_references` | All locations where a symbol is referenced |
+
+**Context**
+| Tool | Purpose |
+|------|---------|
+| `assemble_context` | (listed above under Query) |
+
+**Server**
+| Tool | Purpose |
+|------|---------|
+| `stop_server` | Gracefully shut down the MCP server |
+
+### MCP Prompts (Progressive Tool Disclosure)
+
+Named workflows exposed via `[McpServerPrompt]` in `Server/Prompts/PromptsProvider.cs`. Agents can discover these to understand which tools to combine:
+
+| Prompt | Workflow |
+|--------|---------|
+| `ExploreCodebase` | `index_project` → `project_outline` → `search_symbols` → `get_symbol` |
+| `FindImpact` | `index_project` → `blast_radius` → `find_references` → `dependency_graph` |
+| `ReviewChanges` | `snapshot_create` → [make changes] → `index_project` → `changes_since` |
+| `DebugSymbol` | `search_symbols` → `get_hot_path` → `get_symbol` → `find_references` |
 
 ## Development Methodology
 
@@ -140,17 +219,19 @@ Enforced via `.editorconfig`:
 
 ## Key NuGet Packages
 
-| Package | Purpose |
-|---------|---------|
-| `ModelContextProtocol` | MCP SDK — server hosting, tool registration |
-| `Microsoft.Data.Sqlite` | SQLite access with FTS5 |
-| `Microsoft.Extensions.FileSystemGlobbing` | Glob pattern matching for file discovery |
-| `Microsoft.Extensions.Hosting` | Generic host for DI, logging |
-| `TreeSitter.DotNet` | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |
-| `TUnit` | Testing framework |
-| `NSubstitute` | Mocking |
-| `Verify` | Snapshot testing |
-| `SonarAnalyzer.CSharp` | Static analysis |
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `ModelContextProtocol` | 1.2.0 | MCP SDK — server hosting, tool/prompt registration |
+| `Microsoft.Data.Sqlite` | 10.0.3 | SQLite access with FTS5 |
+| `Microsoft.Extensions.FileSystemGlobbing` | 10.0.3 | Glob pattern matching for file discovery |
+| `Microsoft.Extensions.Hosting` | 10.0.3 | Generic host for DI, logging |
+| `TreeSitter.DotNet` | 1.3.0 | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |
+| `System.CommandLine` | 2.0.5 | CLI argument parsing (CodeCompress.Cli) |
+| `YamlDotNet` | 16.3.0 | YAML config file parsing |
+| `TUnit` | 1.19.11 | Testing framework |
+| `NSubstitute` | 5.3.0 | Mocking |
+| `Verify` | 31.13.2 | Snapshot testing |
+| `SonarAnalyzer.CSharp` | 10.20.0.135146 | Static analysis |
 
 ## Project Skills & References
 
