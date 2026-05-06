@@ -1,0 +1,215 @@
+@page "/repo/{RepoId}"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+@inject NavigationManager Nav
+
+<PageTitle>@(_repoName ?? "Repository") — CodeCompress</PageTitle>
+
+@if (_pathError)
+{
+    <div class="cc-page">
+        <div class="cc-error" data-testid="path-error">
+            <h2>Invalid path</h2>
+            <p>The repository path is invalid or outside an allowed root.</p>
+        </div>
+    </div>
+}
+else
+{
+    <div class="cc-page">
+        <div class="cc-page-header">
+            <a href="/" class="cc-breadcrumb">Dashboard</a>
+            <span class="cc-breadcrumb-sep">/</span>
+            <h1 data-testid="repo-detail-name">@(_repoName ?? RepoId)</h1>
+        </div>
+
+        @if (_repo is not null)
+        {
+            <div class="cc-stat-row">
+                <div class="cc-stat" data-testid="detail-file-count">
+                    <span class="cc-stat-value">@_repo.FileCount</span>
+                    <span class="cc-stat-label">Files</span>
+                </div>
+                <div class="cc-stat" data-testid="detail-symbol-count">
+                    <span class="cc-stat-value">@_repo.SymbolCount</span>
+                    <span class="cc-stat-label">Symbols</span>
+                </div>
+                <div class="cc-stat" data-testid="detail-last-indexed">
+                    <span class="cc-stat-value">@FormatAge(_repo.LastIndexed)</span>
+                    <span class="cc-stat-label">Last indexed</span>
+                </div>
+            </div>
+
+            <div class="cc-section-actions">
+                <BbButton Variant="ButtonVariant.Outline" OnClick="ReIndexAsync" Disabled="_reindexing">
+                    @if (_reindexing)
+                    {
+                        <span>Indexing…</span>
+                    }
+                    else
+                    {
+                        <LucideIcon Name="LucideIcons.RefreshCw" Size="14" />
+                        <span>Re-index</span>
+                    }
+                </BbButton>
+            </div>
+        }
+
+        <div class="cc-section">
+            <h2>Symbol search</h2>
+            <div class="cc-search-bar">
+                <input class="cc-search-input" type="search" placeholder="Search symbols…"
+                       @bind="_query" @bind:event="oninput" @onkeydown="OnSearchKeyDown"
+                       data-testid="symbol-search-input" />
+                <BbButton OnClick="SearchAsync">
+                    <LucideIcon Name="LucideIcons.Search" Size="14" />
+                    <span>Search</span>
+                </BbButton>
+            </div>
+
+            @if (_searching)
+            {
+                <div class="cc-loading" data-testid="search-loading">Searching…</div>
+            }
+            else if (_searchResults is not null)
+            {
+                @if (_searchResults.Count == 0)
+                {
+                    <p class="cc-empty-inline" data-testid="search-empty">No symbols found.</p>
+                }
+                else
+                {
+                    <div class="cc-symbol-list">
+                        @foreach (var r in _searchResults)
+                        {
+                            <div class="cc-symbol-row" data-testid="symbol-result">
+                                <BbBadge class="cc-kind-badge">@r.Symbol.Kind</BbBadge>
+                                <span class="cc-symbol-name" data-testid="symbol-name">@r.Symbol.Name</span>
+                                <span class="cc-symbol-sig" title="@r.Symbol.Signature">@TruncateSig(r.Symbol.Signature)</span>
+                                <span class="cc-symbol-path" title="@r.FilePath">@Path.GetFileName(r.FilePath)</span>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+
+        @if (_snapshots is not null && _snapshots.Count > 0)
+        {
+            <div class="cc-section">
+                <h2>Snapshots</h2>
+                <div class="cc-snapshot-list">
+                    @foreach (var snap in _snapshots)
+                    {
+                        <div class="cc-snapshot-row" data-testid="snapshot-row">
+                            <span class="cc-snapshot-label" data-testid="snapshot-label">@snap.SnapshotLabel</span>
+                            <span class="cc-snapshot-date">@DateTimeOffset.FromUnixTimeSeconds(snap.CreatedAt).ToString("g")</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string RepoId { get; set; } = string.Empty;
+
+    private string? _projectRoot;
+    private string? _repoName;
+    private CodeCompress.Core.Registry.RepositoryRecord? _repo;
+    private IReadOnlyList<CodeCompress.Core.Models.IndexSnapshot>? _snapshots;
+    private IReadOnlyList<CodeCompress.Core.Models.SymbolSearchResult>? _searchResults;
+    private string _query = string.Empty;
+    private bool _searching;
+    private bool _reindexing;
+    private bool _pathError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _pathError = false;
+        _projectRoot = null;
+
+        var repos = await Facade.GetRepositoriesAsync();
+        _repo = repos.FirstOrDefault(r => string.Equals(r.RepoId, RepoId, StringComparison.Ordinal));
+        if (_repo is null)
+        {
+            _pathError = true;
+            return;
+        }
+
+        _projectRoot = _repo.ProjectRoot;
+        _repoName = _repo.DisplayName;
+
+        try
+        {
+            _snapshots = await Facade.GetSnapshotsAsync(_projectRoot);
+        }
+        catch (ArgumentException)
+        {
+            _snapshots = [];
+        }
+    }
+
+    private async Task SearchAsync()
+    {
+        if (_projectRoot is null || string.IsNullOrWhiteSpace(_query))
+        {
+            return;
+        }
+
+        _searching = true;
+        try
+        {
+            _searchResults = await Facade.SearchSymbolsAsync(_projectRoot, _query, null, 50);
+        }
+        finally
+        {
+            _searching = false;
+        }
+    }
+
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchAsync();
+        }
+    }
+
+    private async Task ReIndexAsync()
+    {
+        if (_projectRoot is null)
+        {
+            return;
+        }
+
+        _reindexing = true;
+        try
+        {
+            await Facade.ReIndexAsync(_projectRoot);
+            var repos = await Facade.GetRepositoriesAsync();
+            _repo = repos.FirstOrDefault(r => string.Equals(r.ProjectRoot, _projectRoot, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _reindexing = false;
+        }
+    }
+
+    private static string FormatAge(DateTimeOffset dt)
+    {
+        var age = DateTimeOffset.UtcNow - dt;
+        return age switch
+        {
+            { TotalSeconds: < 60 } => "just now",
+            { TotalMinutes: < 60 } a => $"{(int)a.TotalMinutes}m ago",
+            { TotalHours: < 24 } a => $"{(int)a.TotalHours}h ago",
+            { TotalDays: < 2 } => "yesterday",
+            var a => $"{(int)a.TotalDays}d ago",
+        };
+    }
+
+    private static string TruncateSig(string sig) =>
+        sig.Length > 80 ? sig[..80] + "…" : sig;
+}

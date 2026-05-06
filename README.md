@@ -165,6 +165,24 @@ codecompress search --path /path/to/project --query "MyClass"
 
 The CLI and MCP server share the same index database — you can use both interchangeably. Run `codecompress --help` for all commands, or `codecompress agent-instructions` to generate a ready-to-paste instruction block for AI agents.
 
+### Option C: Web Dashboard (local UI)
+
+Launch a dark-mode Blazor dashboard to browse indexed repositories, search symbols, and trigger re-indexes from a browser:
+
+```bash
+codecompress web
+```
+
+Opens on `http://localhost:7070` by default. Options:
+
+```bash
+codecompress web --port 8080        # custom port
+codecompress web --open             # open browser automatically
+codecompress web --bind 0.0.0.0    # bind to all interfaces (LAN access)
+```
+
+The dashboard reads the same global `~/.code-compress/index.db` as the MCP server and CLI — no separate setup required.
+
 To update: `dotnet tool update -g CodeCompress`
 
 ### 2. Index your project
@@ -460,6 +478,9 @@ codecompress changes --path /path/to/project --label before-refactor
 
 # Delete index to force full re-index
 codecompress invalidate-cache --path /path/to/project
+
+# Launch the web dashboard
+codecompress web [--port 7070] [--bind localhost] [--open]
 ```
 
 ### JSON Output
@@ -502,6 +523,7 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | `deps` | `dependency_graph` | File-level dependency graph |
 | `project-deps` | `project_dependencies` | Inter-project dependencies (.NET) |
 | `invalidate-cache` | `invalidate_cache` | Force full re-index |
+| `web` | — | Launch the local Blazor web dashboard |
 
 ## License
 

@@ -76,6 +76,7 @@ internal sealed class RegistryService : IRegistryService
 
     private static RepositoryRecord MapToRecord(Repository repo) =>
         new(
+            repo.Id,
             SanitizePath(repo.RootPath),
             SanitizePath(Path.GetFileName(repo.RootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))),
             repo.FileCount,

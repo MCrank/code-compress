@@ -34,8 +34,8 @@ internal sealed class RegistryToolsTests
     {
         var repos = new List<RepositoryRecord>
         {
-            new("/home/user/projectA", "projectA", 10, 50, DateTimeOffset.UtcNow, null),
-            new("/home/user/projectB", "projectB", 5, 20, DateTimeOffset.UtcNow, null),
+            new("id1", "/home/user/projectA", "projectA", 10, 50, DateTimeOffset.UtcNow, null),
+            new("id2", "/home/user/projectB", "projectB", 5, 20, DateTimeOffset.UtcNow, null),
         };
         _registryService.ListAsync().Returns(repos);
 
@@ -51,7 +51,7 @@ internal sealed class RegistryToolsTests
         var lastIndexed = new DateTimeOffset(2026, 4, 30, 12, 0, 0, TimeSpan.Zero);
         var repos = new List<RepositoryRecord>
         {
-            new("/home/user/my-project", "my-project", 7, 99, lastIndexed, null),
+            new("id1", "/home/user/my-project", "my-project", 7, 99, lastIndexed, null),
         };
         _registryService.ListAsync().Returns(repos);
 
@@ -71,7 +71,7 @@ internal sealed class RegistryToolsTests
     {
         var repos = new List<RepositoryRecord>
         {
-            new("/home/user/broken", "broken", 0, 0, DateTimeOffset.UtcNow, "Index corruption detected"),
+            new("id1", "/home/user/broken", "broken", 0, 0, DateTimeOffset.UtcNow, "Index corruption detected"),
         };
         _registryService.ListAsync().Returns(repos);
 

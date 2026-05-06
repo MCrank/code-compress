@@ -1,0 +1,25 @@
+@inherits LayoutComponentBase
+@using BlazorBlueprint.Primitives.Services
+
+<div class="cc-shell">
+    <header class="cc-topbar">
+        <a href="/" class="cc-brand">
+            <span class="cc-brand-icon">⬡</span>
+            <span class="cc-brand-name">CodeCompress</span>
+        </a>
+    </header>
+
+    <div class="cc-body">
+        <nav class="cc-sidebar">
+            <NavMenu />
+        </nav>
+
+        <main class="cc-content">
+            @Body
+        </main>
+    </div>
+</div>
+
+<BbPortalHost />
+<BbToastProvider />
+<BbDialogProvider />

@@ -1,0 +1,106 @@
+@page "/"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+
+<PageTitle>Dashboard — CodeCompress</PageTitle>
+
+<div class="cc-page">
+    <div class="cc-page-header">
+        <h1>Dashboard</h1>
+        <p class="cc-page-subtitle">Indexed repositories</p>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="cc-loading" data-testid="loading">Loading repositories…</div>
+    }
+    else if (_repos.Count == 0)
+    {
+        <div class="cc-empty" data-testid="empty-state">
+            <p>No repositories indexed yet.</p>
+            <p>Run <code>codecompress index --path &lt;path&gt;</code> to add one.</p>
+        </div>
+    }
+    else
+    {
+        <div class="cc-repo-grid">
+            @foreach (var repo in _repos)
+            {
+                <div class="cc-repo-card" data-testid="repo-card">
+                    <div class="cc-repo-card-header">
+                        <a href="/repo/@repo.RepoId"
+                           class="cc-repo-name" data-testid="repo-name">@repo.DisplayName</a>
+                        <BbBadge>Active</BbBadge>
+                    </div>
+                    <p class="cc-repo-path" title="@repo.ProjectRoot">@repo.ProjectRoot</p>
+                    <div class="cc-repo-stats">
+                        <span data-testid="file-count"><b>@repo.FileCount</b> files</span>
+                        <span data-testid="symbol-count"><b>@repo.SymbolCount</b> symbols</span>
+                        <span data-testid="last-indexed">@FormatAge(repo.LastIndexed)</span>
+                    </div>
+                    @if (repo.LastError is not null)
+                    {
+                        <p class="cc-repo-error" data-testid="repo-error">@repo.LastError</p>
+                    }
+                    <div class="cc-repo-actions">
+                        <BbButton Variant="ButtonVariant.Outline" OnClick="() => ReIndexAsync(repo.ProjectRoot)"
+                                  Disabled="_reindexing.Contains(repo.ProjectRoot)">
+                            @if (_reindexing.Contains(repo.ProjectRoot))
+                            {
+                                <span>Indexing…</span>
+                            }
+                            else
+                            {
+                                <LucideIcon Name="LucideIcons.RefreshCw" Size="14" />
+                                <span>Re-index</span>
+                            }
+                        </BbButton>
+                        <a href="/repo/@repo.RepoId" class="cc-link-btn">
+                            <LucideIcon Name="LucideIcons.ArrowRight" Size="14" />
+                            <span>Details</span>
+                        </a>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<CodeCompress.Core.Registry.RepositoryRecord> _repos = [];
+    private bool _loading = true;
+    private readonly HashSet<string> _reindexing = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _repos = await Facade.GetRepositoriesAsync();
+        _loading = false;
+    }
+
+    private async Task ReIndexAsync(string projectRoot)
+    {
+        _reindexing.Add(projectRoot);
+        try
+        {
+            await Facade.ReIndexAsync(projectRoot);
+            _repos = await Facade.GetRepositoriesAsync();
+        }
+        finally
+        {
+            _reindexing.Remove(projectRoot);
+        }
+    }
+
+    private static string FormatAge(DateTimeOffset dt)
+    {
+        var age = DateTimeOffset.UtcNow - dt;
+        return age switch
+        {
+            { TotalSeconds: < 60 } => "just now",
+            { TotalMinutes: < 60 } a => $"{(int)a.TotalMinutes}m ago",
+            { TotalHours: < 24 } a => $"{(int)a.TotalHours}h ago",
+            { TotalDays: < 2 } => "yesterday",
+            var a => $"{(int)a.TotalDays}d ago",
+        };
+    }
+}
