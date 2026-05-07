@@ -1007,10 +1007,25 @@ code {
 }
 
 /* ── Graph page ──────────────────────────────────────────────── */
+
+/* Strip content-area constraints (max-width, padding, scroll) when
+   the graph page is active so the canvas can fill the full viewport. */
+.cc-content:has(.cc-graph-page) {
+    padding: 0;
+    max-width: none;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
 .cc-graph-page {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
+    padding: var(--space-6) var(--space-8);
+    box-sizing: border-box;
+    gap: var(--space-4);
     overflow: hidden;
 }
 
