@@ -12,6 +12,8 @@
   <ItemGroup>
     <PackageReference Include="BlazorBlueprint.Components" />
     <PackageReference Include="BlazorBlueprint.Primitives" />
+    <PackageReference Include="Z.Blazor.Diagrams" />
+    <PackageReference Include="Z.Blazor.Diagrams.Algorithms" />
   </ItemGroup>
 
 </Project>
