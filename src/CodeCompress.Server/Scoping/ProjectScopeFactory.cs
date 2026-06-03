@@ -15,6 +15,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
     private readonly IPathValidator _pathValidator;
     private readonly IGitIgnoreFilter _gitIgnoreFilter;
     private readonly IProjectRootResolver _rootResolver;
+    private readonly IBoundaryPolicy _boundaryPolicy;
     private readonly ILoggerFactory _loggerFactory;
 
     public ProjectScopeFactory(
@@ -25,6 +26,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         IPathValidator pathValidator,
         IGitIgnoreFilter gitIgnoreFilter,
         IProjectRootResolver rootResolver,
+        IBoundaryPolicy boundaryPolicy,
         ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
@@ -34,6 +36,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         ArgumentNullException.ThrowIfNull(pathValidator);
         ArgumentNullException.ThrowIfNull(gitIgnoreFilter);
         ArgumentNullException.ThrowIfNull(rootResolver);
+        ArgumentNullException.ThrowIfNull(boundaryPolicy);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         _connectionFactory = connectionFactory;
@@ -43,6 +46,7 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         _pathValidator = pathValidator;
         _gitIgnoreFilter = gitIgnoreFilter;
         _rootResolver = rootResolver;
+        _boundaryPolicy = boundaryPolicy;
         _loggerFactory = loggerFactory;
     }
 
@@ -53,9 +57,14 @@ internal sealed class ProjectScopeFactory : IProjectScopeFactory
         // Resolve to the nearest git root (or fall back to given path)
         var resolvedRoot = _rootResolver.ResolveProjectRoot(projectRoot);
 
-        var connection = await _connectionFactory.CreateConnectionAsync(resolvedRoot).ConfigureAwait(false);
+        // Clamp: git-root resolution must never escape the configured boundary upward.
+        // When the resolved root falls outside the boundary, use the requested path, which the
+        // caller has already validated to be within bounds.
+        var effectiveRoot = _boundaryPolicy.IsWithinBoundary(resolvedRoot) ? resolvedRoot : projectRoot;
+
+        var connection = await _connectionFactory.CreateConnectionAsync(effectiveRoot).ConfigureAwait(false);
         var store = new SqliteSymbolStore(connection);
-        var canonicalRoot = _pathValidator.ValidatePath(resolvedRoot, resolvedRoot);
+        var canonicalRoot = _pathValidator.ValidatePath(effectiveRoot, effectiveRoot);
         var repoId = IndexEngine.ComputeRepoId(canonicalRoot);
         var engine = new IndexEngine(
             _fileHasher,

@@ -77,6 +77,22 @@ internal sealed class IndexingToolsTests
     }
 
     [Test]
+    public async Task IndexProjectBoundaryViolationReturnsUniformInvalidPathError()
+    {
+        // Out-of-boundary paths surface as the same INVALID_PATH error as any other rejected path,
+        // leaking no information about why the path was refused.
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new BoundaryViolationException());
+
+        var result = await _tools.IndexProject("/outside/the/boundary").ConfigureAwait(false);
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
+        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
     public async Task IndexProjectNonExistentPathReturnsError()
     {
         _engine.IndexProjectAsync(

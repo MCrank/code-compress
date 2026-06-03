@@ -13,7 +13,8 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // Validation
+        // Validation & access boundary (resolved once from CODECOMPRESS_ROOT / working directory)
+        services.AddSingleton<IBoundaryPolicy>(_ => BoundaryPolicy.FromEnvironment());
         services.AddSingleton<IPathValidator, PathValidatorService>();
 
         // Parsers
