@@ -10,9 +10,9 @@ namespace CodeCompress.Core.Tests.Registry;
 internal sealed class RegistryServiceTests
 {
     // Default boundary used by the legacy tests — encloses both /home/user/projectA and projectB.
-    private static readonly string DefaultBoundaryRoot = OperatingSystem.IsWindows()
-        ? @"C:\home\user"
-        : "/home/user";
+    // Keep driveless so both this and the synthetic repo paths resolve to the same current drive
+    // via Path.GetFullPath on any OS (avoids C: vs D: mismatches on Windows CI runners).
+    private const string DefaultBoundaryRoot = "/home/user";
 
     private string _dbName = string.Empty;
 
