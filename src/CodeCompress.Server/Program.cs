@@ -1,4 +1,5 @@
 using System.Reflection;
+using CodeCompress.Core.Validation;
 using CodeCompress.Server;
 using CodeCompress.Server.Prompts;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,4 +46,10 @@ builder.Services
     .WithToolsFromAssembly()
     .WithPrompts<PromptsProvider>();
 
-await builder.Build().RunAsync().ConfigureAwait(false);
+var host = builder.Build();
+
+// Resolve the access boundary eagerly so it is captured from the launch working directory
+// (or CODECOMPRESS_ROOT) at startup, not lazily on the first tool call.
+host.Services.GetRequiredService<IBoundaryPolicy>();
+
+await host.RunAsync().ConfigureAwait(false);

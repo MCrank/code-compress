@@ -1,16 +1,20 @@
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
+using CodeCompress.Core.Validation;
 
 namespace CodeCompress.Core.Registry;
 
 internal sealed class RegistryService : IRegistryService
 {
     private readonly IConnectionFactory _connectionFactory;
+    private readonly IBoundaryPolicy _boundaryPolicy;
 
-    public RegistryService(IConnectionFactory connectionFactory)
+    public RegistryService(IConnectionFactory connectionFactory, IBoundaryPolicy boundaryPolicy)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
+        ArgumentNullException.ThrowIfNull(boundaryPolicy);
         _connectionFactory = connectionFactory;
+        _boundaryPolicy = boundaryPolicy;
     }
 
     public async Task<IReadOnlyList<RepositoryRecord>> ListAsync()
@@ -21,7 +25,10 @@ internal sealed class RegistryService : IRegistryService
         {
             var store = new SqliteSymbolStore(connection);
             var repos = await store.GetAllRepositoriesAsync().ConfigureAwait(false);
-            return [.. repos.Select(MapToRecord)];
+
+            // Only surface repositories at or below the configured boundary — never leak
+            // the existence of repositories indexed outside this server's working directory.
+            return [.. repos.Where(r => _boundaryPolicy.IsWithinBoundary(r.RootPath)).Select(MapToRecord)];
         }
     }
 
@@ -29,7 +36,14 @@ internal sealed class RegistryService : IRegistryService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
 
-        var repoId = SqliteConnectionFactory.ComputeRepoHash(Path.GetFullPath(projectRoot));
+        // Canonicalize once so the boundary guard and the repo hash target the same path.
+        var canonicalRoot = Path.GetFullPath(projectRoot);
+        if (!_boundaryPolicy.IsWithinBoundary(canonicalRoot))
+        {
+            return;
+        }
+
+        var repoId = SqliteConnectionFactory.ComputeRepoHash(canonicalRoot);
         var connection = await _connectionFactory.CreateConnectionAsync(
             SqliteConnectionFactory.GlobalCodeCompressDir).ConfigureAwait(false);
         await using (connection.ConfigureAwait(false))
@@ -55,7 +69,14 @@ internal sealed class RegistryService : IRegistryService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
 
-        var repoId = SqliteConnectionFactory.ComputeRepoHash(Path.GetFullPath(projectRoot));
+        // Canonicalize once so the boundary guard and the repo hash target the same path.
+        var canonicalRoot = Path.GetFullPath(projectRoot);
+        if (!_boundaryPolicy.IsWithinBoundary(canonicalRoot))
+        {
+            return;
+        }
+
+        var repoId = SqliteConnectionFactory.ComputeRepoHash(canonicalRoot);
         var connection = await _connectionFactory.CreateConnectionAsync(
             SqliteConnectionFactory.GlobalCodeCompressDir).ConfigureAwait(false);
         await using (connection.ConfigureAwait(false))

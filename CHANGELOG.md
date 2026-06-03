@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Access boundary** — the MCP server is now clamped to the directory it was launched from (and its descendants), preventing an agent from indexing, querying, or enumerating repositories outside its working directory. The boundary root defaults to the launch working directory and can be overridden with the `CODECOMPRESS_ROOT` environment variable. An optional `CODECOMPRESS_ALLOWED_ROOTS` allowlist (delimited by the OS path separator) grants additional trusted roots for multi-repo workflows; filesystem-root entries are rejected as too broad. `list_repos` now returns only repositories within the boundary, and out-of-bounds requests are rejected with a uniform `INVALID_PATH` error that leaks no information about the requested path (#198)
+
+### Changed
+- **BREAKING:** Tools no longer accept arbitrary absolute paths. A `path` argument that resolves outside the boundary root (launch working directory or `CODECOMPRESS_ROOT`) is rejected. Workflows that previously passed paths to unrelated repositories must launch the server from a common parent directory or configure `CODECOMPRESS_ROOT` / `CODECOMPRESS_ALLOWED_ROOTS` (#198)
+
 ## [0.14.0] - 2026-04-11
 
 ### Added

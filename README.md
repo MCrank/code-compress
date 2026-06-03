@@ -341,16 +341,38 @@ All index data is stored in a **single global database** in your home directory:
 - Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots for every indexed project
 - **No data leaves your machine** — no network calls, no telemetry
 - Nothing is stored in your project directories — no `.gitignore` entries needed
+- Access is confined to the server's launch directory and its descendants — see [Access boundary](#access-boundary)
 
 To clear the index for a specific project, call `invalidate_cache` (MCP) or `codecompress invalidate-cache --path <root>` (CLI). To list all indexed projects, use `list_repos` (MCP) or `codecompress list` (CLI).
 
 ## Security
 
 - **Read-only** — never modifies your source files
+- **Access boundary** — the server is clamped to the directory it was launched from (and its descendants); it cannot index, query, or enumerate repositories outside that boundary (see below)
 - **Path traversal prevention** — all file paths canonicalized and validated against the project root
 - **SQL injection prevention** — all queries use parameterized statements
 - **Prompt injection safeguards** — tool outputs are structured data; raw input is never echoed into freeform text
 - **Local only** — no network calls, no telemetry, your code stays on your machine
+
+### Access boundary
+
+To prevent one project's agent from reaching another repository's code or metadata, the server confines all
+tools to a **boundary root** resolved once at startup:
+
+- **Default:** the server's launch working directory (where the MCP host started it). Any path **at or below**
+  this directory is in-bounds — this includes sibling repositories when several repos live under one workspace folder.
+- **Override:** set `CODECOMPRESS_ROOT` to pin the boundary explicitly (useful when the host launches the server
+  from an unexpected directory).
+- **Allowlist:** set `CODECOMPRESS_ALLOWED_ROOTS` (delimited by the OS path separator — `;` on Windows, `:` elsewhere)
+  to grant additional trusted roots for multi-repo workflows. Filesystem-root entries (`/`, `C:\`) are rejected as too broad.
+
+Requests for paths outside the boundary are rejected with a uniform `INVALID_PATH` error (no information about the
+out-of-bounds path is leaked), and `list_repos` returns only repositories within the boundary.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `CODECOMPRESS_ROOT` | Boundary root the server may operate at or below | Launch working directory |
+| `CODECOMPRESS_ALLOWED_ROOTS` | Extra trusted roots, OS-path-separator delimited | (none) |
 
 ## Agent Configuration
 
