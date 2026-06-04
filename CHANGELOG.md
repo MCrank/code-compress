@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **BREAKING:** Tools no longer accept arbitrary absolute paths. A `path` argument that resolves outside the boundary root (launch working directory or `CODECOMPRESS_ROOT`) is rejected. Workflows that previously passed paths to unrelated repositories must launch the server from a common parent directory or configure `CODECOMPRESS_ROOT` / `CODECOMPRESS_ALLOWED_ROOTS` (#198)
+- **Web dashboard on hold** — `CodeCompress.Web` and `CodeCompress.Web.Tests` are excluded from the solution build. The `codecompress web` CLI subcommand is removed. Project files are preserved in the repo for future resumption (#200)
+- **Package bumps** — ModelContextProtocol 1.3.0, Microsoft.Data.Sqlite / Extensions.* 10.0.8, System.CommandLine 2.0.8, YamlDotNet 18.0.0, SonarAnalyzer.CSharp 10.27.0, TUnit 1.49.0, Verify 31.19.0
 
 ## [0.14.0] - 2026-04-11
 

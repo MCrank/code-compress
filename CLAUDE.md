@@ -197,38 +197,6 @@ MCP tool parameters (`path`, `query`) are **untrusted inputs** from AI agents.
 - **global.json:** Pins .NET SDK 10.0.100 with `rollForward: latestFeature`
 - **SonarAnalyzer.CSharp:** Applied to all projects via `Directory.Build.props`
 
-## Web Dashboard (CodeCompress.Web)
-
-The Blazor Server dashboard lives in `src/CodeCompress.Web/`. It uses **BlazorBlueprint v3** as the component library and **Catppuccin** (Macchiato dark / Latte light) for the color palette via `IThemeService`.
-
-### BlazorBlueprint Components — Mandatory
-
-**Always use BB components over raw HTML.** This is enforced during code review.
-
-| Need | Use | Do NOT use |
-|------|-----|------------|
-| Card / panel | `BbCard`, `BbCardHeader`, `BbCardTitle`, `BbCardDescription`, `BbCardContent`, `BbCardAction` | `<div class="card">` |
-| Data table | `BbDataGrid<TData>` + `BbDataGridPropertyColumn` / `BbDataGridTemplateColumn` | `<table>` |
-| Alert / banner | `BbAlert` + `BbAlertTitle` + `BbAlertDescription` (inside `<ChildContent>`) | `<div class="alert">` |
-| Empty state | `BbEmpty` | custom empty divs |
-| Search input | `BbInputGroup` + `BbInputGroupAddon` + `BbInputGroupInput` + `BbInputGroupButton` | raw `<input>` + `<button>` |
-| Breadcrumb | `BbBreadcrumb` → `BbBreadcrumbList` → `BbBreadcrumbItem` → `BbBreadcrumbLink` / `BbBreadcrumbPage` | `<nav>` with raw links |
-| Badge / tag | `BbBadge` | `<span class="badge">` |
-| Button | `BbButton` | `<button>` (except inside template columns or icon-only action rows) |
-
-**Known BB component constraints:**
-
-- `BbEmpty`, `BbAlert`, `BbCard`, `BbBreadcrumbPage` do **not** have `AdditionalAttributes` (CaptureUnmatchedValues) — passing `data-testid` or any unknown HTML attribute causes a runtime `InvalidOperationException`. Place `data-testid` only on native HTML elements (`<div>`, `<span>`, `<a>`, `<button>`).
-- `BbDataGrid` requires `TData : class` — use a `private sealed record` instead of a value tuple when the type would otherwise be a struct.
-- `BbAlert` child content: `BbAlertTitle` and `BbAlertDescription` must be inside `<ChildContent>...</ChildContent>`, not as bare children.
-- Razor `Class` attribute interpolation: use `Class="@($"base-class modifier--{method()}")"` — never mix C# and literal text like `Class="base modifier--@method()"`.
-- `BbInputGroupInput` uses `UpdateTiming` enum: `Immediate`, `OnChange`, `Debounced` — `OnInput` does not exist.
-- `BbBreadcrumbLink Href` with route params: use `Href="@($"/repo/{RepoId}")"` — not `Href="/repo/@RepoId"`.
-
-### Theme
-
-Theme toggling is handled by `IThemeService` (injected via DI). Do **not** use JSInterop for theme switching — BB's `ThemeService` handles it. The `ThemeToggle.razor` component calls `ThemeService.ToggleAsync()`.
-
 ## Code Style
 
 Enforced via `.editorconfig`:
@@ -254,17 +222,17 @@ Enforced via `.editorconfig`:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `ModelContextProtocol` | 1.2.0 | MCP SDK — server hosting, tool/prompt registration |
-| `Microsoft.Data.Sqlite` | 10.0.3 | SQLite access with FTS5 |
-| `Microsoft.Extensions.FileSystemGlobbing` | 10.0.3 | Glob pattern matching for file discovery |
-| `Microsoft.Extensions.Hosting` | 10.0.3 | Generic host for DI, logging |
+| `ModelContextProtocol` | 1.3.0 | MCP SDK — server hosting, tool/prompt registration |
+| `Microsoft.Data.Sqlite` | 10.0.8 | SQLite access with FTS5 |
+| `Microsoft.Extensions.FileSystemGlobbing` | 10.0.8 | Glob pattern matching for file discovery |
+| `Microsoft.Extensions.Hosting` | 10.0.8 | Generic host for DI, logging |
 | `TreeSitter.DotNet` | 1.3.0 | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |
-| `System.CommandLine` | 2.0.5 | CLI argument parsing (CodeCompress.Cli) |
-| `YamlDotNet` | 16.3.0 | YAML config file parsing |
-| `TUnit` | 1.19.11 | Testing framework |
+| `System.CommandLine` | 2.0.8 | CLI argument parsing (CodeCompress.Cli) |
+| `YamlDotNet` | 18.0.0 | YAML config file parsing |
+| `TUnit` | 1.49.0 | Testing framework |
 | `NSubstitute` | 5.3.0 | Mocking |
-| `Verify` | 31.13.2 | Snapshot testing |
-| `SonarAnalyzer.CSharp` | 10.20.0.135146 | Static analysis |
+| `Verify` | 31.19.0 | Snapshot testing |
+| `SonarAnalyzer.CSharp` | 10.27.0.140913 | Static analysis |
 
 ## Project Skills & References
 
