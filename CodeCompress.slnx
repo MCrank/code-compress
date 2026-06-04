@@ -3,12 +3,10 @@
     <Project Path="src/CodeCompress.Core/CodeCompress.Core.csproj" />
     <Project Path="src/CodeCompress.Server/CodeCompress.Server.csproj" />
     <Project Path="src/CodeCompress.Cli/CodeCompress.Cli.csproj" />
-    <Project Path="src/CodeCompress.Web/CodeCompress.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CodeCompress.Core.Tests/CodeCompress.Core.Tests.csproj" />
     <Project Path="tests/CodeCompress.Server.Tests/CodeCompress.Server.Tests.csproj" />
     <Project Path="tests/CodeCompress.Integration.Tests/CodeCompress.Integration.Tests.csproj" />
-    <Project Path="tests/CodeCompress.Web.Tests/CodeCompress.Web.Tests.csproj" />
   </Folder>
 </Solution>
