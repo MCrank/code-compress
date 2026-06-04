@@ -165,24 +165,6 @@ codecompress search --path /path/to/project --query "MyClass"
 
 The CLI and MCP server share the same index database — you can use both interchangeably. Run `codecompress --help` for all commands, or `codecompress agent-instructions` to generate a ready-to-paste instruction block for AI agents.
 
-### Option C: Web Dashboard (local UI)
-
-Launch a dark-mode Blazor dashboard to browse indexed repositories, search symbols, and trigger re-indexes from a browser:
-
-```bash
-codecompress web
-```
-
-Opens on `http://localhost:7070` by default. Options:
-
-```bash
-codecompress web --port 8080        # custom port
-codecompress web --open             # open browser automatically
-codecompress web --bind 0.0.0.0    # bind to all interfaces (LAN access)
-```
-
-The dashboard reads the same global `~/.code-compress/index.db` as the MCP server and CLI — no separate setup required.
-
 To update: `dotnet tool update -g CodeCompress`
 
 ### 2. Index your project
@@ -387,19 +369,33 @@ CodeCompress is a code intelligence tool that provides compressed, symbol-level 
 to the indexed codebase. Use it as your PRIMARY tool for code discovery instead of reading
 raw files — it saves 80-90% tokens.
 
+## Access Boundary
+
+All paths are scoped to the server's launch directory (or `CODECOMPRESS_ROOT`). Out-of-bounds
+paths are rejected with `INVALID_PATH`. Use `CODECOMPRESS_ALLOWED_ROOTS` for multi-repo workflows.
+
 ## Workflow
 
 1. **Index first** — `index_project` (MCP) or `codecompress index --path <root>` (CLI).
    Builds/updates the symbol database. Incremental — only changed files are re-parsed.
 2. **Assemble context** — `assemble_context` / `codecompress assemble` for one-shot task context.
-   Combines search + source retrieval + file overview within a token budget.
+   Combines search + source retrieval + overview in a single call — replaces 5-10 round-trips.
 3. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
+   `topic_outline` / `codecompress topic-outline` to scope the overview to a specific topic.
 4. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
-   `search_text` / `codecompress search-text` for raw file content search.
+   `search_text` / `codecompress search-text` for raw file content (literals, comments, config).
 5. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
    `expand_symbol` / `codecompress expand-symbol` for a single method (~60% fewer tokens).
+   `get_hot_path` / `codecompress get-hot-path` for lines matching specific identifiers (10-40x savings).
+   `get_symbols` / `codecompress get-symbols` to batch-retrieve up to 50 symbols at once.
+   `get_module_api` / `codecompress get-module-api` for the public API surface of a file.
 6. **Find references** — `find_references` / `codecompress find-references` to trace usage.
-7. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
+7. **Dependencies** — `dependency_graph` / `codecompress deps` for file import relationships.
+   `blast_radius` / `codecompress blast-radius` for reverse impact analysis.
+   `project_dependencies` / `codecompress project-deps` for inter-project (.NET solution) deps.
+8. **Change tracking** — `snapshot_create` / `codecompress snapshot` to baseline the index.
+   `changes_since` / `codecompress changes` for a symbol-level diff since the snapshot.
+9. **Registry** — `list_repos` / `codecompress list` to see all indexed projects and their status.
 
 ## Tips
 
@@ -500,9 +496,6 @@ codecompress changes --path /path/to/project --label before-refactor
 
 # Delete index to force full re-index
 codecompress invalidate-cache --path /path/to/project
-
-# Launch the web dashboard
-codecompress web [--port 7070] [--bind localhost] [--open]
 ```
 
 ### JSON Output
@@ -545,7 +538,6 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | `deps` | `dependency_graph` | File-level dependency graph |
 | `project-deps` | `project_dependencies` | Inter-project dependencies (.NET) |
 | `invalidate-cache` | `invalidate_cache` | Force full re-index |
-| `web` | — | Launch the local Blazor web dashboard |
 
 ## License
 

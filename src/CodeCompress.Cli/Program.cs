@@ -1775,33 +1775,60 @@ agentInstructionsCommand.SetAction(_ =>
         dotnet tool install -g CodeCompress
         ```
 
+        ## Access Boundary
+
+        The CLI (and the MCP server) are scoped to a boundary root — the directory from which the
+        server was launched, or the value of the `CODECOMPRESS_ROOT` environment variable. All
+        `--path` arguments must resolve within that boundary. Out-of-bounds paths are rejected with
+        INVALID_PATH. Use `CODECOMPRESS_ALLOWED_ROOTS` (OS path-separator-delimited) to add trusted
+        roots for multi-repo workflows.
+
         ## Workflow
 
         1. `codecompress index --path <project-root>` — MUST be called first. Builds/updates the
            symbol database. Incremental — only changed files are re-parsed.
-        2. `codecompress outline --path <project-root>` — Get a compressed overview of the entire
-           codebase (symbols grouped by file). Use --path-filter to scope to a subdirectory.
-        3. `codecompress search --path <project-root> --query <term>` — Find specific symbols using
-           FTS5 full-text search. Faster than grep.
-        4. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source
-           code by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
-        5. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Get a single
+        2. `codecompress assemble --path <project-root> --query <term> [--budget <tokens>]` — One-shot:
+           search symbols, retrieve source, and include a file overview in a single call. Collapses
+           5-10 round-trips into 1. Use as the default starting point for task-specific context.
+        3. `codecompress outline --path <project-root>` — Full codebase overview (symbols grouped by
+           file). Add `--path-filter src/` to scope to a subdirectory.
+        4. `codecompress topic-outline --path <project-root> --topic <term>` — Search for a topic
+           and return matching symbols in outline format. Good for thematic exploration.
+        5. `codecompress search --path <project-root> --query <term>` — FTS5 symbol search. Faster
+           than grep. Auto-retries with contains-match on zero results.
+        6. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
+           for string literals, comments, config values, or non-symbol patterns.
+        7. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source code
+           by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
+        8. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Extract a single
            method without loading the parent class (~60% fewer tokens than get-symbol on parent).
-        6. `codecompress get-hot-path --path <project-root> --name <Name> --identifiers <id1,id2>` — Return
-           only lines in a symbol that contain specific identifiers plus context. Use when tracing a variable
-           or condition within a large function — 10-40x fewer tokens than get-symbol. Identifiers matched
-           as whole words. Add `--context-lines N` to control surrounding line count (0-10, default 3).
-        7. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
-           multiple symbols in one call (max 50). Far more efficient than repeated get-symbol.
-        7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
-           for string literals, comments, or non-symbol patterns.
-        8. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
-           Add `--edge-kind imports|calls|implements|inherits|references` to filter by edge type.
-        9. `codecompress blast-radius --path <project-root> --file <rel-path>` — Find all files
-           affected if a given file changes (reverse BFS). Use `--symbol <name>` for symbol input.
-        10. `codecompress unused-symbols --path <project-root>` — Best-effort dead code detection.
+        9. `codecompress get-hot-path --path <project-root> --name <Name> --identifiers <id1,id2>` —
+           Return only lines in a symbol that contain specific identifiers plus surrounding context.
+           10-40x fewer tokens than get-symbol. Add `--context-lines N` (0-10, default 3).
+        10. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve up
+            to 50 symbols in one call. Far more efficient than repeated get-symbol.
+        11. `codecompress get-module-api --path <project-root> --module <rel-path>` — Public API
+            surface of a single file — signatures, visibility, and dependencies.
+        12. `codecompress find-references --path <project-root> --name <Name>` — All locations where
+            a symbol is referenced across the codebase.
+        13. `codecompress deps --path <project-root>` — File-level import/dependency relationships.
+            Add `--edge-kind imports|calls|implements|inherits|references` to filter by edge type.
+        14. `codecompress blast-radius --path <project-root> --file <rel-path>` — Reverse BFS: all
+            files that would break if the given file changes. Use `--symbol <name>` for symbol input.
+        15. `codecompress project-deps --path <project-root>` — Inter-project dependencies in .NET
+            solutions. Shows which projects reference which.
+        16. `codecompress unused-symbols --path <project-root>` — Best-effort dead code detection.
             Returns public symbols with no incoming dependency edges.
-        11. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
+        17. `codecompress file-tree --path <project-root>` — Annotated directory tree with file and
+            line counts. Does NOT require `index` to be run first.
+        18. `codecompress snapshot --path <project-root> --label <name>` — Create a named baseline
+            of the current index state for change tracking.
+        19. `codecompress changes --path <project-root> --label <name>` — Symbol-level diff since a
+            named snapshot: new, modified, and deleted symbols.
+        20. `codecompress list` — List all projects in the global registry with file/symbol counts
+            and last-indexed times. No `--path` required.
+        21. `codecompress invalidate-cache --path <project-root>` — Delete all indexed data for a
+            project, forcing a full re-parse on the next `index` call.
 
         ## JSON Output (--json)
 
@@ -1809,6 +1836,7 @@ agentInstructionsCommand.SetAction(_ =>
 
         Key response shapes:
         - index: {repo_id, project_root, files_indexed, files_unchanged, symbols_found, duration_ms}
+        - assemble: {overview, symbols: [{name, kind, source}], token_estimate}
         - search: [{name, kind, parent, file, line, signature, snippet, rank}]
         - get-symbol: {id, file_id, name, kind, signature, parent_symbol, line_start, line_end, ...}
         - search-text: [{file_path, snippet, rank}]
@@ -1827,9 +1855,10 @@ agentInstructionsCommand.SetAction(_ =>
 
         ## Performance Tips
 
+        - Start with `assemble` — it collapses search + retrieval into one call.
         - Use `get-symbols` for batches — single call vs N separate get-symbol calls.
         - Use `expand-symbol` for one method in a large class — ~60% fewer tokens.
-        - Use `get-hot-path` to trace a specific variable or condition — 10-40x fewer tokens than expand-symbol.
+        - Use `get-hot-path` to trace a specific variable or condition — 10-40x fewer tokens.
         - Use `search` (not search-text) for finding classes/functions — structured results.
         - Use `outline --path-filter src/` to scope — faster than full outline + client filtering.
         - Symbol names accept unqualified names (e.g., 'MyMethod') — auto-resolved if unique.
