@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILanguageParser, GoParser>();
         services.AddSingleton<ILanguageParser, RustParser>();
         services.AddSingleton<ILanguageParser, PythonParser>();
+        services.AddSingleton<ILanguageParser, RubyParser>();
         services.AddSingleton<ILanguageParser, TypeScriptJavaScriptParser>();
         services.AddSingleton<ILanguageParser, YamlConfigParser>();
 
