@@ -67,7 +67,7 @@ internal sealed class JsonConfigEndToEndTests : IDisposable
         var result = await _engine.IndexProjectAsync(_sampleProjectPath, "json").ConfigureAwait(false);
 
         await Assert.That(result.RepoId).IsEqualTo(_repoId);
-        await Assert.That(result.FilesIndexed).IsEqualTo(3);
+        await Assert.That(result.FilesIndexed).IsEqualTo(4);
         await Assert.That(result.SymbolsFound).IsGreaterThanOrEqualTo(40);
     }
 
@@ -81,7 +81,7 @@ internal sealed class JsonConfigEndToEndTests : IDisposable
         var outline = await _store.GetProjectOutlineAsync(
             _repoId, includePrivate: true, groupBy: "file", maxDepth: 0).ConfigureAwait(false);
 
-        await Assert.That(outline.Groups).Count().IsEqualTo(3);
+        await Assert.That(outline.Groups).Count().IsEqualTo(4);
 
         var allSymbolKinds = CollectSymbolKinds(outline.Groups);
         await Assert.That(allSymbolKinds).Contains("ConfigKey");
@@ -220,7 +220,7 @@ internal sealed class JsonConfigEndToEndTests : IDisposable
             _repoId, rootFile: null, direction: "dependencies", depth: 50).ConfigureAwait(false);
 
         // JSON config files don't have dependencies
-        await Assert.That(graph.Nodes).Count().IsEqualTo(3);
+        await Assert.That(graph.Nodes).Count().IsEqualTo(4);
         await Assert.That(graph.Edges).Count().IsEqualTo(0);
     }
 

@@ -1,6 +1,6 @@
 using System.Text;
-using System.Text.Json;
 using CodeCompress.Core.Models;
+using TreeSitter;
 
 namespace CodeCompress.Core.Parsers;
 
@@ -13,175 +13,156 @@ public sealed class JsonConfigParser : ILanguageParser
     public ParseResult Parse(string filePath, ReadOnlySpan<byte> content)
     {
         if (content.IsEmpty)
-        {
             return new ParseResult([], []);
-        }
 
-        var text = Encoding.UTF8.GetString(content);
-        var lineByteOffsets = ComputeLineByteOffsets(content);
+        var bytes = content.ToArray();
+        var text = Encoding.UTF8.GetString(bytes);
 
-        JsonDocument doc;
-        try
-        {
-            doc = JsonDocument.Parse(text);
-        }
-        catch (JsonException)
-        {
+        using var language = new Language("json");
+        using var parser = new Parser(language);
+        using var tree = parser.Parse(text);
+        if (tree is null)
             return new ParseResult([], []);
-        }
 
-        using (doc)
+        var rootObject = FindRootObject(tree.RootNode);
+        if (rootObject is null)
+            return new ParseResult([], []);
+
+        var symbols = new List<SymbolInfo>();
+        TraverseObject(rootObject, null, null, symbols, text);
+        return new ParseResult(symbols, []);
+    }
+
+    private static Node? FindRootObject(Node node)
+    {
+        if (node.Type == "object") return node;
+
+        var children = node.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                return new ParseResult([], []);
-            }
-
-            var symbols = new List<SymbolInfo>();
-            var searchStart = 0;
-            TraverseObject(doc.RootElement, null, null, symbols, text, lineByteOffsets, content.Length, ref searchStart);
-            return new ParseResult(symbols, []);
+            if (children[i].Type == "object") return children[i];
         }
+        return null;
     }
 
     private static void TraverseObject(
-        JsonElement element,
+        Node objectNode,
         string? parentQualifiedName,
         string? parentSymbolName,
         List<SymbolInfo> symbols,
-        string text,
-        int[] lineByteOffsets,
-        int contentLength,
-        ref int searchStart)
+        string text)
     {
-        foreach (var property in element.EnumerateObject())
+        var children = objectNode.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            var qualifiedName = parentQualifiedName is null
-                ? property.Name
-                : $"{parentQualifiedName}:{property.Name}";
-
-            var (keyByteOffset, keyCharIndex) = FindPropertyKeyOffset(text, property.Name, searchStart);
-            var lineStart = FindLineForByteOffset(keyByteOffset, lineByteOffsets);
-            var signature = BuildSignature(qualifiedName, property.Value);
-            var byteLength = EstimateByteLength(property, contentLength, keyByteOffset);
-
-            // Advance searchStart (char index) past this property key so next search finds the next occurrence
-            if (keyCharIndex > searchStart)
-            {
-                searchStart = keyCharIndex + property.Name.Length;
-            }
-
-            symbols.Add(new SymbolInfo(
-                qualifiedName,
-                SymbolKind.ConfigKey,
-                signature,
-                parentSymbolName,
-                keyByteOffset,
-                byteLength,
-                lineStart,
-                lineStart,
-                Visibility.Public,
-                null));
-
-            if (property.Value.ValueKind == JsonValueKind.Object)
-            {
-                TraverseObject(property.Value, qualifiedName, qualifiedName, symbols, text, lineByteOffsets, contentLength, ref searchStart);
-            }
+            if (children[i].Type == "pair")
+                ProcessPair(children[i], parentQualifiedName, parentSymbolName, symbols, text);
         }
     }
 
-    private static (int ByteOffset, int CharIndex) FindPropertyKeyOffset(string text, string propertyName, int searchStartChar)
+    private static void ProcessPair(
+        Node pairNode,
+        string? parentQualifiedName,
+        string? parentSymbolName,
+        List<SymbolInfo> symbols,
+        string text)
     {
-        // Search for "propertyName" pattern in the JSON text starting from searchStartChar (char index)
-        var needle = $"\"{propertyName}\"";
-        var charIndex = text.IndexOf(needle, searchStartChar, StringComparison.Ordinal);
-        if (charIndex < 0)
+        Node? keyNode = null, valueNode = null;
+        var children = pairNode.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            // Fallback: search from beginning
-            charIndex = text.IndexOf(needle, StringComparison.Ordinal);
-        }
-
-        if (charIndex < 0)
-        {
-            return (0, 0);
-        }
-
-        // Convert char index to byte offset for symbol storage
-        var byteOffset = Encoding.UTF8.GetByteCount(text.AsSpan(0, charIndex));
-        return (byteOffset, charIndex);
-    }
-
-    private static int FindLineForByteOffset(int byteOffset, int[] lineByteOffsets)
-    {
-        // Binary search for the line containing this byte offset
-        var line = 1;
-        for (var i = 0; i < lineByteOffsets.Length; i++)
-        {
-            if (lineByteOffsets[i] <= byteOffset)
+            var child = children[i];
+            if (child.Type == "string" && keyNode is null)
             {
-                line = i + 1; // 1-based
+                keyNode = child;
             }
-            else
+            else if (keyNode is not null && child.Type != ":")
             {
+                valueNode = child;
                 break;
             }
         }
 
-        return line;
+        if (keyNode is null) return;
+
+        var rawKey = keyNode.Text;
+        var keyText = rawKey.Length >= 2 && rawKey[0] == '"' && rawKey[^1] == '"'
+            ? rawKey[1..^1]
+            : rawKey;
+
+        var qualifiedName = parentQualifiedName is null ? keyText : $"{parentQualifiedName}:{keyText}";
+
+        // tree-sitter node offsets are UTF-16 char offsets (parser receives a C# string).
+        // Convert to UTF-8 byte offsets for accurate ByteOffset storage.
+        var byteOffset = Encoding.UTF8.GetByteCount(text.AsSpan(0, keyNode.StartIndex));
+        var endCharIndex = valueNode?.EndIndex ?? pairNode.EndIndex;
+        var byteEnd = Encoding.UTF8.GetByteCount(text.AsSpan(0, endCharIndex));
+        var byteLength = Math.Max(byteEnd - byteOffset, 1);
+
+        var lineStart = keyNode.StartPosition.Row + 1;
+        var lineEnd = (valueNode?.EndPosition.Row ?? pairNode.EndPosition.Row) + 1;
+        var signature = BuildSignature(qualifiedName, valueNode);
+
+        symbols.Add(new SymbolInfo(
+            Name: qualifiedName,
+            Kind: SymbolKind.ConfigKey,
+            Signature: signature,
+            ParentSymbol: parentSymbolName,
+            ByteOffset: byteOffset,
+            ByteLength: byteLength,
+            LineStart: lineStart,
+            LineEnd: lineEnd,
+            Visibility: Visibility.Public,
+            DocComment: null));
+
+        if (valueNode?.Type == "object")
+            TraverseObject(valueNode, qualifiedName, qualifiedName, symbols, text);
     }
 
-    private static string BuildSignature(string qualifiedName, JsonElement value)
+    private static string BuildSignature(string qualifiedName, Node? valueNode)
     {
-        return value.ValueKind switch
+        if (valueNode is null) return $"{qualifiedName}: <unknown>";
+
+        return valueNode.Type switch
         {
-            JsonValueKind.String => $"{qualifiedName}: \"{value.GetString()}\"",
-            JsonValueKind.Number => $"{qualifiedName}: {value.GetRawText()}",
-            JsonValueKind.True => $"{qualifiedName}: true",
-            JsonValueKind.False => $"{qualifiedName}: false",
-            JsonValueKind.Null => $"{qualifiedName}: null",
-            JsonValueKind.Object => BuildObjectSignature(qualifiedName, value),
-            JsonValueKind.Array => $"{qualifiedName}: [ ... ] ({value.GetArrayLength()} {(value.GetArrayLength() == 1 ? "item" : "items")})",
+            "string" => $"{qualifiedName}: {TruncateString(valueNode.Text, 80)}",
+            "number" => $"{qualifiedName}: {valueNode.Text}",
+            "true" => $"{qualifiedName}: true",
+            "false" => $"{qualifiedName}: false",
+            "null" => $"{qualifiedName}: null",
+            "object" => BuildObjectSignature(qualifiedName, valueNode),
+            "array" => BuildArraySignature(qualifiedName, valueNode),
             _ => $"{qualifiedName}: <unknown>"
         };
     }
 
-    private static string BuildObjectSignature(string qualifiedName, JsonElement value)
+    private static string TruncateString(string value, int maxLength)
+    {
+        if (value.Length <= maxLength) return value;
+        return string.Concat(value.AsSpan(0, maxLength - 3), "...");
+    }
+
+    private static string BuildObjectSignature(string qualifiedName, Node objectNode)
     {
         var count = 0;
-        foreach (var _ in value.EnumerateObject())
+        var children = objectNode.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            count++;
+            if (children[i].Type == "pair") count++;
         }
-
         return $"{qualifiedName}: {{ ... }} ({count} {(count == 1 ? "key" : "keys")})";
     }
 
-    private static int EstimateByteLength(JsonProperty property, int contentLength, int byteOffset)
+    private static string BuildArraySignature(string qualifiedName, Node arrayNode)
     {
-        var raw = property.Value.GetRawText();
-        var keyBytes = Encoding.UTF8.GetByteCount(property.Name);
-        // key + quotes + colon + space + value
-        var estimated = keyBytes + 4 + Encoding.UTF8.GetByteCount(raw);
-
-        if (byteOffset + estimated > contentLength)
+        var count = 0;
+        var children = arrayNode.Children;
+        for (var i = 0; i < children.Count; i++)
         {
-            estimated = contentLength - byteOffset;
+            var t = children[i].Type;
+            if (t is "object" or "array" or "string" or "number" or "true" or "false" or "null")
+                count++;
         }
-
-        return Math.Max(estimated, 1);
-    }
-
-    private static int[] ComputeLineByteOffsets(ReadOnlySpan<byte> content)
-    {
-        var offsets = new List<int> { 0 };
-        for (var i = 0; i < content.Length; i++)
-        {
-            if (content[i] == (byte)'\n')
-            {
-                offsets.Add(i + 1);
-            }
-        }
-
-        return offsets.ToArray();
+        return $"{qualifiedName}: [ ... ] ({count} {(count == 1 ? "item" : "items")})";
     }
 }

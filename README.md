@@ -193,7 +193,7 @@ Developer <── Terminal ────>   CodeCompress CLI ──────�
                                           Language       SQLite Store
                                           Parsers      ~/.code-compress/
                                     (C#, Java, Go, TS,  index.db
-                                    Rust, Python, …)
+                                    Rust, Python, Ruby, …)
 ```
 
 Both the MCP server and CLI share the same index database — you can index with one and query with the other.
@@ -305,8 +305,9 @@ Each prompt returns a `ChatRole.User` message with the full workflow, token esti
 | TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Tree-sitter AST |
 | Rust | `.rs` | Available | Tree-sitter AST |
 | Python | `.py`, `.pyi` | Available | Tree-sitter AST |
+| Ruby | `.rb` | Available | Tree-sitter AST |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
-| JSON Config | `.json` | Available | Structure-based |
+| JSON Config | `.json` | Available | Tree-sitter AST |
 | YAML Config | `.yaml`, `.yml` | Available | Structure-based |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
