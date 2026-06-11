@@ -5,15 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0] - 2026-06-10
 
 ### Added
+- **Ruby parser** — indexes Ruby files as queryable symbols: classes, modules, instance/class/singleton methods, constants, attribute accessors (`attr_reader`/`attr_writer`/`attr_accessor`), and module includes (#202)
 - **Access boundary** — the MCP server is now clamped to the directory it was launched from (and its descendants), preventing an agent from indexing, querying, or enumerating repositories outside its working directory. The boundary root defaults to the launch working directory and can be overridden with the `CODECOMPRESS_ROOT` environment variable. An optional `CODECOMPRESS_ALLOWED_ROOTS` allowlist (delimited by the OS path separator) grants additional trusted roots for multi-repo workflows; filesystem-root entries are rejected as too broad. `list_repos` now returns only repositories within the boundary, and out-of-bounds requests are rejected with a uniform `INVALID_PATH` error that leaks no information about the requested path (#198)
+- **Global single index database** — all indexed projects share one SQLite database at `~/.code-compress/index.db`. A repository registry tracks file/symbol counts and last-indexed timestamps, exposed via `list_repos` (#184)
+- **MCP prompts for progressive tool disclosure** — four named workflows (`ExploreCodebase`, `FindImpact`, `ReviewChanges`, `DebugSymbol`) guide agents through optimal multi-tool sequences, reducing the cognitive load of discovering the right tool combination from 22 tools (#181)
+- **`get_hot_path` tool** — extracts only the lines within a symbol that contain specific identifiers, with configurable surrounding context lines (~10–40× token savings vs loading the full symbol body) (#180)
+- **Typed dependency edges** — `dependency_graph` edges now carry a typed `edge_kind` value (`imports`, `calls`, `implements`, `inherits`, `references`) for more precise relationship queries (#178)
+- **`blast_radius` tool** — reverse BFS starting from a symbol or file, returning all files and symbols that would break if it changed (#178)
+- **`find_unused_symbols` tool** — detects public symbols with no incoming dependency edges across the indexed project (#178)
+- **PascalCase/camelCase-aware search** — `search_symbols` now auto-splits compound identifiers (e.g., `getUserById` → `get`, `user`, `by`, `id`) and falls back to fuzzy matching when exact FTS5 results are empty (#179)
 
 ### Changed
 - **BREAKING:** Tools no longer accept arbitrary absolute paths. A `path` argument that resolves outside the boundary root (launch working directory or `CODECOMPRESS_ROOT`) is rejected. Workflows that previously passed paths to unrelated repositories must launch the server from a common parent directory or configure `CODECOMPRESS_ROOT` / `CODECOMPRESS_ALLOWED_ROOTS` (#198)
+- **JSON config parser** migrated from regex to tree-sitter AST queries for accurate key/value extraction including unicode keys, nested objects, and arrays (#202)
+- **All regex-based parsers** (C#, Java, Go, TypeScript/JavaScript, Rust, Python) replaced with tree-sitter AST queries for more reliable symbol extraction across edge cases (#186)
 - **Web dashboard on hold** — `CodeCompress.Web` and `CodeCompress.Web.Tests` are excluded from the solution build. The `codecompress web` CLI subcommand is removed. Project files are preserved in the repo for future resumption (#200)
-- **Package bumps** — ModelContextProtocol 1.3.0, Microsoft.Data.Sqlite / Extensions.* 10.0.8, System.CommandLine 2.0.8, YamlDotNet 18.0.0, SonarAnalyzer.CSharp 10.27.0, TUnit 1.49.0, Verify 31.19.0
+- **Package bumps** — ModelContextProtocol 1.4.0, Microsoft.Data.Sqlite / Extensions.* 10.0.8, System.CommandLine 2.0.8, YamlDotNet 18.0.0, SonarAnalyzer.CSharp 10.27.0, TUnit 1.49.0, Verify 31.19.0
 
 ## [0.14.0] - 2026-04-11
 
