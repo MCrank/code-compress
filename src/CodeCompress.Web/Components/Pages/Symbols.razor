@@ -1,0 +1,151 @@
+@page "/symbols"
+@rendermode InteractiveServer
+@inject IIndexFacade Facade
+
+<PageTitle>Symbols — CodeCompress</PageTitle>
+
+<div class="cc-page">
+    <div class="cc-page-header">
+        <div class="cc-page-header-left">
+            <h1>Symbols</h1>
+            <p class="cc-page-subtitle">Global symbol search across all indexed repositories</p>
+        </div>
+    </div>
+
+    <BbCard>
+        <BbCardContent>
+            <BbInputGroup>
+                <BbInputGroupAddon>
+                    <LucideIcon Name="search" Size="14" />
+                </BbInputGroupAddon>
+                <BbInputGroupInput @bind-Value="_query"
+                                   Placeholder="Search symbols…"
+                                   UpdateTiming="UpdateTiming.Immediate"
+                                   @onkeydown="OnKeyDown"
+                                   AriaLabel="Symbol search"
+                                   data-testid="symbol-search-input" />
+                <BbInputGroupAddon Align="InputGroupAlign.InlineEnd">
+                    <BbInputGroupButton OnClick="SearchAsync"
+                                        Disabled="_searching || string.IsNullOrWhiteSpace(_query)"
+                                        AriaLabel="Search">
+                        <LucideIcon Name="search" Size="14" />
+                        Search
+                    </BbInputGroupButton>
+                </BbInputGroupAddon>
+            </BbInputGroup>
+        </BbCardContent>
+    </BbCard>
+
+    <BbDataGrid TData="SymbolSearchResult"
+                Items="_results ?? []"
+                IsLoading="_searching"
+                InitialPageSize="25"
+                AriaLabel="Symbol search results">
+        <Columns>
+            <BbDataGridTemplateColumn Title="Symbol" Sortable="true" SortBy="@(r => (object)r.Symbol.Name)">
+                <ChildContent Context="r">
+                    <span class="cc-symbol-name" data-testid="symbol-name">@r.Symbol.Name</span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridTemplateColumn Title="Kind" Width="72px">
+                <ChildContent Context="r">
+                    <BbBadge Variant="BadgeVariant.Outline" Class="@($"cc-kind-badge cc-kind-badge--{KindCss(r.Symbol.Kind)}")">@KindAbbr(r.Symbol.Kind)</BbBadge>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridTemplateColumn Title="File" Sortable="true" SortBy="@(r => (object)System.IO.Path.GetFileName(r.FilePath))">
+                <ChildContent Context="r">
+                    <span class="cc-table-path" title="@r.FilePath">@System.IO.Path.GetFileName(r.FilePath)</span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+            <BbDataGridPropertyColumn Property="@(r => r.Symbol.LineStart)" Title="Line" Sortable="true"
+                                      CellClass="cc-col-right" HeaderClass="cc-col-right" Width="70px" />
+            <BbDataGridTemplateColumn Title="Signature">
+                <ChildContent Context="r">
+                    <span class="cc-symbol-sig" title="@r.Symbol.Signature">@Truncate(r.Symbol.Signature, 60)</span>
+                </ChildContent>
+            </BbDataGridTemplateColumn>
+        </Columns>
+        <EmptyTemplate>
+            @if (_results is null)
+            {
+                <BbEmpty Title="Search for symbols"
+                         Description="Enter a symbol name above to search across all indexed repositories."
+                         Size="EmptySize.Default">
+                    <Icon><LucideIcon Name="braces" Size="40" /></Icon>
+                </BbEmpty>
+            }
+            else
+            {
+                <BbEmpty Title="No symbols found"
+                         Description="@($"No results for \"{_query}\".")"
+                         Size="EmptySize.Default">
+                    <Icon><LucideIcon Name="search-x" Size="40" /></Icon>
+                </BbEmpty>
+            }
+        </EmptyTemplate>
+    </BbDataGrid>
+</div>
+
+@code {
+    private string _query = string.Empty;
+    private bool _searching;
+    private IReadOnlyList<SymbolSearchResult>? _results;
+    private IReadOnlyList<RepositoryRecord> _repos = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _repos = await Facade.GetRepositoriesAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_query)) return;
+
+        _searching = true;
+        _results = null;
+        try
+        {
+            var allResults = new List<SymbolSearchResult>();
+            foreach (var repo in _repos)
+            {
+                var results = await Facade.SearchSymbolsAsync(repo.ProjectRoot, _query, null, 50);
+                allResults.AddRange(results);
+            }
+            _results = allResults;
+        }
+        finally
+        {
+            _searching = false;
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SearchAsync();
+    }
+
+    private static string KindCss(string kind) => kind.ToLowerInvariant() switch
+    {
+        "function" or "method" => "fn",
+        "class"                => "cls",
+        "interface"            => "ifc",
+        "enum"                 => "enm",
+        "variable"             => "var",
+        "property"             => "prop",
+        _                      => "fn",
+    };
+
+    private static string KindAbbr(string kind) => kind.ToLowerInvariant() switch
+    {
+        "function" or "method" => "fn",
+        "class"                => "cls",
+        "interface"            => "ifc",
+        "enum"                 => "enm",
+        "variable"             => "var",
+        "property"             => "prop",
+        _                      => kind[..Math.Min(3, kind.Length)],
+    };
+
+    private static string Truncate(string s, int max) =>
+        s.Length > max ? s[..max] + "…" : s;
+}

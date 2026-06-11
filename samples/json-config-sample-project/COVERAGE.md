@@ -21,9 +21,11 @@ Constructs exercised by this sample project against `JsonConfigParser`.
 
 ## UTF-8 / Multi-byte
 - [x] Multi-byte property values (Japanese characters)
+- [x] Multi-byte property KEYS (Japanese, accented Latin)
 - [x] Accented characters (Spanish)
 - [x] Emoji characters in values
-- [x] Byte offset accuracy across multi-byte sequences
+- [x] Byte offset accuracy across multi-byte sequences (tree-sitter AST-derived)
+- [x] Repeated property names in different sections (qualified name disambiguation)
 
 ## Realistic Patterns
 - [x] .NET appsettings.json (Logging, ConnectionStrings, Authentication)

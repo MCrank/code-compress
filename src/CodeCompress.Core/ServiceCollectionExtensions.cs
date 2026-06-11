@@ -1,5 +1,7 @@
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Parsers;
+using CodeCompress.Core.Registry;
+using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,7 +13,8 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // Validation
+        // Validation & access boundary (resolved once from CODECOMPRESS_ROOT / working directory)
+        services.AddSingleton<IBoundaryPolicy>(_ => BoundaryPolicy.FromEnvironment());
         services.AddSingleton<IPathValidator, PathValidatorService>();
 
         // Parsers
@@ -25,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILanguageParser, GoParser>();
         services.AddSingleton<ILanguageParser, RustParser>();
         services.AddSingleton<ILanguageParser, PythonParser>();
+        services.AddSingleton<ILanguageParser, RubyParser>();
         services.AddSingleton<ILanguageParser, TypeScriptJavaScriptParser>();
         services.AddSingleton<ILanguageParser, YamlConfigParser>();
 
@@ -32,8 +36,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFileHasher, FileHasher>();
         services.AddSingleton<IChangeTracker, ChangeTracker>();
         services.AddSingleton<IGitIgnoreFilter, GitIgnoreFilter>();
-        services.AddSingleton<IIndexEngine, IndexEngine>();
         services.AddSingleton<IProjectRootResolver, ProjectRootResolver>();
+
+        // Storage
+        services.AddSingleton<IConnectionFactory, SqliteConnectionFactory>();
+
+        // Registry
+        services.AddSingleton<IRegistryService, RegistryService>();
 
         return services;
     }

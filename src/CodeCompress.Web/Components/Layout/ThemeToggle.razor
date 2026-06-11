@@ -1,0 +1,36 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ThemeService ThemeService
+
+<button class="cc-theme-toggle"
+        title="@(ThemeService.IsDarkMode ? "Switch to light theme" : "Switch to dark theme")"
+        aria-label="Toggle theme"
+        @onclick="ToggleAsync">
+    @if (ThemeService.IsDarkMode)
+    {
+        <LucideIcon Name="sun" Size="16" />
+    }
+    else
+    {
+        <LucideIcon Name="moon" Size="16" />
+    }
+</button>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ThemeService.OnThemeChanged += OnThemeChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await ThemeService.InitializeAsync();
+    }
+
+    private void OnThemeChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task ToggleAsync() => await ThemeService.ToggleDarkModeAsync();
+
+    public void Dispose() => ThemeService.OnThemeChanged -= OnThemeChanged;
+}

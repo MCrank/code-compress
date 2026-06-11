@@ -7,6 +7,7 @@ using CodeCompress.Cli;
 using CodeCompress.Core;
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Models;
+using CodeCompress.Core.Registry;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,7 +17,6 @@ using Microsoft.Extensions.Logging;
 
 var services = new ServiceCollection();
 services.AddCodeCompressCore();
-services.AddSingleton<IConnectionFactory, SqliteConnectionFactory>();
 services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
 
 using var provider = services.BuildServiceProvider();
@@ -97,7 +97,7 @@ indexCommand.SetAction(async parseResult =>
 
             if (result.ParseFailures is { Count: > 0 })
             {
-                Console.WriteLine($"  Parse failures (see .code-compress/ log for details):");
+                Console.WriteLine($"  Parse failures (see ~/.code-compress/ log for details):");
                 foreach (var failure in result.ParseFailures)
                 {
                     Console.WriteLine($"    - {failure.FilePath}: {failure.Reason}");
@@ -247,22 +247,24 @@ rootCommand.Subcommands.Add(getSymbolCommand);
 var searchPathOption = CreatePathOption();
 var searchQueryOption = new Option<string>("--query")
 {
-    Description = "FTS5 search query (supports AND, OR, NOT, prefix*, *contains*)",
+    Description = "Search query (supports FTS5 operators AND/OR/NOT, prefix*, *contains*; multi-word queries like 'user profile' match camelCase/PascalCase symbols)",
     Required = true,
 };
 var searchKindOption = new Option<string?>("--kind") { Description = "Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)" };
 var searchPathFilterOption = new Option<string?>("--path-filter") { Description = "Filter to files under this directory (e.g., 'src/')" };
 var searchLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-100, default 20). Values outside range are clamped.", DefaultValueFactory = _ => 20 };
+var searchFuzzyOption = new Option<bool>("--fuzzy") { Description = "Enable typo-tolerant fuzzy matching (Levenshtein distance ≤ 2). Useful when exact symbol name is unknown or may have a typo." };
 
 var searchCommand = new Command("search",
     "Search the symbol index using FTS5 full-text search. " +
-    "Faster and more precise than grep. Requires index.")
+    "Supports camelCase/PascalCase token splitting and optional fuzzy matching. Faster and more precise than grep. Requires index.")
 {
     searchPathOption,
     searchQueryOption,
     searchKindOption,
     searchPathFilterOption,
     searchLimitOption,
+    searchFuzzyOption,
 };
 
 searchCommand.SetAction(async parseResult =>
@@ -272,6 +274,7 @@ searchCommand.SetAction(async parseResult =>
     var kind = parseResult.GetValue(searchKindOption);
     var pathFilter = parseResult.GetValue(searchPathFilterOption);
     var limit = Math.Clamp(parseResult.GetValue(searchLimitOption), 1, 100);
+    var fuzzy = parseResult.GetValue(searchFuzzyOption);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
@@ -280,13 +283,13 @@ searchCommand.SetAction(async parseResult =>
         IReadOnlyList<SymbolSearchResult> results;
         try
         {
-            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter).ConfigureAwait(false);
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, query, kind, limit, pathFilter, fuzzy: fuzzy).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException)
         {
             // FTS5 syntax error — retry with literal phrase
             var literalQuery = $"\"{query.Replace("\"", string.Empty, StringComparison.Ordinal)}\"";
-            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, kind, limit, pathFilter).ConfigureAwait(false);
+            results = await scope.Store.SearchSymbolsAsync(scope.RepoId, literalQuery, kind, limit, pathFilter, fuzzy: fuzzy).ConfigureAwait(false);
         }
 
         // Auto contains-match fallback for plain terms with zero results
@@ -295,7 +298,7 @@ searchCommand.SetAction(async parseResult =>
         {
             var containsGlob = Fts5QuerySanitizer.SanitizeAsGlob($"*{query}*");
             results = await scope.Store.SearchSymbolsAsync(
-                scope.RepoId, containsGlob.Fts5Query, kind, limit, pathFilter, containsGlob.SqlLikePattern).ConfigureAwait(false);
+                scope.RepoId, containsGlob.Fts5Query, kind, limit, pathFilter, containsGlob.SqlLikePattern, fuzzy).ConfigureAwait(false);
             fallbackUsed = results.Count > 0;
         }
 
@@ -580,6 +583,7 @@ var depsPathOption = CreatePathOption();
 var depsFileOption = new Option<string?>("--file") { Description = "Start from a specific file (relative path)" };
 var depsDirectionOption = new Option<string>("--direction") { Description = "Traversal direction. Allowed values: 'dependencies' (outgoing), 'dependents' (incoming), 'both' (default). Other values rejected.", DefaultValueFactory = _ => "both" };
 var depsDepthOption = new Option<int>("--depth") { Description = "Maximum traversal depth (1-50, default 3). Values outside range are clamped.", DefaultValueFactory = _ => 3 };
+var depsEdgeKindOption = new Option<string?>("--edge-kind") { Description = "Filter edges by kind: imports, calls, implements, inherits, references. Omit for all." };
 
 var depsCommand = new Command("deps",
     "Show the import/require dependency graph. " +
@@ -589,6 +593,7 @@ var depsCommand = new Command("deps",
     depsFileOption,
     depsDirectionOption,
     depsDepthOption,
+    depsEdgeKindOption,
 };
 
 depsCommand.SetAction(async parseResult =>
@@ -597,12 +602,13 @@ depsCommand.SetAction(async parseResult =>
     var rootFile = parseResult.GetValue(depsFileOption) is { } rf ? PathValidator.NormalizeRelativePath(rf) : null;
     var direction = parseResult.GetValue(depsDirectionOption)!;
     var depth = Math.Clamp(parseResult.GetValue(depsDepthOption), 1, 50);
+    var edgeKind = parseResult.GetValue(depsEdgeKindOption);
     var json = parseResult.GetValue(jsonOption);
 
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
-        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, direction, depth).ConfigureAwait(false);
+        var graph = await scope.Store.GetDependencyGraphAsync(scope.RepoId, rootFile, direction, depth, edgeKind).ConfigureAwait(false);
 
         if (json)
         {
@@ -610,16 +616,112 @@ depsCommand.SetAction(async parseResult =>
         }
         else
         {
-            Console.WriteLine($"Dependency graph ({graph.Nodes.Count} nodes, {graph.Edges.Count} edges):");
+            var kindSuffix = edgeKind is not null ? $" [{edgeKind}]" : string.Empty;
+            Console.WriteLine($"Dependency graph ({graph.Nodes.Count} nodes, {graph.Edges.Count} edges{kindSuffix}):");
             foreach (var edge in graph.Edges)
             {
-                Console.WriteLine($"  {edge.From} → {edge.To}" + (edge.Alias is not null ? $" (alias: {edge.Alias})" : ""));
+                var edgeLabel = edge.EdgeKind is not null ? $" [{edge.EdgeKind}]" : string.Empty;
+                Console.WriteLine($"  {edge.From} → {edge.To}{edgeLabel}" + (edge.Alias is not null ? $" (alias: {edge.Alias})" : ""));
             }
         }
     }
 });
 
 rootCommand.Subcommands.Add(depsCommand);
+
+// ── blast-radius ─────────────────────────────────────────────
+
+var blastRadiusPathOption = CreatePathOption();
+var blastRadiusFileOption = new Option<string?>("--file") { Description = "Relative path to the file to analyze" };
+var blastRadiusSymbolOption = new Option<string?>("--symbol") { Description = "Symbol name to analyze (alternative to --file)" };
+var blastRadiusMaxDepthOption = new Option<int>("--max-depth") { Description = "Maximum BFS depth (1-20, default 5). Values outside range are clamped.", DefaultValueFactory = _ => 5 };
+
+var blastRadiusCommand = new Command("blast-radius",
+    "Find all files affected if a given file or symbol changes. " +
+    "Performs reverse BFS over dependency edges. Requires index.")
+{
+    blastRadiusPathOption,
+    blastRadiusFileOption,
+    blastRadiusSymbolOption,
+    blastRadiusMaxDepthOption,
+};
+
+blastRadiusCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(blastRadiusPathOption)!;
+    var filePath = parseResult.GetValue(blastRadiusFileOption) is { } fp ? PathValidator.NormalizeRelativePath(fp) : null;
+    var symbolName = parseResult.GetValue(blastRadiusSymbolOption);
+    var maxDepth = Math.Clamp(parseResult.GetValue(blastRadiusMaxDepthOption), 1, 20);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var result = await scope.Store.GetBlastRadiusAsync(scope.RepoId, filePath, symbolName, maxDepth).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine($"Blast radius: {result.TotalAffected} file(s) affected");
+            foreach (var depth in result.Depths)
+            {
+                Console.WriteLine($"  Depth {depth.Depth}: {string.Join(", ", depth.Files)}");
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(blastRadiusCommand);
+
+// ── unused-symbols ──────────────────────────────────────────
+
+var unusedPathOption = CreatePathOption();
+var unusedLimitOption = new Option<int>("--limit") { Description = "Maximum results to return (1-500, default 100). Values outside range are clamped.", DefaultValueFactory = _ => 100 };
+
+var unusedCommand = new Command("unused-symbols",
+    "Find public symbols with no incoming dependency edges (best-effort dead code detection). " +
+    "Excludes test files, Main entry point, and HTTP controller actions. Requires index.")
+{
+    unusedPathOption,
+    unusedLimitOption,
+};
+
+unusedCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(unusedPathOption)!;
+    var limit = Math.Clamp(parseResult.GetValue(unusedLimitOption), 1, 500);
+    var json = parseResult.GetValue(jsonOption);
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var results = await scope.Store.FindUnusedSymbolsAsync(scope.RepoId, limit).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+        }
+        else
+        {
+            if (results.Count == 0)
+            {
+                Console.WriteLine("No potentially unused public symbols found.");
+                return;
+            }
+
+            Console.WriteLine($"Found {results.Count} potentially unused public symbol(s):");
+            foreach (var s in results)
+            {
+                Console.WriteLine($"  {s.Kind,-12} {s.Name,-30} {s.Signature}");
+            }
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(unusedCommand);
 
 // ── invalidate-cache ────────────────────────────────────────
 
@@ -636,35 +738,72 @@ invalidateCacheCommand.SetAction(async parseResult =>
     var path = parseResult.GetValue(invalidateCachePathOption)!;
     var json = parseResult.GetValue(jsonOption);
 
-    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
-    await using (scope.ConfigureAwait(false))
+    var pathValidator = provider.GetRequiredService<IPathValidator>();
+    var validatedPath = pathValidator.ValidatePath(path, path);
+
+    var registryService = provider.GetRequiredService<IRegistryService>();
+    await registryService.DeregisterAsync(validatedPath).ConfigureAwait(false);
+
+    if (json)
     {
-        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
-        var fileIds = files.Select(f => f.Id).ToList();
-
-        foreach (var fileId in fileIds)
-        {
-            await scope.Store.DeleteSymbolsByFileAsync(fileId).ConfigureAwait(false);
-            await scope.Store.DeleteDependenciesByFileAsync(fileId).ConfigureAwait(false);
-            await scope.Store.DeleteFileAsync(fileId).ConfigureAwait(false);
-        }
-
-        await scope.Store.DeleteRepositoryAsync(scope.RepoId).ConfigureAwait(false);
-
-        if (json)
-        {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new { Status = "invalidated", Path = path },
-                jsonSerializerOptions));
-        }
-        else
-        {
-            Console.WriteLine("Index invalidated. Next index command will perform a full reparse.");
-        }
+        Console.WriteLine(JsonSerializer.Serialize(
+            new { Status = "invalidated", Path = path },
+            jsonSerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine("Index invalidated. Next index command will perform a full reparse.");
     }
 });
 
 rootCommand.Subcommands.Add(invalidateCacheCommand);
+
+// ── list ────────────────────────────────────────────────────
+
+var listCommand = new Command("list",
+    "List all projects that have been indexed in the global CodeCompress database. " +
+    "Shows project name, file count, symbol count, and relative last-indexed time. " +
+    "Does NOT require --path — reads from the global ~/.code-compress/index.db.");
+
+listCommand.SetAction(async parseResult =>
+{
+    var json = parseResult.GetValue(jsonOption);
+
+    var registryService = provider.GetRequiredService<IRegistryService>();
+    var repos = await registryService.ListAsync().ConfigureAwait(false);
+
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(repos, jsonSerializerOptions));
+        return;
+    }
+
+    if (repos.Count == 0)
+    {
+        Console.WriteLine("No indexed projects found. Run 'codecompress index --path <path>' to index a project.");
+        return;
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    const int nameWidth = 30;
+    const int filesWidth = 8;
+    const int symbolsWidth = 10;
+    const int timeWidth = 16;
+
+    Console.WriteLine(
+        $"{"Project",-nameWidth}  {"Files",filesWidth}  {"Symbols",symbolsWidth}  {"Last Indexed",timeWidth}");
+    Console.WriteLine(new string('─', nameWidth + filesWidth + symbolsWidth + timeWidth + 6));
+
+    foreach (var repo in repos)
+    {
+        var relTime = FormatRelativeTime(now - repo.LastIndexed);
+        var safeName = new string(repo.DisplayName.Where(c => c >= 0x20 && c != 0x7F && !char.IsControl(c)).ToArray());
+        Console.WriteLine(
+            $"{safeName,-nameWidth}  {repo.FileCount,filesWidth}  {repo.SymbolCount,symbolsWidth}  {relTime,timeWidth}");
+    }
+});
+
+rootCommand.Subcommands.Add(listCommand);
 
 // ── get-module-api ──────────────────────────────────────────
 
@@ -856,6 +995,179 @@ expandSymbolCommand.SetAction(async parseResult =>
 });
 
 rootCommand.Subcommands.Add(expandSymbolCommand);
+
+// ── get-hot-path ─────────────────────────────────────────────
+
+var hotPathPathOption = CreatePathOption();
+var hotPathNameOption = new Option<string>("--name")
+{
+    Description = "Symbol name — accepts qualified 'Parent:Child' (e.g., OrderService:ProcessPayment) or unqualified names.",
+    Required = true,
+};
+var hotPathIdentifiersOption = new Option<string>("--identifiers")
+{
+    Description = "Comma-separated identifiers to search for within the symbol body (whole-word matching, e.g., 'userId,status').",
+    Required = true,
+};
+var hotPathContextLinesOption = new Option<int>("--context-lines")
+{
+    Description = "Lines of context before and after each match (0-10, default 3). Values outside range are clamped.",
+    DefaultValueFactory = _ => 3,
+};
+
+var hotPathCommand = new Command("get-hot-path",
+    "Return only the lines within a symbol that contain specific identifiers plus surrounding context. " +
+    "Use when tracing a variable or condition within a large function — costs ~50-100 tokens vs 500-2000 for the full body. " +
+    "Identifiers are matched as whole words only. Overlapping context windows are merged. Requires index.")
+{
+    hotPathPathOption,
+    hotPathNameOption,
+    hotPathIdentifiersOption,
+    hotPathContextLinesOption,
+};
+
+hotPathCommand.SetAction(async parseResult =>
+{
+    var path = parseResult.GetValue(hotPathPathOption)!;
+    var name = parseResult.GetValue(hotPathNameOption)!;
+    var identifiersRaw = parseResult.GetValue(hotPathIdentifiersOption)!;
+    var contextLines = Math.Clamp(parseResult.GetValue(hotPathContextLinesOption), 0, 10);
+    var json = parseResult.GetValue(jsonOption);
+
+    var identifiers = identifiersRaw
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    if (identifiers.Length == 0)
+    {
+        await WriteErrorAsync("No identifiers provided", "EMPTY_IDENTIFIERS", json, jsonSerializerOptions).ConfigureAwait(false);
+        return;
+    }
+
+    var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
+    await using (scope.ConfigureAwait(false))
+    {
+        var symbol = await scope.Store.GetSymbolByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+        if (symbol is null)
+        {
+            var candidates = await scope.Store.GetSymbolCandidatesByNameAsync(scope.RepoId, name).ConfigureAwait(false);
+            if (candidates.Count == 1)
+            {
+                symbol = candidates[0];
+            }
+            else if (candidates.Count > 1)
+            {
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
+                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                return;
+            }
+            else
+            {
+                await WriteErrorAsync("Symbol not found", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
+                    "Use 'codecompress search --path <path> --query <name>' to discover symbol names.").ConfigureAwait(false);
+                return;
+            }
+        }
+
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+        if (file is null)
+        {
+            await WriteErrorAsync("File not found for symbol", "FILE_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        var pathValidator = provider.GetRequiredService<IPathValidator>();
+        string resolvedPath;
+        try
+        {
+            resolvedPath = pathValidator.ValidatePath(Path.Combine(path, file.RelativePath), path);
+        }
+        catch (ArgumentException)
+        {
+            await WriteErrorAsync("Path validation failed", "INVALID_PATH", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        // Determine scan range
+        int scanLineStart = symbol.BodyLineStart ?? symbol.LineStart;
+        int scanLineEnd = symbol.BodyLineEnd ?? symbol.LineEnd;
+        var totalLines = Math.Max(0, scanLineEnd - scanLineStart + 1);
+
+        // Read source and split into lines
+        var source = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+        var rawLines = source.Split('\n');
+
+        // Build whole-word patterns
+        var patterns = identifiers
+            .Select(id => (Id: id, Pattern: new System.Text.RegularExpressions.Regex(
+                $@"\b{System.Text.RegularExpressions.Regex.Escape(id)}\b",
+                System.Text.RegularExpressions.RegexOptions.None,
+                TimeSpan.FromMilliseconds(100))))
+            .ToList();
+
+        // Find matches
+        var seenMatches = new HashSet<(string, int)>();
+        var rawMatches = new List<(string Identifier, int LineNumber)>();
+        for (var lineNum = scanLineStart; lineNum <= scanLineEnd; lineNum++)
+        {
+            var idx = lineNum - symbol.LineStart;
+            if (idx < 0 || idx >= rawLines.Length) continue;
+            var lineText = rawLines[idx].TrimEnd('\r');
+            foreach (var (id, pattern) in patterns)
+            {
+                if (pattern.IsMatch(lineText) && seenMatches.Add((id, lineNum)))
+                    rawMatches.Add((id, lineNum));
+            }
+        }
+
+        if (json)
+        {
+            var matchObjects = BuildHotPathMatchObjects(rawMatches, rawLines, symbol, scanLineStart, scanLineEnd, contextLines);
+            var returnedLines = matchObjects.Sum(m => m.Context.Count);
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Symbol = symbol.Name, File = file.RelativePath, TotalLines = totalLines, ReturnedLines = returnedLines, Matches = matchObjects },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            if (rawMatches.Count == 0)
+            {
+                Console.WriteLine($"No matches found for {identifiers.Length} identifier(s) in '{symbol.Name}'.");
+                return;
+            }
+
+            Console.WriteLine($"// {symbol.Name} — {rawMatches.Count} match(es) for {identifiers.Length} identifier(s)");
+            Console.WriteLine($"// {file.RelativePath}  ({totalLines} total lines in scan range)");
+            Console.WriteLine();
+
+            var matchObjects = BuildHotPathMatchObjects(rawMatches, rawLines, symbol, scanLineStart, scanLineEnd, contextLines);
+            foreach (var m in matchObjects)
+            {
+                if (m.Context.Count > 0)
+                {
+                    foreach (var (lineNumber, text) in m.Context)
+                    {
+                        var marker = lineNumber == m.Line ? ">" : " ";
+                        Console.WriteLine($"  {marker} {lineNumber,6}: {text}");
+                    }
+
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine($"  > {m.Line,6}: (see context above — same window as previous match)");
+                    Console.WriteLine();
+                }
+            }
+
+            var uniqueLines = matchObjects.Sum(m => m.Context.Count);
+            await WriteHintAsync($"Returned {uniqueLines} unique line(s). Use 'get-symbol' to view the full body.", json).ConfigureAwait(false);
+        }
+    }
+});
+
+rootCommand.Subcommands.Add(hotPathCommand);
 
 // ── get-symbols (batch) ─────────────────────────────────────
 
@@ -1369,6 +1681,79 @@ assembleCommand.SetAction(async parseResult =>
 
 rootCommand.Subcommands.Add(assembleCommand);
 
+// ── prompts ─────────────────────────────────────────────────
+
+var promptsNameOption = new Option<string?>("--name")
+{
+    Description = "Show the full text of a specific prompt. " +
+                  "Valid names: explore_codebase, find_impact, review_changes, debug_symbol. " +
+                  "Omit to list all prompts.",
+};
+
+var promptsCommand = new Command("prompts",
+    "List available workflow prompts or show the full text of a specific prompt. " +
+    "Prompts guide AI agents through common CodeCompress workflows.")
+{
+    promptsNameOption,
+};
+
+promptsCommand.SetAction(parseResult =>
+{
+    var name = parseResult.GetValue(promptsNameOption);
+    var json = parseResult.GetValue(jsonOption);
+
+    if (name is null)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(CliPrompts.All.Select(p => new { p.Name, p.Description }), jsonSerializerOptions));
+        }
+        else
+        {
+            Console.WriteLine("Available prompts (use --name <name> to view full text):\n");
+            foreach (var p in CliPrompts.All)
+            {
+                Console.WriteLine($"  {p.Name,-20}  {p.Description}");
+            }
+        }
+
+        return;
+    }
+
+    var prompt = CliPrompts.All.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+    if (prompt is null)
+    {
+        Environment.ExitCode = 1;
+        var validNames = string.Join(", ", CliPrompts.All.Select(p => p.Name));
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new { Error = "Prompt not found", Code = "PROMPT_NOT_FOUND", ValidNames = validNames },
+                jsonSerializerOptions));
+        }
+        else
+        {
+            Console.Error.WriteLine($"Error: Prompt not found. Valid names: {validNames}");
+        }
+
+        return;
+    }
+
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new { prompt.Name, prompt.Description, prompt.Text }, jsonSerializerOptions));
+    }
+    else
+    {
+        Console.WriteLine($"# {prompt.Name}");
+        Console.WriteLine($"# {prompt.Description}");
+        Console.WriteLine();
+        Console.WriteLine(prompt.Text);
+    }
+});
+
+rootCommand.Subcommands.Add(promptsCommand);
+
 // ── agent-instructions ──────────────────────────────────────
 
 var agentInstructionsCommand = new Command("agent-instructions",
@@ -1390,24 +1775,60 @@ agentInstructionsCommand.SetAction(_ =>
         dotnet tool install -g CodeCompress
         ```
 
+        ## Access Boundary
+
+        The CLI (and the MCP server) are scoped to a boundary root — the directory from which the
+        server was launched, or the value of the `CODECOMPRESS_ROOT` environment variable. All
+        `--path` arguments must resolve within that boundary. Out-of-bounds paths are rejected with
+        INVALID_PATH. Use `CODECOMPRESS_ALLOWED_ROOTS` (OS path-separator-delimited) to add trusted
+        roots for multi-repo workflows.
+
         ## Workflow
 
         1. `codecompress index --path <project-root>` — MUST be called first. Builds/updates the
            symbol database. Incremental — only changed files are re-parsed.
-        2. `codecompress outline --path <project-root>` — Get a compressed overview of the entire
-           codebase (symbols grouped by file). Use --path-filter to scope to a subdirectory.
-        3. `codecompress search --path <project-root> --query <term>` — Find specific symbols using
-           FTS5 full-text search. Faster than grep.
-        4. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source
-           code by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
-        5. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Get a single
+        2. `codecompress assemble --path <project-root> --query <term> [--budget <tokens>]` — One-shot:
+           search symbols, retrieve source, and include a file overview in a single call. Collapses
+           5-10 round-trips into 1. Use as the default starting point for task-specific context.
+        3. `codecompress outline --path <project-root>` — Full codebase overview (symbols grouped by
+           file). Add `--path-filter src/` to scope to a subdirectory.
+        4. `codecompress topic-outline --path <project-root> --topic <term>` — Search for a topic
+           and return matching symbols in outline format. Good for thematic exploration.
+        5. `codecompress search --path <project-root> --query <term>` — FTS5 symbol search. Faster
+           than grep. Auto-retries with contains-match on zero results.
+        6. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
+           for string literals, comments, config values, or non-symbol patterns.
+        7. `codecompress get-symbol --path <project-root> --name <Name>` — Retrieve exact source code
+           by symbol name. Accepts unqualified names (auto-resolved) or Parent:Child format.
+        8. `codecompress expand-symbol --path <project-root> --name <Parent:Method>` — Extract a single
            method without loading the parent class (~60% fewer tokens than get-symbol on parent).
-        6. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve
-           multiple symbols in one call (max 50). Far more efficient than repeated get-symbol.
-        7. `codecompress search-text --path <project-root> --query <term>` — Search raw file contents
-           for string literals, comments, or non-symbol patterns.
-        8. `codecompress deps --path <project-root>` — Understand import/dependency relationships.
-        9. `codecompress file-tree --path <project-root>` — Quick directory structure (no index required).
+        9. `codecompress get-hot-path --path <project-root> --name <Name> --identifiers <id1,id2>` —
+           Return only lines in a symbol that contain specific identifiers plus surrounding context.
+           10-40x fewer tokens than get-symbol. Add `--context-lines N` (0-10, default 3).
+        10. `codecompress get-symbols --path <project-root> --names <N1,N2,N3>` — Batch retrieve up
+            to 50 symbols in one call. Far more efficient than repeated get-symbol.
+        11. `codecompress get-module-api --path <project-root> --module <rel-path>` — Public API
+            surface of a single file — signatures, visibility, and dependencies.
+        12. `codecompress find-references --path <project-root> --name <Name>` — All locations where
+            a symbol is referenced across the codebase.
+        13. `codecompress deps --path <project-root>` — File-level import/dependency relationships.
+            Add `--edge-kind imports|calls|implements|inherits|references` to filter by edge type.
+        14. `codecompress blast-radius --path <project-root> --file <rel-path>` — Reverse BFS: all
+            files that would break if the given file changes. Use `--symbol <name>` for symbol input.
+        15. `codecompress project-deps --path <project-root>` — Inter-project dependencies in .NET
+            solutions. Shows which projects reference which.
+        16. `codecompress unused-symbols --path <project-root>` — Best-effort dead code detection.
+            Returns public symbols with no incoming dependency edges.
+        17. `codecompress file-tree --path <project-root>` — Annotated directory tree with file and
+            line counts. Does NOT require `index` to be run first.
+        18. `codecompress snapshot --path <project-root> --label <name>` — Create a named baseline
+            of the current index state for change tracking.
+        19. `codecompress changes --path <project-root> --label <name>` — Symbol-level diff since a
+            named snapshot: new, modified, and deleted symbols.
+        20. `codecompress list` — List all projects in the global registry with file/symbol counts
+            and last-indexed times. No `--path` required.
+        21. `codecompress invalidate-cache --path <project-root>` — Delete all indexed data for a
+            project, forcing a full re-parse on the next `index` call.
 
         ## JSON Output (--json)
 
@@ -1415,6 +1836,7 @@ agentInstructionsCommand.SetAction(_ =>
 
         Key response shapes:
         - index: {repo_id, project_root, files_indexed, files_unchanged, symbols_found, duration_ms}
+        - assemble: {overview, symbols: [{name, kind, source}], token_estimate}
         - search: [{name, kind, parent, file, line, signature, snippet, rank}]
         - get-symbol: {id, file_id, name, kind, signature, parent_symbol, line_start, line_end, ...}
         - search-text: [{file_path, snippet, rank}]
@@ -1426,14 +1848,17 @@ agentInstructionsCommand.SetAction(_ =>
         `{error: "message", code: "ERROR_CODE", retryable: false}`
 
         Error codes: INVALID_PATH, SYMBOL_NOT_FOUND, DIRECTORY_NOT_FOUND, MODULE_NOT_FOUND,
-        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS.
+        SNAPSHOT_NOT_FOUND, EMPTY_QUERY, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED, NO_PROJECTS,
+        EMPTY_IDENTIFIERS, FILE_NOT_FOUND.
 
         All current errors are permanent (retryable: false) — fix the input rather than retrying.
 
         ## Performance Tips
 
+        - Start with `assemble` — it collapses search + retrieval into one call.
         - Use `get-symbols` for batches — single call vs N separate get-symbol calls.
         - Use `expand-symbol` for one method in a large class — ~60% fewer tokens.
+        - Use `get-hot-path` to trace a specific variable or condition — 10-40x fewer tokens.
         - Use `search` (not search-text) for finding classes/functions — structured results.
         - Use `outline --path-filter src/` to scope — faster than full outline + client filtering.
         - Symbol names accept unqualified names (e.g., 'MyMethod') — auto-resolved if unique.
@@ -1448,11 +1873,13 @@ agentInstructionsCommand.SetAction(_ =>
         - --group-by: 'file' (default), 'kind', 'directory'. Other values rejected.
         - --direction: 'dependencies', 'dependents', 'both' (default). Other values rejected.
         - --names: max 50 comma-separated. Applies to: get-symbols.
+        - --context-lines: 0-10 (default 3), clamped. Applies to: get-hot-path.
+        - --identifiers: comma-separated non-empty identifiers, required. Applies to: get-hot-path.
 
         ## General Tips
 
         - Run `codecompress <command> --help` for full option details.
-        - The index persists at `<project-root>/.code-compress/index.db` — shared with the MCP server.
+        - The index persists at `~/.code-compress/index.db` (global) — shared with the MCP server.
         - PREFER these commands over raw file reading. They are faster, more precise, and dramatically
           reduce token consumption.
         """);
@@ -1521,6 +1948,65 @@ static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSe
     }
 }
 
+static List<(string Identifier, int Line, List<(int LineNumber, string Text)> Context)> BuildHotPathMatchObjects(
+    List<(string Identifier, int LineNumber)> rawMatches,
+    string[] rawLines,
+    CodeCompress.Core.Models.Symbol symbol,
+    int scanLineStart,
+    int scanLineEnd,
+    int contextLines)
+{
+    var windowedMatches = rawMatches
+        .OrderBy(m => m.LineNumber)
+        .ThenBy(m => m.Identifier, StringComparer.Ordinal)
+        .Select(m => (
+            m.Identifier,
+            m.LineNumber,
+            WinStart: Math.Max(scanLineStart, m.LineNumber - contextLines),
+            WinEnd: Math.Min(scanLineEnd, m.LineNumber + contextLines)))
+        .ToList();
+
+    var mergedWindows = new List<(int Start, int End)>();
+    foreach (var (_, _, winStart, winEnd) in windowedMatches.OrderBy(m => m.WinStart))
+    {
+        if (mergedWindows.Count == 0 || winStart > mergedWindows[^1].End)
+            mergedWindows.Add((winStart, winEnd));
+        else
+        {
+            var last = mergedWindows[^1];
+            mergedWindows[^1] = (last.Start, Math.Max(last.End, winEnd));
+        }
+    }
+
+    var assignedWindows = new HashSet<int>();
+    var result = new List<(string Identifier, int Line, List<(int, string)> Context)>();
+
+    foreach (var (identifier, lineNumber, _, _) in windowedMatches)
+    {
+        var windowIdx = mergedWindows.FindIndex(w => w.Start <= lineNumber && lineNumber <= w.End);
+        List<(int, string)> context;
+        if (windowIdx >= 0 && assignedWindows.Add(windowIdx))
+        {
+            var (mStart, mEnd) = mergedWindows[windowIdx];
+            context = [];
+            for (var ln = mStart; ln <= mEnd; ln++)
+            {
+                var idx = ln - symbol.LineStart;
+                if (idx >= 0 && idx < rawLines.Length)
+                    context.Add((ln, rawLines[idx].TrimEnd('\r')));
+            }
+        }
+        else
+        {
+            context = [];
+        }
+
+        result.Add((identifier, lineNumber, context));
+    }
+
+    return result;
+}
+
 static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)
 {
     var stream = new FileStream(
@@ -1583,4 +2069,32 @@ static async Task PrintDirectoryTreeAsync(string rootPath, string currentPath, i
     {
         // Skip inaccessible directories
     }
+}
+
+static string FormatRelativeTime(TimeSpan elapsed)
+{
+    if (elapsed.TotalSeconds < 60)
+    {
+        return "just now";
+    }
+
+    if (elapsed.TotalMinutes < 60)
+    {
+        var minutes = (int)elapsed.TotalMinutes;
+        return $"{minutes} minute{(minutes == 1 ? "" : "s")} ago";
+    }
+
+    if (elapsed.TotalHours < 24)
+    {
+        var hours = (int)elapsed.TotalHours;
+        return $"{hours} hour{(hours == 1 ? "" : "s")} ago";
+    }
+
+    if (elapsed.TotalDays < 2)
+    {
+        return "yesterday";
+    }
+
+    var days = (int)elapsed.TotalDays;
+    return $"{days} days ago";
 }

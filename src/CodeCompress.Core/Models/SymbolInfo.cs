@@ -10,4 +10,6 @@ public sealed record SymbolInfo(
     int LineStart,
     int LineEnd,
     Visibility Visibility,
-    string? DocComment);
+    string? DocComment,
+    int? BodyLineStart = null,
+    int? BodyLineEnd = null);

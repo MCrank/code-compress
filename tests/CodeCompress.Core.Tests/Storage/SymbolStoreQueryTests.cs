@@ -32,10 +32,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "Initialize", "Function", "function Initialize()", null, 0, 100, 1, 10, "Public", "Initializes the module"),
-            new(0, insertedFile.Id, "Helper", "Function", "local function Helper()", null, 100, 50, 11, 15, "Private", null),
-            new(0, insertedFile.Id, "MyClass", "Class", "class MyClass", null, 150, 200, 16, 40, "Public", "A class"),
-            new(0, insertedFile.Id, "DoWork", "Method", "function MyClass:DoWork()", "MyClass", 200, 80, 20, 30, "Public", "Does work"),
+            new(0, insertedFile!.Id, "Initialize", "Function", "function Initialize()", null, 0, 100, 1, 10, "Public", "Initializes the module", null, null),
+            new(0, insertedFile.Id, "Helper", "Function", "local function Helper()", null, 100, 50, 11, 15, "Private", null, null, null),
+            new(0, insertedFile.Id, "MyClass", "Class", "class MyClass", null, 150, 200, 16, 40, "Public", "A class", null, null),
+            new(0, insertedFile.Id, "DoWork", "Method", "function MyClass:DoWork()", "MyClass", 200, 80, 20, 30, "Public", "Does work", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -128,9 +128,9 @@ internal sealed class SymbolStoreQueryTests
         // It only appears in parent_symbol — so this test proves parent_symbol is FTS5-indexed
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "VcsConnection", "Class", "public class VcsConnection", null, 0, 500, 1, 50, "Public", "VCS connection manager"),
-            new(0, insertedFile.Id, "Activate", "Method", "public void Activate()", "VcsConnection", 100, 50, 10, 15, "Public", "Activates the connection"),
-            new(0, insertedFile.Id, "Deactivate", "Method", "public void Deactivate()", "VcsConnection", 200, 50, 20, 25, "Public", null),
+            new(0, insertedFile!.Id, "VcsConnection", "Class", "public class VcsConnection", null, 0, 500, 1, 50, "Public", "VCS connection manager", null, null),
+            new(0, insertedFile.Id, "Activate", "Method", "public void Activate()", "VcsConnection", 100, 50, 10, 15, "Public", "Activates the connection", null, null),
+            new(0, insertedFile.Id, "Deactivate", "Method", "public void Deactivate()", "VcsConnection", 200, 50, 20, 25, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -219,8 +219,8 @@ internal sealed class SymbolStoreQueryTests
         // Insert constructor FIRST (lower rowid), then class — without ordering, constructor would win
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "BaseEntity", "Method", "protected BaseEntity()", "BaseEntity", 100, 50, 10, 15, "Protected", null),
-            new(0, insertedFile.Id, "BaseEntity", "Class", "public abstract class BaseEntity", null, 0, 200, 1, 20, "Public", "Base entity class"),
+            new(0, insertedFile!.Id, "BaseEntity", "Method", "protected BaseEntity()", "BaseEntity", 100, 50, 10, 15, "Protected", null, null, null),
+            new(0, insertedFile.Id, "BaseEntity", "Class", "public abstract class BaseEntity", null, 0, 200, 1, 20, "Public", "Base entity class", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -245,8 +245,8 @@ internal sealed class SymbolStoreQueryTests
         // Insert method first, class second
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "Tenant", "Method", "private Tenant()", "Tenant", 100, 50, 10, 15, "Private", null),
-            new(0, insertedFile.Id, "Tenant", "Class", "public sealed class Tenant", null, 0, 200, 1, 20, "Public", "Tenant entity"),
+            new(0, insertedFile!.Id, "Tenant", "Method", "private Tenant()", "Tenant", 100, 50, 10, 15, "Private", null, null, null),
+            new(0, insertedFile.Id, "Tenant", "Class", "public sealed class Tenant", null, 0, 200, 1, 20, "Public", "Tenant entity", null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -273,10 +273,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ProjectEndpoints", "Class", "public static class ProjectEndpoints", null, 0, 500, 1, 50, "Public", null),
-            new(0, insertedFile.Id, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", "ProjectEndpoints", 100, 100, 10, 20, "Public", null),
-            new(0, insertedFile.Id, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", "ProjectEndpoints", 200, 100, 21, 30, "Public", null),
-            new(0, insertedFile.Id, "MapOtherEndpoints", "Method", "public static void MapOtherEndpoints()", "ProjectEndpoints", 300, 100, 31, 40, "Public", null),
+            new(0, insertedFile!.Id, "ProjectEndpoints", "Class", "public static class ProjectEndpoints", null, 0, 500, 1, 50, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapMaestroProjectMemberEndpoints", "Method", "public static void MapMaestroProjectMemberEndpoints()", "ProjectEndpoints", 100, 100, 10, 20, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapMaestroProjectCrudEndpoints", "Method", "public static void MapMaestroProjectCrudEndpoints()", "ProjectEndpoints", 200, 100, 21, 30, "Public", null, null, null),
+            new(0, insertedFile.Id, "MapOtherEndpoints", "Method", "public static void MapOtherEndpoints()", "ProjectEndpoints", 300, 100, 31, 40, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -384,8 +384,7 @@ internal sealed class SymbolStoreQueryTests
 
     // ── GetProjectOutlineAsync PathFilter Tests ─────────────────────────
 
-    private static string OsPath(string forwardSlashPath) =>
-        forwardSlashPath.Replace('/', Path.DirectorySeparatorChar);
+    private static string OsPath(string forwardSlashPath) => forwardSlashPath;
 
     private static async Task<SqliteSymbolStore> SeedMultiFileDataAsync(SqliteConnection connection)
     {
@@ -407,11 +406,11 @@ internal sealed class SymbolStoreQueryTests
         var f5 = await store.GetFileByPathAsync("repo1", OsPath("src/servicesExtra/Bonus.luau")).ConfigureAwait(false);
 
         await store.InsertSymbolsAsync([
-            new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null),
-            new Symbol(0, f2!.Id, "Add", "Function", "function Add(a, b)", null, 0, 30, 1, 3, "Public", null),
-            new Symbol(0, f3!.Id, "FooModel", "Class", "class FooModel", null, 0, 40, 1, 4, "Public", null),
-            new Symbol(0, f4!.Id, "BarService", "Class", "class BarService", null, 0, 40, 1, 4, "Public", null),
-            new Symbol(0, f5!.Id, "BonusFunc", "Function", "function BonusFunc()", null, 0, 30, 1, 3, "Private", null),
+            new Symbol(0, f1!.Id, "Attack", "Function", "function Attack()", null, 0, 50, 1, 5, "Public", null, null, null),
+            new Symbol(0, f2!.Id, "Add", "Function", "function Add(a, b)", null, 0, 30, 1, 3, "Public", null, null, null),
+            new Symbol(0, f3!.Id, "FooModel", "Class", "class FooModel", null, 0, 40, 1, 4, "Public", null, null, null),
+            new Symbol(0, f4!.Id, "BarService", "Class", "class BarService", null, 0, 40, 1, 4, "Public", null, null, null),
+            new Symbol(0, f5!.Id, "BonusFunc", "Function", "function BonusFunc()", null, 0, 30, 1, 3, "Private", null, null, null),
         ]).ConfigureAwait(false);
 
         return store;
@@ -1144,8 +1143,8 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ClaudeConfig", "ConfigKey", "ClaudeConfig: \"value\"", null, 0, 50, 1, 1, "Public", null),
-            new(0, insertedFile.Id, "ClaudeService", "Class", "class ClaudeService", null, 100, 200, 5, 20, "Public", null),
+            new(0, insertedFile!.Id, "ClaudeConfig", "ConfigKey", "ClaudeConfig: \"value\"", null, 0, 50, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "ClaudeService", "Class", "class ClaudeService", null, 100, 200, 5, 20, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -1172,10 +1171,10 @@ internal sealed class SymbolStoreQueryTests
 
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "CLAUDE_KEY", "Constant", "const CLAUDE_KEY", null, 0, 30, 1, 1, "Public", null),
-            new(0, insertedFile.Id, "HandleClaude", "Method", "void HandleClaude()", null, 50, 80, 5, 10, "Public", null),
-            new(0, insertedFile.Id, "IClaudeClient", "Interface", "interface IClaudeClient", null, 150, 100, 15, 25, "Public", null),
-            new(0, insertedFile.Id, "ClaudeRecord", "Record", "record ClaudeRecord", null, 300, 50, 30, 35, "Public", null),
+            new(0, insertedFile!.Id, "CLAUDE_KEY", "Constant", "const CLAUDE_KEY", null, 0, 30, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "HandleClaude", "Method", "void HandleClaude()", null, 50, 80, 5, 10, "Public", null, null, null),
+            new(0, insertedFile.Id, "IClaudeClient", "Interface", "interface IClaudeClient", null, 150, 100, 15, 25, "Public", null, null, null),
+            new(0, insertedFile.Id, "ClaudeRecord", "Record", "record ClaudeRecord", null, 300, 50, 30, 35, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -1207,9 +1206,9 @@ internal sealed class SymbolStoreQueryTests
         // Insert in reverse alphabetical order to prove sorting works
         var symbols = new List<Symbol>
         {
-            new(0, insertedFile!.Id, "ZService", "Class", "class ZService", null, 0, 50, 1, 5, "Public", null),
-            new(0, insertedFile.Id, "AService", "Class", "class AService", null, 100, 50, 10, 15, "Public", null),
-            new(0, insertedFile.Id, "MService", "Class", "class MService", null, 200, 50, 20, 25, "Public", null),
+            new(0, insertedFile!.Id, "ZService", "Class", "class ZService", null, 0, 50, 1, 5, "Public", null, null, null),
+            new(0, insertedFile.Id, "AService", "Class", "class AService", null, 100, 50, 10, 15, "Public", null, null, null),
+            new(0, insertedFile.Id, "MService", "Class", "class MService", null, 200, 50, 20, 25, "Public", null, null, null),
         };
         await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
 
@@ -1219,5 +1218,259 @@ internal sealed class SymbolStoreQueryTests
         await Assert.That(results[0].Symbol.Name).IsEqualTo("AService");
         await Assert.That(results[1].Symbol.Name).IsEqualTo("MService");
         await Assert.That(results[2].Symbol.Name).IsEqualTo("ZService");
+    }
+
+    // ── CamelCase/PascalCase/Underscore Token Search Tests ───────────────
+
+    [Test]
+    public async Task SearchSymbolsAsyncFindsCamelCaseSymbolByTokenQuery()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/service.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/service.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "getUserProfile", "Method", "public UserProfile getUserProfile()", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "user profile", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("getUserProfile");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFindsPascalCaseSymbolByTokenQuery()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/service.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/service.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "UserProfileService", "Class", "public class UserProfileService", null, 0, 200, 1, 20, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "user profile", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("UserProfileService");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFindsUnderscoreSymbolByTokenQuery()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "python", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/handler.py", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/handler.py").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "user_profile_handler", "Function", "def user_profile_handler():", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "user profile", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("user_profile_handler");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFindsSymbolsByOrderIndependentTokenQuery()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/validator.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/validator.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ValidateEmailAddress", "Method", "public bool ValidateEmailAddress(string email)", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        var results = await store.SearchSymbolsAsync("repo1", "email validate", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("ValidateEmailAddress");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncPorterStemmerMatchesVariantsInDocComment()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/engine.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/engine.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "IndexEngine", "Class", "public class IndexEngine", null, 0, 200, 1, 20, "Public", "Handles indexing of all project files", null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // porter stemmer: "index" matches "indexing" in the doc comment
+        var results = await store.SearchSymbolsAsync("repo1", "index", null, 10).ConfigureAwait(false);
+
+        await Assert.That(results.Count).IsGreaterThan(0);
+        await Assert.That(results[0].Symbol.Name).IsEqualTo("IndexEngine");
+    }
+
+    // ── Fuzzy Search Tests ───────────────────────────────────────────────
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyFindsSymbolWithEditDistance1()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/validator.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/validator.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ValidateEmailAddress", "Method", "public bool ValidateEmailAddress(string email)", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // "ValidateEmailAdress" has edit distance 1 from "ValidateEmailAddress" (missing one 's')
+        var results = await store.SearchSymbolsAsync("repo1", "ValidateEmailAdress", null, 10, fuzzy: true).ConfigureAwait(false);
+
+        var names = results.Select(r => r.Symbol.Name).ToList();
+        await Assert.That(names).Contains("ValidateEmailAddress");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyFindsSymbolWithEditDistance2()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/payment.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/payment.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ProcessPayment", "Method", "public void ProcessPayment(decimal amount)", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // "ProcesPaymnt" has edit distance 2 from "ProcessPayment"
+        var results = await store.SearchSymbolsAsync("repo1", "ProcesPaymnt", null, 10, fuzzy: true).ConfigureAwait(false);
+
+        var names = results.Select(r => r.Symbol.Name).ToList();
+        await Assert.That(names).Contains("ProcessPayment");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyDisabledDoesNotRequireTypoMatch()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/validator.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/validator.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "ValidateEmailAddress", "Method", "public bool ValidateEmailAddress(string email)", null, 0, 50, 1, 5, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // fuzzy=false (default): typo should not return a result via FTS5 alone
+        var results = await store.SearchSymbolsAsync("repo1", "ValidateEmailAdress", null, 10, fuzzy: false).ConfigureAwait(false);
+
+        var names = results.Select(r => r.Symbol.Name).ToList();
+        await Assert.That(names).DoesNotContain("ValidateEmailAddress");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyMergesWithFts5Results()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/service.cs", "hash1", 512, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = await store.GetFileByPathAsync("repo1", "src/service.cs").ConfigureAwait(false);
+
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile!.Id, "UserService", "Class", "public class UserService", null, 0, 100, 1, 10, "Public", null, null, null),
+            new(0, insertedFile.Id, "UserServic", "Class", "public class UserServic", null, 200, 100, 20, 30, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // "UserService" matches FTS5 exactly; "UserServic" (edit distance 1) found via fuzzy
+        var results = await store.SearchSymbolsAsync("repo1", "UserService", null, 10, fuzzy: true).ConfigureAwait(false);
+
+        var names = results.Select(r => r.Symbol.Name).ToList();
+        await Assert.That(names).Contains("UserService");
+        await Assert.That(names).Contains("UserServic");
+    }
+
+    [Test]
+    public async Task SearchSymbolsAsyncFuzzyWithEmptyFtsQueryDoesNotReturnShortNameFalsePositives()
+    {
+        var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        await using var _ = connection.ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo = new Repository("repo1", "/test/path", "TestProject", "csharp", 1000, 0, 0);
+        await store.UpsertRepositoryAsync(repo).ConfigureAwait(false);
+
+        var file = new FileRecord(0, "repo1", "src/Engine.cs", "abc123", 100, 10, 1000, 1000);
+        await store.InsertFilesAsync([file]).ConfigureAwait(false);
+        var insertedFile = (await store.GetFilesByRepoAsync("repo1").ConfigureAwait(false))[0];
+
+        // Plant a symbol with a short name that would match empty-string Levenshtein
+        var symbols = new List<Symbol>
+        {
+            new(0, insertedFile.Id, "X", "Constant", "double X", null, 0, 10, 1, 1, "Public", null, null, null),
+            new(0, insertedFile.Id, "ComputeDistance", "Method", "int ComputeDistance()", null, 10, 50, 2, 4, "Public", null, null, null),
+        };
+        await store.InsertSymbolsAsync(symbols).ConfigureAwait(false);
+
+        // Empty Fts5Query (LIKE-only path) with fuzzy=true must NOT return "X" via Levenshtein("","X")==1
+        var results = await store.SearchSymbolsAsync("repo1", string.Empty, null, 20, nameLikePattern: "%DoesNotExist%", fuzzy: true).ConfigureAwait(false);
+
+        await Assert.That(results).IsEmpty();
     }
 }

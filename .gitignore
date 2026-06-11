@@ -57,6 +57,10 @@ Desktop.ini
 # Claude Code
 .claude/settings.local.json
 
+# Playwright CLI artifacts (browser automation tool output)
+.playwright-cli/
+.playwright/
+
 # Local plans / working files
 .local/
 

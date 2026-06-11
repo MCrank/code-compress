@@ -191,9 +191,9 @@ Developer <── Terminal ────>   CodeCompress CLI ──────�
                                                  Index Engine
                                                    /      \
                                           Language       SQLite Store
-                                          Parsers        .code-compress/
+                                          Parsers      ~/.code-compress/
                                     (C#, Java, Go, TS,  index.db
-                                    Rust, Python, …)
+                                    Rust, Python, Ruby, …)
 ```
 
 Both the MCP server and CLI share the same index database — you can index with one and query with the other.
@@ -228,6 +228,7 @@ CodeCompress is designed to stay current with minimal effort:
 | `index_project` | Index a project directory (incremental by default) |
 | `snapshot_create` | Create a named snapshot for tracking changes over time |
 | `invalidate_cache` | Force a full re-index on next `index_project` call |
+| `list_repos` | List all projects indexed in the global database |
 
 ### Context Assembly
 
@@ -246,6 +247,7 @@ CodeCompress is designed to stay current with minimal effort:
 | `get_symbols` | Batch retrieve multiple symbols in one call (up to 50) |
 | `get_module_api` | Complete public API of a single file/module |
 | `expand_symbol` | Extract a single method from a large class (~60% fewer tokens than `get_symbol`) |
+| `get_hot_path` | Return only the lines within a symbol that contain specific identifiers plus surrounding context (10–40x fewer tokens than the full body) |
 | `search_symbols` | Full-text search across symbol names, signatures, parent types, and docs. Auto-retries with contains-match when exact FTS5 returns zero results. |
 | `search_text` | Raw text search across file contents (with glob filtering) |
 | `topic_outline` | Topic-based search with results grouped in outline format |
@@ -260,6 +262,13 @@ CodeCompress is designed to stay current with minimal effort:
 | `dependency_graph` | Import/require dependency graph for a file |
 | `project_dependencies` | Inter-project dependency graph (.NET solutions) |
 
+### Dependency Analysis
+
+| Tool | What it does |
+|------|---|
+| `blast_radius` | Reverse BFS — find all files affected if a given file or symbol changes |
+| `find_unused_symbols` | Best-effort dead code detection — public symbols with no incoming references |
+
 ### Server Management
 
 | Tool | What it does |
@@ -268,47 +277,85 @@ CodeCompress is designed to stay current with minimal effort:
 
 > **Note:** MCP clients like Claude Code automatically restart the server on the next tool call, so stopping it is always safe.
 
+## MCP Prompts
+
+CodeCompress ships 4 pre-built workflow prompts. In Claude Code and other MCP clients that support prompts, you can invoke them by name to load step-by-step workflow guidance directly into your context.
+
+| Prompt | Workflow |
+|--------|---------|
+| `explore_codebase` | `index_project` → `project_outline` → `search_symbols` → `get_symbol` |
+| `find_impact` | `index_project` → `blast_radius` → `find_references` → `dependency_graph` |
+| `review_changes` | `snapshot_create` → _[make changes]_ → `index_project` → `changes_since` |
+| `debug_symbol` | `search_symbols` → `get_hot_path` → `get_symbol` → `find_references` |
+
+Each prompt returns a `ChatRole.User` message with the full workflow, token estimates per tool, and guidance on when to prefer one tool over another.
+
+> **CLI:** Run `codecompress prompts` to list all prompts, or `codecompress prompts --name explore_codebase` to print the full text of a specific prompt.
+
 ## Supported Languages
 
 | Language | Extensions | Status | Parser |
 |----------|------------|--------|--------|
 | Luau (Roblox) | `.luau`, `.lua` | Available | Regex/pattern-based |
-| C# / .NET | `.cs` | Available | Regex/pattern-based |
+| C# / .NET | `.cs` | Available | Tree-sitter AST |
 | Blazor / Razor | `.razor` | Available | Directive extraction + C# delegation |
 | Terraform / HCL | `.tf`, `.tfvars` | Available | Regex/pattern-based |
-| Java | `.java` | Available | Regex/pattern-based |
-| Go | `.go` | Available | Regex/pattern-based |
-| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Regex/pattern-based |
-| Rust | `.rs` | Available | Regex/pattern-based |
-| Python | `.py`, `.pyi` | Available | Indentation-based |
+| Java | `.java` | Available | Tree-sitter AST |
+| Go | `.go` | Available | Tree-sitter AST |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | Available | Tree-sitter AST |
+| Rust | `.rs` | Available | Tree-sitter AST |
+| Python | `.py`, `.pyi` | Available | Tree-sitter AST |
+| Ruby | `.rb` | Available | Tree-sitter AST |
 | .NET Project Files | `.csproj`, `.fsproj`, `.props` | Available | XML-based |
-| JSON Config | `.json` | Available | Structure-based |
+| JSON Config | `.json` | Available | Tree-sitter AST |
 | YAML Config | `.yaml`, `.yml` | Available | Structure-based |
 
 Adding a new language requires implementing a single `ILanguageParser` interface — no changes to storage, indexing, or MCP tools.
 
 ## Where is my data stored?
 
-All index data is stored **locally** in the project directory:
+All index data is stored in a **single global database** in your home directory:
 
 ```
-<project-root>/.code-compress/index.db
+~/.code-compress/index.db
 ```
 
-- One SQLite database per project, stored alongside the code
-- Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots
+- One SQLite database shared across all indexed projects
+- Contains: file metadata, parsed symbols, dependencies, FTS5 search indexes, snapshots for every indexed project
 - **No data leaves your machine** — no network calls, no telemetry
-- Add `.code-compress/` to your `.gitignore` (WAL and SHM files should already be excluded)
+- Nothing is stored in your project directories — no `.gitignore` entries needed
+- Access is confined to the server's launch directory and its descendants — see [Access boundary](#access-boundary)
 
-To clear the index for a project, delete its `.code-compress/` directory.
+To clear the index for a specific project, call `invalidate_cache` (MCP) or `codecompress invalidate-cache --path <root>` (CLI). To list all indexed projects, use `list_repos` (MCP) or `codecompress list` (CLI).
 
 ## Security
 
 - **Read-only** — never modifies your source files
+- **Access boundary** — the server is clamped to the directory it was launched from (and its descendants); it cannot index, query, or enumerate repositories outside that boundary (see below)
 - **Path traversal prevention** — all file paths canonicalized and validated against the project root
 - **SQL injection prevention** — all queries use parameterized statements
 - **Prompt injection safeguards** — tool outputs are structured data; raw input is never echoed into freeform text
 - **Local only** — no network calls, no telemetry, your code stays on your machine
+
+### Access boundary
+
+To prevent one project's agent from reaching another repository's code or metadata, the server confines all
+tools to a **boundary root** resolved once at startup:
+
+- **Default:** the server's launch working directory (where the MCP host started it). Any path **at or below**
+  this directory is in-bounds — this includes sibling repositories when several repos live under one workspace folder.
+- **Override:** set `CODECOMPRESS_ROOT` to pin the boundary explicitly (useful when the host launches the server
+  from an unexpected directory).
+- **Allowlist:** set `CODECOMPRESS_ALLOWED_ROOTS` (delimited by the OS path separator — `;` on Windows, `:` elsewhere)
+  to grant additional trusted roots for multi-repo workflows. Filesystem-root entries (`/`, `C:\`) are rejected as too broad.
+
+Requests for paths outside the boundary are rejected with a uniform `INVALID_PATH` error (no information about the
+out-of-bounds path is leaked), and `list_repos` returns only repositories within the boundary.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `CODECOMPRESS_ROOT` | Boundary root the server may operate at or below | Launch working directory |
+| `CODECOMPRESS_ALLOWED_ROOTS` | Extra trusted roots, OS-path-separator delimited | (none) |
 
 ## Agent Configuration
 
@@ -323,24 +370,38 @@ CodeCompress is a code intelligence tool that provides compressed, symbol-level 
 to the indexed codebase. Use it as your PRIMARY tool for code discovery instead of reading
 raw files — it saves 80-90% tokens.
 
+## Access Boundary
+
+All paths are scoped to the server's launch directory (or `CODECOMPRESS_ROOT`). Out-of-bounds
+paths are rejected with `INVALID_PATH`. Use `CODECOMPRESS_ALLOWED_ROOTS` for multi-repo workflows.
+
 ## Workflow
 
 1. **Index first** — `index_project` (MCP) or `codecompress index --path <root>` (CLI).
    Builds/updates the symbol database. Incremental — only changed files are re-parsed.
 2. **Assemble context** — `assemble_context` / `codecompress assemble` for one-shot task context.
-   Combines search + source retrieval + file overview within a token budget.
+   Combines search + source retrieval + overview in a single call — replaces 5-10 round-trips.
 3. **Get an overview** — `project_outline` / `codecompress outline` for the full codebase structure.
+   `topic_outline` / `codecompress topic-outline` to scope the overview to a specific topic.
 4. **Search** — `search_symbols` / `codecompress search` for FTS5 full-text symbol search.
-   `search_text` / `codecompress search-text` for raw file content search.
+   `search_text` / `codecompress search-text` for raw file content (literals, comments, config).
 5. **Read symbols** — `get_symbol` / `codecompress get-symbol` to retrieve exact source code.
    `expand_symbol` / `codecompress expand-symbol` for a single method (~60% fewer tokens).
+   `get_hot_path` / `codecompress get-hot-path` for lines matching specific identifiers (10-40x savings).
+   `get_symbols` / `codecompress get-symbols` to batch-retrieve up to 50 symbols at once.
+   `get_module_api` / `codecompress get-module-api` for the public API surface of a file.
 6. **Find references** — `find_references` / `codecompress find-references` to trace usage.
-7. **Dependencies** — `dependency_graph` / `codecompress deps` for import relationships.
+7. **Dependencies** — `dependency_graph` / `codecompress deps` for file import relationships.
+   `blast_radius` / `codecompress blast-radius` for reverse impact analysis.
+   `project_dependencies` / `codecompress project-deps` for inter-project (.NET solution) deps.
+8. **Change tracking** — `snapshot_create` / `codecompress snapshot` to baseline the index.
+   `changes_since` / `codecompress changes` for a symbol-level diff since the snapshot.
+9. **Registry** — `list_repos` / `codecompress list` to see all indexed projects and their status.
 
 ## Tips
 
 - Add `--json` to any CLI command for machine-readable output (snake_case keys).
-- The index persists at `<project-root>/.code-compress/index.db` — shared between MCP server and CLI.
+- The index persists at `~/.code-compress/index.db` (global) — shared between MCP server and CLI.
 - PREFER these tools over raw file reading. They are faster, more precise, and dramatically
   reduce token consumption.
 ````
@@ -368,7 +429,7 @@ claude mcp add --transport stdio codecompress -- dotnet run --project /absolute/
 
 ## CLI Tool
 
-The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `.code-compress/index.db` database.
+The CLI provides the same capabilities as the MCP server — use whichever fits your workflow. Both share the same `~/.code-compress/index.db` global database.
 
 ### Installation
 
@@ -405,6 +466,9 @@ codecompress search-text --path /path/to/project --query "TODO"
 
 # Retrieve a nested method without loading the whole class (~60% token savings)
 codecompress expand-symbol --path /path/to/project --name MyClass:MyMethod
+
+# Return only lines matching specific identifiers within a symbol (~10-40x fewer tokens)
+codecompress get-hot-path --path /path/to/project --name MyClass:MyMethod --identifiers "userId,status"
 
 # Batch retrieve multiple symbols at once
 codecompress get-symbols --path /path/to/project --names "Foo,Bar,Baz"
@@ -462,6 +526,7 @@ This outputs a markdown block you can paste into `CLAUDE.md`, system prompts, or
 | `outline` | `project_outline` | Compressed codebase overview |
 | `get-symbol` | `get_symbol` | Retrieve symbol source code |
 | `expand-symbol` | `expand_symbol` | Extract nested symbol (~60% fewer tokens) |
+| `get-hot-path` | `get_hot_path` | Return only lines matching identifiers within a symbol |
 | `get-symbols` | `get_symbols` | Batch retrieve multiple symbols |
 | `get-module-api` | `get_module_api` | Public API surface of a file |
 | `search` | `search_symbols` | FTS5 symbol search (auto contains-match fallback) |

@@ -1,0 +1,12 @@
+{
+  "名前": "太郎",
+  "都市": "東京",
+  "metadata": {
+    "言語": "ja-JP",
+    "バージョン": "1.0"
+  },
+  "répétition": {
+    "première": "first",
+    "deuxième": "second"
+  }
+}

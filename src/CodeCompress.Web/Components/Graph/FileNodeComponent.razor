@@ -1,0 +1,65 @@
+@using CodeCompress.Web.Services.Graph
+
+<svg width="220" height="80" viewBox="0 0 220 80"
+     xmlns="http://www.w3.org/2000/svg"
+     class="cc-graph-node-svg"
+     role="img"
+     aria-label="@Node.ViewModel.RelativePath">
+    <defs>
+        <clipPath id="ccn-@_clipId">
+            <rect x="44" y="14" width="164" height="20" />
+        </clipPath>
+        <clipPath id="ccd-@_clipId">
+            <rect x="44" y="42" width="164" height="16" />
+        </clipPath>
+    </defs>
+
+    <!-- Card background -->
+    <rect x="1" y="1" width="218" height="78" rx="8"
+          class="cc-node-bg" />
+
+    <!-- Language accent strip -->
+    <rect x="1" y="1" width="6" height="78" rx="4" fill="@_color" />
+    <rect x="5" y="1" width="2" height="78" fill="@_color" />
+
+    <!-- Language icon (Lucide path in 24×24 viewBox scaled to 18×18) -->
+    <svg x="14" y="20" width="18" height="18" viewBox="0 0 24 24"
+         fill="none" stroke="@_color" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+        @((MarkupString)_iconPath)
+    </svg>
+
+    <!-- File name -->
+    <text x="44" y="34"
+          class="cc-node-name"
+          clip-path="url(#ccn-@_clipId)">@_fileName</text>
+
+    <!-- Directory path -->
+    <text x="44" y="54"
+          class="cc-node-dir"
+          clip-path="url(#ccd-@_clipId)">@_dirDisplay</text>
+</svg>
+
+@code {
+    [Parameter] public FileNodeModel Node { get; set; } = null!;
+
+    private static readonly Dictionary<string, string> s_iconPaths =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["code-2"]    = "<path d='m18 16 4-4-4-4'/><path d='m6 8-4 4 4 4'/><path d='m14.5 4-5 16'/>",
+            ["layout"]    = "<rect width='18' height='18' x='3' y='3' rx='2' ry='2'/><line x1='3' x2='21' y1='9' y2='9'/><line x1='9' x2='9' y1='21' y2='9'/>",
+            ["file-code"] = "<path d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/><polyline points='14 2 14 8 20 8'/><path d='m10 13-2 2 2 2'/><path d='m14 17 2-2-2-2'/>",
+            ["braces"]    = "<path d='M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1'/><path d='M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1'/>",
+            ["file-text"] = "<path d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/><polyline points='14 2 14 8 20 8'/><line x1='16' x2='8' y1='13' y2='13'/><line x1='16' x2='8' y1='17' y2='17'/><line x1='10' x2='8' y1='9' y2='9'/>",
+            ["database"]  = "<ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 5V19A9 3 0 0 0 21 19V5'/><path d='M3 12A9 3 0 0 0 21 12'/>",
+            ["file"]      = "<path d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/><polyline points='14 2 14 8 20 8'/>",
+        };
+
+    private string _fileName => System.IO.Path.GetFileName(Node.ViewModel.RelativePath);
+    private string _dirDisplay => Node.ViewModel.Directory;
+    private string _color => GraphDataService.GetLanguageColor(Node.ViewModel.RelativePath);
+    private string _iconPath => s_iconPaths.GetValueOrDefault(
+        GraphDataService.GetLanguageIcon(Node.ViewModel.RelativePath),
+        s_iconPaths["file"]);
+    private string _clipId => Node.Id.Replace("-", "", StringComparison.Ordinal);
+}

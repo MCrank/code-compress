@@ -189,8 +189,8 @@ internal sealed class PythonParserTests
         var result = Parse(code);
         var cls = result.Symbols.First(s => s.Name == "A");
         await Assert.That(cls.LineStart).IsEqualTo(1);
-        // Class ends when top-level function starts
-        await Assert.That(cls.LineEnd).IsEqualTo(4);
+        // Tree-sitter reports the last token of the class body (pass on line 3)
+        await Assert.That(cls.LineEnd).IsEqualTo(3);
     }
 
     // ── Resilience ────────────────────────────────────────────────────

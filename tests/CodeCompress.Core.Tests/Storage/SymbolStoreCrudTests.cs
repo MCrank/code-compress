@@ -26,7 +26,7 @@ internal sealed class SymbolStoreCrudTests
         new(id, repoId, path, "abc123hash", 1024, 50, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
     private static Symbol CreateTestSymbol(long fileId, string name = "TestFunction", int lineStart = 1, int lineEnd = 10) =>
-        new(0, fileId, name, "function", $"function {name}()", null, 0, 100, lineStart, lineEnd, "public", "A test function");
+        new(0, fileId, name, "function", $"function {name}()", null, 0, 100, lineStart, lineEnd, "public", "A test function", null, null);
 
     private static Dependency CreateTestDependency(long fileId, string requiresPath = "modules/utils", long? resolvedFileId = null, string? alias = null) =>
         new(0, fileId, requiresPath, resolvedFileId, alias);
@@ -110,6 +110,35 @@ internal sealed class SymbolStoreCrudTests
         await Assert.That(deletedRepo).IsNull();
         await Assert.That(remainingFiles).Count().IsEqualTo(0);
         await Assert.That(remainingSymbols).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetAllRepositoriesAsyncReturnsEmptyWhenNoneIndexed()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+
+        var result = await store.GetAllRepositoriesAsync().ConfigureAwait(false);
+
+        await Assert.That(result).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetAllRepositoriesAsyncReturnsAllIndexedRepos()
+    {
+        using var connection = await CreateTestConnectionAsync().ConfigureAwait(false);
+        var store = new SqliteSymbolStore(connection);
+        var repo1 = CreateTestRepo("repo-1");
+        var repo2 = new Repository("repo-2", "/other/path", "OtherProject", "csharp", 999L, 5, 10);
+
+        await store.UpsertRepositoryAsync(repo1).ConfigureAwait(false);
+        await store.UpsertRepositoryAsync(repo2).ConfigureAwait(false);
+
+        var result = await store.GetAllRepositoriesAsync().ConfigureAwait(false);
+
+        await Assert.That(result).Count().IsEqualTo(2);
+        await Assert.That(result.Select(r => r.Id)).Contains("repo-1");
+        await Assert.That(result.Select(r => r.Id)).Contains("repo-2");
     }
 
     // ── File Tests ──────────────────────────────────────────────────────

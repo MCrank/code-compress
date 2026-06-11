@@ -33,7 +33,7 @@ Create the test class **before** the implementation class. Write tests that defi
 ### 2. Red — Verify Tests Fail
 
 ```bash
-dotnet test --filter "FullyQualifiedName~TestClassName"
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo --treenode-filter "/*/*/TestClassName/*"
 ```
 
 If tests pass without implementation, the tests are wrong — fix them.
@@ -45,7 +45,7 @@ Write the **minimum code** to make tests pass — no more.
 ### 4. Green — Verify Tests Pass
 
 ```bash
-dotnet test --filter "FullyQualifiedName~TestClassName"
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo --treenode-filter "/*/*/TestClassName/*"
 ```
 
 ### 5. Refactor — Clean Up While Green
@@ -61,6 +61,41 @@ dotnet build CodeCompress.slnx
 SonarAnalyzer violations are build errors — fix immediately.
 
 ## TUnit Framework Reference
+
+### Running Tests
+
+TUnit runs on **Microsoft.Testing.Platform (MTP)** — its flags go after the `--` separator in `dotnet test`.
+
+```bash
+# Full solution
+dotnet test CodeCompress.slnx -- --output Normal --disable-logo
+
+# Single project
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo
+
+# Filter by class  (pattern: /{assembly}/{namespace}/{class}/{method}, * = wildcard)
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo \
+    --treenode-filter "/*/*/CSharpParserTests/*"
+
+# Filter by single test method
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo \
+    --treenode-filter "/*/*/CSharpParserTests/ParseClassReturnsCorrectSymbolKind"
+
+# Filter by namespace
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo \
+    --treenode-filter "/*/CodeCompress.Core.Tests.Parsers/*/*"
+
+# OR filter (run multiple classes)
+dotnet test tests/CodeCompress.Core.Tests -- --output Normal --disable-logo \
+    --treenode-filter "/*/*/(CSharpParserTests)|(GoParserTests)/*"
+
+# With TRX report and coverage
+dotnet test CodeCompress.slnx -- --output Normal --disable-logo --report-trx --coverage
+```
+
+`--output Normal` controls verbosity (also `Minimal`, `Detailed`). `--disable-logo` suppresses the ASCII art banner (also available as env var `TUNIT_DISABLE_LOGO=true`).
+
+**Do NOT use** `--filter "FullyQualifiedName~..."` — that's the legacy VSTest syntax; it does not work with MTP/TUnit.
 
 ### Test Class Pattern
 
@@ -159,7 +194,11 @@ public void SetUp()
 }
 ```
 
-## NSubstitute Mocking
+## Mocking
+
+Two mocking libraries are available. **NSubstitute** is the established project default. **TUnit.Mocks** is TUnit's native library — source-generated, no reflection, no `.Object` wrapper.
+
+### NSubstitute (project default)
 
 ```csharp
 // Create mock
@@ -184,6 +223,31 @@ store.SearchSymbolsAsync(
     Arg.Any<int>()
 ).Returns(results);
 ```
+
+### TUnit.Mocks (native alternative)
+
+`TUnit.Mocks` uses source generators — the mock IS the interface, no `.Object` wrapper needed.
+
+```csharp
+using TUnit.Mocks;
+
+// Create mock (static extension generated per interface)
+var mock = ISymbolStore.Mock();                          // Loose (default)
+var strict = ISymbolStore.Mock(MockBehavior.Strict);    // Strict — throws on unconfigured calls
+
+// Configure returns (Any() is the TUnit wildcard matcher)
+mock.GetSymbolByNameAsync(Any(), Any()).Returns(new Symbol(/* ... */));
+
+// Mock IS the interface — no .Object
+ISymbolStore store = mock;
+var result = await store.GetSymbolByNameAsync("repo-id", "Foo");
+
+// Verify calls
+mock.GetSymbolByNameAsync("repo-id", "Foo").WasCalled(Times.Once);
+mock.GetSymbolByNameAsync(Any(), Any()).WasCalled(Times.Exactly(1));
+```
+
+Add to `.csproj` to use: `<PackageReference Include="TUnit.Mocks" />`
 
 ## Verify Snapshot Testing
 
@@ -233,7 +297,7 @@ src/CodeCompress.Server/Tools/QueryTools.cs
 
 1. **Record equality with collections:** Records use reference equality for `IReadOnlyList<T>` properties. Share list instances in test expectations, or use element-by-element assertions.
 
-2. **TUnit exit code 8:** Means "zero tests ran" — not a real failure. Can happen if filter matches nothing.
+2. **TUnit exit code 8:** Means "zero tests ran" — not a real failure. Can happen if `--treenode-filter` matches nothing. Check the pattern — it must match `/{assembly}/{namespace}/{class}/{method}` exactly (case-sensitive).
 
 3. **ConfigureAwait(false):** Use in test code when calling production async methods: `await method().ConfigureAwait(false);`
 

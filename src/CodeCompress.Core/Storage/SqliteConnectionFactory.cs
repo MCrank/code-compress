@@ -9,54 +9,18 @@ public sealed class SqliteConnectionFactory : IConnectionFactory
     internal const string DbDirectoryName = ".code-compress";
     internal const string DbFileName = "index.db";
 
-    private const string ReadmeContent =
-        """
-        # .code-compress
-
-        This directory contains the [CodeCompress](https://github.com/MCrank/code-compress) index database.
-
-        CodeCompress is an MCP server that indexes codebases and provides AI agents with compressed,
-        surgical access to code symbols — reducing token consumption by 80-90%.
-
-        ## What's in here?
-
-        - **index.db** — SQLite database containing parsed symbols, file metadata, and FTS indexes.
-        - **index.db-wal / index.db-shm** — SQLite WAL (write-ahead log) files. Safe to delete when
-          the database is not in use; they will be recreated automatically.
-
-        ## Can I commit this?
-
-        Yes. Committing `index.db` lets other developers (and CI) skip the initial full index.
-        The index is updated incrementally — only changed files are re-parsed.
-
-        Add the WAL files to `.gitignore`:
-        ```
-        .code-compress/index.db-wal
-        .code-compress/index.db-shm
-        ```
-        """;
+    public static string GlobalCodeCompressDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        DbDirectoryName);
 
     public async Task<SqliteConnection> CreateConnectionAsync(string projectRootPath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectRootPath);
+        // projectRootPath is retained for interface compatibility; DB is always global.
+        _ = projectRootPath;
 
-        var fullPath = Path.GetFullPath(projectRootPath);
-        if (!Path.IsPathRooted(fullPath))
-        {
-            throw new ArgumentException("Project root path must be an absolute path.", nameof(projectRootPath));
-        }
+        Directory.CreateDirectory(GlobalCodeCompressDir);
 
-        if (projectRootPath.Contains("..", StringComparison.Ordinal))
-        {
-            throw new ArgumentException("Project root path must not contain path traversal.", nameof(projectRootPath));
-        }
-
-        var dbDirectory = Path.Combine(fullPath, DbDirectoryName);
-        Directory.CreateDirectory(dbDirectory);
-
-        EnsureReadmeExists(dbDirectory);
-
-        var dbPath = Path.Combine(dbDirectory, DbFileName);
+        var dbPath = Path.Combine(GlobalCodeCompressDir, DbFileName);
         var connection = new SqliteConnection($"Data Source={dbPath};Foreign Keys=True");
         await connection.OpenAsync().ConfigureAwait(false);
 
@@ -81,15 +45,6 @@ public sealed class SqliteConnectionFactory : IConnectionFactory
 
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return Convert.ToHexStringLower(hashBytes);
-    }
-
-    private static void EnsureReadmeExists(string dbDirectory)
-    {
-        var readmePath = Path.Combine(dbDirectory, "README.md");
-        if (!File.Exists(readmePath))
-        {
-            File.WriteAllText(readmePath, ReadmeContent);
-        }
     }
 
     private static async Task ExecutePragmaAsync(SqliteConnection connection, string pragma)

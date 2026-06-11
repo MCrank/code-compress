@@ -83,6 +83,36 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return null;
     }
 
+    public async Task<IReadOnlyList<Repository>> GetAllRepositoriesAsync()
+    {
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT id, root_path, name, language, last_indexed, file_count, symbol_count
+            FROM repositories ORDER BY last_indexed DESC
+            """;
+#pragma warning restore CA2100
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<Repository>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new Repository(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6)));
+        }
+
+        return results;
+    }
+
     public async Task DeleteRepositoryAsync(string repoId)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -333,8 +363,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
             command.CommandText =
                 """
-                INSERT INTO symbols (file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment)
-                VALUES (@fileId, @name, @kind, @signature, @parentSymbol, @byteOffset, @byteLength, @lineStart, @lineEnd, @visibility, @docComment)
+                INSERT INTO symbols (file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment, body_line_start, body_line_end)
+                VALUES (@fileId, @name, @kind, @signature, @parentSymbol, @byteOffset, @byteLength, @lineStart, @lineEnd, @visibility, @docComment, @bodyLineStart, @bodyLineEnd)
                 """;
 #pragma warning restore CA2100
 
@@ -349,6 +379,22 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var pLineEnd = command.Parameters.Add(new SqliteParameter("@lineEnd", 0));
             var pVisibility = command.Parameters.Add(new SqliteParameter("@visibility", ""));
             var pDocComment = command.Parameters.Add(new SqliteParameter("@docComment", ""));
+            var pBodyLineStart = command.Parameters.Add(new SqliteParameter("@bodyLineStart", DBNull.Value));
+            var pBodyLineEnd = command.Parameters.Add(new SqliteParameter("@bodyLineEnd", DBNull.Value));
+
+            using var ftsCommand = _connection.CreateCommand();
+            ftsCommand.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100 // Static SQL with parameterized values
+            ftsCommand.CommandText =
+                """
+                INSERT INTO symbols_fts(rowid, name, parent_symbol, signature, doc_comment)
+                SELECT last_insert_rowid(), @ftsName, @ftsParentSymbol, @ftsSignature, @ftsDocComment
+                """;
+#pragma warning restore CA2100
+            var pFtsName = ftsCommand.Parameters.Add(new SqliteParameter("@ftsName", string.Empty));
+            var pFtsParentSymbol = ftsCommand.Parameters.Add(new SqliteParameter("@ftsParentSymbol", DBNull.Value));
+            var pFtsSignature = ftsCommand.Parameters.Add(new SqliteParameter("@ftsSignature", string.Empty));
+            var pFtsDocComment = ftsCommand.Parameters.Add(new SqliteParameter("@ftsDocComment", DBNull.Value));
 
             foreach (var symbol in symbols)
             {
@@ -363,8 +409,16 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 pLineEnd.Value = symbol.LineEnd;
                 pVisibility.Value = symbol.Visibility;
                 pDocComment.Value = (object?)symbol.DocComment ?? DBNull.Value;
+                pBodyLineStart.Value = symbol.BodyLineStart.HasValue ? (object)symbol.BodyLineStart.Value : DBNull.Value;
+                pBodyLineEnd.Value = symbol.BodyLineEnd.HasValue ? (object)symbol.BodyLineEnd.Value : DBNull.Value;
 
                 await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+                pFtsName.Value = IdentifierSplitter.Split(symbol.Name);
+                pFtsParentSymbol.Value = (object?)symbol.ParentSymbol ?? DBNull.Value;
+                pFtsSignature.Value = symbol.Signature;
+                pFtsDocComment.Value = (object?)symbol.DocComment ?? DBNull.Value;
+                await ftsCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await transaction.CommitAsync().ConfigureAwait(false);
@@ -383,7 +437,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment
+            SELECT id, file_id, name, kind, signature, parent_symbol, byte_offset, byte_length, line_start, line_end, visibility, doc_comment, body_line_start, body_line_end
             FROM symbols WHERE file_id = @fileId ORDER BY line_start
             """;
 #pragma warning restore CA2100
@@ -407,7 +461,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -415,15 +471,34 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     public async Task DeleteSymbolsByFileAsync(long fileId)
     {
-        using var command = _connection.CreateCommand();
+        var transaction = await _connection.BeginTransactionAsync().ConfigureAwait(false);
+        await using var _ = transaction.ConfigureAwait(false);
 
+        try
+        {
+            using var ftsCommand = _connection.CreateCommand();
+            ftsCommand.Transaction = (SqliteTransaction)transaction;
 #pragma warning disable CA2100
-        command.CommandText = "DELETE FROM symbols WHERE file_id = @fileId";
+            ftsCommand.CommandText = "DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE file_id = @fileId)";
 #pragma warning restore CA2100
+            ftsCommand.Parameters.AddWithValue("@fileId", fileId);
+            await ftsCommand.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-        command.Parameters.AddWithValue("@fileId", fileId);
+            using var command = _connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+#pragma warning disable CA2100
+            command.CommandText = "DELETE FROM symbols WHERE file_id = @fileId";
+#pragma warning restore CA2100
+            command.Parameters.AddWithValue("@fileId", fileId);
+            await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await transaction.CommitAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     // ── Dependencies ────────────────────────────────────────────────────
@@ -448,8 +523,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
             command.CommandText =
                 """
-                INSERT INTO dependencies (file_id, requires_path, resolved_file_id, alias)
-                VALUES (@fileId, @requiresPath, @resolvedFileId, @alias)
+                INSERT INTO dependencies (file_id, requires_path, resolved_file_id, alias, edge_kind)
+                VALUES (@fileId, @requiresPath, @resolvedFileId, @alias, @edgeKind)
                 """;
 #pragma warning restore CA2100
 
@@ -457,6 +532,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             var pRequiresPath = command.Parameters.Add(new SqliteParameter("@requiresPath", ""));
             var pResolvedFileId = command.Parameters.Add(new SqliteParameter("@resolvedFileId", 0L));
             var pAlias = command.Parameters.Add(new SqliteParameter("@alias", ""));
+            var pEdgeKind = command.Parameters.Add(new SqliteParameter("@edgeKind", "imports"));
 
             foreach (var dep in deps)
             {
@@ -464,6 +540,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 pRequiresPath.Value = dep.RequiresPath;
                 pResolvedFileId.Value = dep.ResolvedFileId.HasValue ? dep.ResolvedFileId.Value : DBNull.Value;
                 pAlias.Value = (object?)dep.Alias ?? DBNull.Value;
+                pEdgeKind.Value = dep.EdgeKind;
 
                 await command.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
@@ -484,7 +561,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 #pragma warning disable CA2100
         command.CommandText =
             """
-            SELECT id, file_id, requires_path, resolved_file_id, alias
+            SELECT id, file_id, requires_path, resolved_file_id, alias, edge_kind
             FROM dependencies WHERE file_id = @fileId
             """;
 #pragma warning restore CA2100
@@ -501,7 +578,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt64(1),
                 reader.GetString(2),
                 await reader.IsDBNullAsync(3).ConfigureAwait(false) ? null : reader.GetInt64(3),
-                await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4)));
+                await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4),
+                await reader.IsDBNullAsync(5).ConfigureAwait(false) ? "imports" : reader.GetString(5)));
         }
 
         return results;
@@ -681,7 +759,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
     // ── Search ──────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null)
+    public async Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null, bool fuzzy = false)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(query);
@@ -706,6 +784,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                        s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end,
                        f.relative_path, bm25(symbols_fts) AS rank
                 FROM symbols_fts
                 JOIN symbols s ON s.id = symbols_fts.rowid
@@ -724,6 +803,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                        s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end,
                        f.relative_path, 0.0 AS rank
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
@@ -793,8 +873,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         if (pathFilter is not null)
         {
             // Normalize to OS-native separator to match stored relative_path values
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -814,12 +894,144 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
-            results.Add(new SymbolSearchResult(symbol, reader.GetString(12), reader.GetDouble(13)));
+            results.Add(new SymbolSearchResult(symbol, reader.GetString(14), reader.GetDouble(15)));
         }
 
-        return results;
+        if (!fuzzy || query.Length == 0)
+        {
+            return results;
+        }
+
+        var fuzzyResults = await FuzzySearchAsync(repoId, query, kind, clampedLimit, pathFilter).ConfigureAwait(false);
+        if (fuzzyResults.Count == 0)
+        {
+            return results;
+        }
+
+        var existingIds = new HashSet<long>(results.Select(static r => r.Symbol.Id));
+        var merged = new List<SymbolSearchResult>(results);
+        merged.AddRange(fuzzyResults.Where(r => !existingIds.Contains(r.Symbol.Id)));
+
+        return merged.Count <= clampedLimit ? merged : merged[..clampedLimit];
+    }
+
+    private async Task<IReadOnlyList<SymbolSearchResult>> FuzzySearchAsync(
+        string repoId, string query, string? kind, int limit, string? pathFilter)
+    {
+        var sql = new StringBuilder(
+            """
+            SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end, f.relative_path
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.repo_id = @repoId
+            """);
+
+        if (kind is not null)
+        {
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                sql.Append(" AND s.kind IN (@kind, @kindEnum)");
+            }
+            else
+            {
+                sql.Append(" AND s.kind = @kind");
+            }
+        }
+
+        if (pathFilter is not null)
+        {
+            sql.Append(@" AND f.relative_path LIKE @pathPrefix || '%' ESCAPE '!'");
+        }
+
+        sql.Append(" LIMIT 10000");
+
+#pragma warning disable CA2100 // SQL built from static literals and parameterized placeholders only
+        using var command = _connection.CreateCommand();
+        command.CommandText = sql.ToString();
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+
+        if (kind is not null)
+        {
+            command.Parameters.AddWithValue("@kind", kind);
+            if (string.Equals(kind, nameof(SymbolKind.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                command.Parameters.AddWithValue("@kindEnum", nameof(SymbolKind.Enum));
+            }
+        }
+
+        if (pathFilter is not null)
+        {
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
+        }
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var candidates = new List<(SymbolSearchResult Result, int Distance)>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            var name = reader.GetString(2);
+            var distance = ComputeLevenshteinDistance(query, name);
+            if (distance is > 0 and <= 2)
+            {
+                var symbol = new Symbol(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    name,
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    await reader.IsDBNullAsync(5).ConfigureAwait(false) ? null : reader.GetString(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7),
+                    reader.GetInt32(8),
+                    reader.GetInt32(9),
+                    reader.GetString(10),
+                    await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                    await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                    await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
+
+                candidates.Add((new SymbolSearchResult(symbol, reader.GetString(14), distance), distance));
+            }
+        }
+
+        return candidates
+            .OrderBy(static c => c.Distance)
+            .Take(limit)
+            .Select(static c => c.Result)
+            .ToList();
+    }
+
+    private static int ComputeLevenshteinDistance(string s, string t)
+    {
+        if (s.Length == 0) return t.Length;
+        if (t.Length == 0) return s.Length;
+
+        var prev = new int[t.Length + 1];
+        var curr = new int[t.Length + 1];
+
+        for (var j = 0; j <= t.Length; j++) prev[j] = j;
+
+        for (var i = 1; i <= s.Length; i++)
+        {
+            curr[0] = i;
+            for (var j = 1; j <= t.Length; j++)
+            {
+                var cost = s[i - 1] == t[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
+            }
+
+            (prev, curr) = (curr, prev);
+        }
+
+        return prev[t.Length];
     }
 
     public async Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null)
@@ -873,8 +1085,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -935,8 +1147,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
         if (pathFilter is not null)
         {
-            var normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + Path.DirectorySeparatorChar);
+            var normalizedPrefix = pathFilter.Replace('\\', '/');
+            command.Parameters.AddWithValue("@pathPrefix", normalizedPrefix + '/');
         }
 
         using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
@@ -1026,7 +1238,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             command.CommandText =
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE s.parent_symbol = @parent AND s.name = @child AND f.repo_id = @repoId
@@ -1043,7 +1256,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             command.CommandText =
                 """
                 SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                       s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                       s.body_line_start, s.body_line_end
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE s.name = @name AND f.repo_id = @repoId
@@ -1077,7 +1291,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
         }
 
         return null;
@@ -1094,7 +1310,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name = @name AND f.repo_id = @repoId
@@ -1128,7 +1345,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1153,7 +1372,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.parent_symbol = @parent AND s.name LIKE @childPrefix ESCAPE '!' AND f.repo_id = @repoId
@@ -1184,7 +1404,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1237,7 +1459,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
         command.CommandText =
             $"""
              SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                    s.body_line_start, s.body_line_end
              FROM symbols s
              JOIN files f ON f.id = s.file_id
              WHERE ({conditions}) AND f.repo_id = @repoId
@@ -1263,7 +1486,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1275,15 +1500,18 @@ public sealed class SqliteSymbolStore : ISymbolStore
         ArgumentNullException.ThrowIfNull(parentSymbolName);
 
         using var command = _connection.CreateCommand();
+#pragma warning disable CA2100 // SQL is a static literal, not user input
         command.CommandText =
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
-                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment
+                   s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.parent_symbol = @parent AND f.repo_id = @repoId
             ORDER BY s.line_start
             """;
+#pragma warning restore CA2100
 
         command.Parameters.AddWithValue("@parent", parentSymbolName);
         command.Parameters.AddWithValue("@repoId", repoId);
@@ -1305,7 +1533,9 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11)));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13)));
         }
 
         return results;
@@ -1346,10 +1576,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
         string? normalizedPrefix = null;
         if (pathFilter is not null)
         {
-            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+            normalizedPrefix = pathFilter.Replace('\\', '/');
+            normalizedPrefix = normalizedPrefix.EndsWith('/')
                 ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
+                : normalizedPrefix + '/';
             countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
         }
 
@@ -1363,6 +1593,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end,
                    f.relative_path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
@@ -1410,11 +1641,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
             var key = string.Equals(groupBy, "kind", StringComparison.OrdinalIgnoreCase)
                 ? symbol.Kind
-                : reader.GetString(12);
+                : reader.GetString(14);
 
             if (!symbolsByKey.TryGetValue(key, out var list))
             {
@@ -1491,12 +1724,13 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return new ModuleApi(file, symbols, dependencies);
     }
 
-    public async Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth)
+    public async Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth, string? edgeKind = null)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(direction);
 
         var clampedDepth = Math.Min(Math.Max(depth, 1), 50);
+        var normalizedEdgeKind = edgeKind;
 
         // Load all files for this repo into a lookup
         var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
@@ -1532,7 +1766,8 @@ public sealed class SqliteSymbolStore : ISymbolStore
             frontier.AddRange(allFiles.Select(f => f.Id));
         }
 
-        var isDependencies = string.Equals(direction, "dependencies", StringComparison.OrdinalIgnoreCase);
+        var showDependencies = !string.Equals(direction, "dependents", StringComparison.OrdinalIgnoreCase);
+        var showDependents = !string.Equals(direction, "dependencies", StringComparison.OrdinalIgnoreCase);
 
         for (int level = 0; level < clampedDepth && frontier.Count > 0; level++)
         {
@@ -1552,12 +1787,18 @@ public sealed class SqliteSymbolStore : ISymbolStore
 
                 nodes.Add(currentFile.RelativePath);
 
-                if (isDependencies)
+                if (showDependencies)
                 {
                     var deps = await GetDependenciesByFileAsync(fileId).ConfigureAwait(false);
 
                     foreach (var dep in deps)
                     {
+                        if (normalizedEdgeKind is not null &&
+                            !string.Equals(dep.EdgeKind, normalizedEdgeKind, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         var toPath = dep.RequiresPath;
 
                         if (dep.ResolvedFileId.HasValue && fileById.TryGetValue(dep.ResolvedFileId.Value, out var resolved))
@@ -1571,36 +1812,48 @@ public sealed class SqliteSymbolStore : ISymbolStore
                             nodes.Add(toPath);
                         }
 
-                        edges.Add(new DependencyEdge(currentFile.RelativePath, toPath, dep.Alias));
+                        edges.Add(new DependencyEdge(currentFile.RelativePath, toPath, dep.Alias, dep.EdgeKind));
                     }
                 }
-                else
+
+                if (showDependents)
                 {
-                    // Dependents: find files that depend on the current file
+                    // Dependents: find files that depend on the current file (scoped to this repo)
                     using var command = _connection.CreateCommand();
 
 #pragma warning disable CA2100
                     command.CommandText =
                         """
-                        SELECT d.id, d.file_id, d.requires_path, d.resolved_file_id, d.alias
+                        SELECT d.id, d.file_id, d.requires_path, d.resolved_file_id, d.alias, d.edge_kind
                         FROM dependencies d
+                        JOIN files f2 ON d.file_id = f2.id
                         WHERE d.resolved_file_id = @fileId
+                          AND f2.repo_id = @repoId
                         """;
 #pragma warning restore CA2100
 
                     command.Parameters.AddWithValue("@fileId", fileId);
+                    command.Parameters.AddWithValue("@repoId", repoId);
 
                     using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
 
                     while (await reader.ReadAsync().ConfigureAwait(false))
                     {
+                        var depEdgeKind = await reader.IsDBNullAsync(5).ConfigureAwait(false) ? "imports" : reader.GetString(5);
+
+                        if (normalizedEdgeKind is not null &&
+                            !string.Equals(depEdgeKind, normalizedEdgeKind, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         var depFileId = reader.GetInt64(1);
                         var alias = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? null : reader.GetString(4);
 
                         if (fileById.TryGetValue(depFileId, out var dependentFile))
                         {
                             nodes.Add(dependentFile.RelativePath);
-                            edges.Add(new DependencyEdge(dependentFile.RelativePath, currentFile.RelativePath, alias));
+                            edges.Add(new DependencyEdge(dependentFile.RelativePath, currentFile.RelativePath, alias, depEdgeKind));
                             nextFrontier.Add(depFileId);
                         }
                     }
@@ -1613,6 +1866,151 @@ public sealed class SqliteSymbolStore : ISymbolStore
         return new DependencyGraph(
             nodes.OrderBy(n => n, StringComparer.Ordinal).ToList(),
             edges);
+    }
+
+    public async Task<BlastRadiusResult> GetBlastRadiusAsync(string repoId, string? filePath, string? symbolName, int maxDepth = 5)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var clampedDepth = Math.Clamp(maxDepth, 1, 20);
+
+        long? rootFileId = null;
+
+        if (filePath is not null)
+        {
+            var file = await GetFileByPathAsync(repoId, filePath).ConfigureAwait(false);
+            if (file is null)
+            {
+                return new BlastRadiusResult(false, 0, []);
+            }
+
+            rootFileId = file.Id;
+        }
+        else if (symbolName is not null)
+        {
+            var symbol = await GetSymbolByNameAsync(repoId, symbolName).ConfigureAwait(false);
+            if (symbol is null)
+            {
+                return new BlastRadiusResult(false, 0, []);
+            }
+
+            rootFileId = symbol.FileId;
+        }
+
+        if (rootFileId is null)
+        {
+            return new BlastRadiusResult(false, 0, []);
+        }
+
+        // Load file lookups
+        var allFiles = await GetFilesByRepoAsync(repoId).ConfigureAwait(false);
+        var fileById = allFiles.ToDictionary(f => f.Id);
+
+        // BFS over reverse edges (dependents)
+        var depths = new List<BlastRadiusDepth>();
+        var visited = new HashSet<long> { rootFileId.Value };
+        var frontier = new List<long> { rootFileId.Value };
+
+        for (int level = 1; level <= clampedDepth && frontier.Count > 0; level++)
+        {
+            var nextFrontier = new List<long>();
+            var levelFiles = new List<string>();
+
+            foreach (var fid in frontier)
+            {
+                using var command = _connection.CreateCommand();
+#pragma warning disable CA2100
+                command.CommandText =
+                    """
+                    SELECT d.file_id FROM dependencies d
+                    JOIN files f ON d.file_id = f.id
+                    WHERE d.resolved_file_id = @fileId
+                      AND f.repo_id = @repoId
+                    """;
+#pragma warning restore CA2100
+                command.Parameters.AddWithValue("@fileId", fid);
+                command.Parameters.AddWithValue("@repoId", repoId);
+
+                using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    var depFileId = reader.GetInt64(0);
+                    if (visited.Add(depFileId) && fileById.TryGetValue(depFileId, out var depFile))
+                    {
+                        levelFiles.Add(depFile.RelativePath);
+                        nextFrontier.Add(depFileId);
+                    }
+                }
+            }
+
+            if (levelFiles.Count > 0)
+            {
+                depths.Add(new BlastRadiusDepth(level, levelFiles.Order(StringComparer.Ordinal).ToList()));
+            }
+
+            frontier = nextFrontier;
+        }
+
+        var totalAffected = depths.Sum(d => d.Files.Count);
+        return new BlastRadiusResult(true, totalAffected, depths);
+    }
+
+    public async Task<IReadOnlyList<SymbolSummary>> FindUnusedSymbolsAsync(string repoId, int limit = 100)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var clampedLimit = Math.Clamp(limit, 1, 1000);
+
+        // Best-effort: public symbols with no incoming dependency edges and not excluded by heuristics.
+        // Excludes: private symbols, test files (*Test*, *Spec*, *Fixture*), Main entry point,
+        // HTTP controller action attributes, module/constant/namespace kinds.
+        using var command = _connection.CreateCommand();
+
+#pragma warning disable CA2100
+        command.CommandText =
+            """
+            SELECT s.name, s.kind, s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.repo_id = @repoId
+              AND s.visibility = 'Public'
+              AND s.kind NOT IN ('Module', 'Constant', 'Namespace', 'ConfigKey', 'Export')
+              AND f.relative_path NOT LIKE '%Test%'
+              AND f.relative_path NOT LIKE '%Spec%'
+              AND f.relative_path NOT LIKE '%Fixture%'
+              AND s.name != 'Main'
+              AND s.signature NOT LIKE '%[HttpGet]%'
+              AND s.signature NOT LIKE '%[HttpPost]%'
+              AND s.signature NOT LIKE '%[HttpPut]%'
+              AND s.signature NOT LIKE '%[HttpDelete]%'
+              AND s.signature NOT LIKE '%[Route]%'
+              AND s.signature NOT LIKE '%[ApiController]%'
+              AND NOT EXISTS (
+                  SELECT 1 FROM dependencies d
+                  JOIN files f2 ON d.file_id = f2.id
+                  WHERE f2.repo_id = @repoId
+                    AND d.resolved_file_id = f.id
+              )
+            ORDER BY s.name
+            LIMIT @limit
+            """;
+#pragma warning restore CA2100
+
+        command.Parameters.AddWithValue("@repoId", repoId);
+        command.Parameters.AddWithValue("@limit", clampedLimit);
+
+        using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+        var results = new List<SymbolSummary>();
+
+        while (await reader.ReadAsync().ConfigureAwait(false))
+        {
+            results.Add(new SymbolSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2)));
+        }
+
+        return results;
     }
 
     public async Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter)
@@ -1853,10 +2251,10 @@ public sealed class SqliteSymbolStore : ISymbolStore
         string? normalizedPrefix = null;
         if (pathFilter is not null)
         {
-            normalizedPrefix = pathFilter.Replace('/', Path.DirectorySeparatorChar);
-            normalizedPrefix = normalizedPrefix.EndsWith(Path.DirectorySeparatorChar)
+            normalizedPrefix = pathFilter.Replace('\\', '/');
+            normalizedPrefix = normalizedPrefix.EndsWith('/')
                 ? normalizedPrefix
-                : normalizedPrefix + Path.DirectorySeparatorChar;
+                : normalizedPrefix + '/';
             countCommand.Parameters.AddWithValue("@pathPrefix", normalizedPrefix);
         }
 
@@ -1876,6 +2274,7 @@ public sealed class SqliteSymbolStore : ISymbolStore
             """
             SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.parent_symbol,
                    s.byte_offset, s.byte_length, s.line_start, s.line_end, s.visibility, s.doc_comment,
+                   s.body_line_start, s.body_line_end,
                    f.relative_path
             FROM symbols_fts
             JOIN symbols s ON s.id = symbols_fts.rowid
@@ -1921,9 +2320,11 @@ public sealed class SqliteSymbolStore : ISymbolStore
                 reader.GetInt32(8),
                 reader.GetInt32(9),
                 reader.GetString(10),
-                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11));
+                await reader.IsDBNullAsync(11).ConfigureAwait(false) ? null : reader.GetString(11),
+                await reader.IsDBNullAsync(12).ConfigureAwait(false) ? (int?)null : reader.GetInt32(12),
+                await reader.IsDBNullAsync(13).ConfigureAwait(false) ? (int?)null : reader.GetInt32(13));
 
-            var filePath = reader.GetString(12);
+            var filePath = reader.GetString(14);
 
             if (!symbolsByFile.TryGetValue(filePath, out var list))
             {

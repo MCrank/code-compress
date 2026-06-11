@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
-using CodeCompress.Core.Diagnostics;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Parsers;
 using CodeCompress.Core.Storage;
@@ -112,7 +111,7 @@ public sealed partial class IndexEngine : IIndexEngine
 
         foreach (var (absPath, hash) in currentAbsoluteHashes)
         {
-            var relPath = Path.GetRelativePath(canonicalRoot, absPath);
+            var relPath = Path.GetRelativePath(canonicalRoot, absPath).Replace('\\', '/');
             currentHashes[relPath] = hash;
             absoluteByRelative[relPath] = absPath;
         }
@@ -185,9 +184,6 @@ public sealed partial class IndexEngine : IIndexEngine
                 {
                     LogParseWarning(ex, relPath);
                     parseFailures.Add(new ParseFailure(relPath, ex.GetType().Name));
-
-                    var codeCompressDir = Path.Combine(canonicalRoot, ".code-compress");
-                    DiagnosticLog.WriteWarning(codeCompressDir, "IndexEngine", $"Failed to parse file: {relPath}", ex);
                 }
             }).ConfigureAwait(false);
 
@@ -357,7 +353,7 @@ public sealed partial class IndexEngine : IIndexEngine
             IgnoreInaccessible = true,
         }))
         {
-            var relPath = Path.GetRelativePath(canonicalRoot, absPath);
+            var relPath = Path.GetRelativePath(canonicalRoot, absPath).Replace('\\', '/');
 
             // Skip default excluded directories
             if (IsInExcludedDirectory(relPath, defaultExcludeSet))
@@ -476,7 +472,9 @@ public sealed partial class IndexEngine : IIndexEngine
                 s.LineStart,
                 s.LineEnd,
                 s.Visibility.ToString(),
-                s.DocComment));
+                s.DocComment,
+                s.BodyLineStart,
+                s.BodyLineEnd));
         }
 
         return symbols;
@@ -488,11 +486,20 @@ public sealed partial class IndexEngine : IIndexEngine
 
         foreach (var d in infos)
         {
-            deps.Add(new Dependency(0, fileId, d.RequirePath, null, d.Alias));
+            deps.Add(new Dependency(0, fileId, d.RequirePath, null, d.Alias, EdgeKindToString(d.EdgeKind)));
         }
 
         return deps;
     }
+
+    private static string EdgeKindToString(EdgeKind kind) => kind switch
+    {
+        EdgeKind.Calls => "calls",
+        EdgeKind.Implements => "implements",
+        EdgeKind.Inherits => "inherits",
+        EdgeKind.References => "references",
+        _ => "imports",
+    };
 
     public static string ComputeRepoId(string canonicalRoot)
     {

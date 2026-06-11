@@ -7,6 +7,7 @@ public interface ISymbolStore
     // Repository
     public Task UpsertRepositoryAsync(Repository repo);
     public Task<Repository?> GetRepositoryAsync(string repoId);
+    public Task<IReadOnlyList<Repository>> GetAllRepositoriesAsync();
     public Task DeleteRepositoryAsync(string repoId);
 
     // Files
@@ -37,7 +38,7 @@ public interface ISymbolStore
     public Task DeleteFileContentAsync(string relativePath);
 
     // Search
-    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null);
+    public Task<IReadOnlyList<SymbolSearchResult>> SearchSymbolsAsync(string repoId, string query, string? kind, int limit, string? pathFilter = null, string? nameLikePattern = null, bool fuzzy = false);
     public Task<IReadOnlyList<TextSearchResult>> SearchTextAsync(string repoId, string query, string? glob, int limit, string? pathFilter = null);
     public Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(string repoId, string symbolName, string projectRoot, int limit, string? pathFilter = null);
 
@@ -51,9 +52,11 @@ public interface ISymbolStore
     // Aggregation
     public Task<ProjectOutline> GetProjectOutlineAsync(string repoId, bool includePrivate, string groupBy, int maxDepth, string? pathFilter = null, int offset = 0, int limit = 0);
     public Task<ModuleApi> GetModuleApiAsync(string repoId, string filePath);
-    public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth);
+    public Task<DependencyGraph> GetDependencyGraphAsync(string repoId, string? rootFile, string direction, int depth, string? edgeKind = null);
     public Task<ProjectDependencyResult> GetProjectDependencyGraphAsync(string repoId, string? projectFilter);
     public Task<ChangedFilesResult> GetChangedFilesAsync(string repoId, long snapshotId);
+    public Task<BlastRadiusResult> GetBlastRadiusAsync(string repoId, string? filePath, string? symbolName, int maxDepth = 5);
+    public Task<IReadOnlyList<SymbolSummary>> FindUnusedSymbolsAsync(string repoId, int limit = 100);
 
     // Topic outline
     public Task<ProjectOutline> SearchTopicOutlineAsync(string repoId, string query, int limit, string? pathFilter = null);
