@@ -1,4 +1,3 @@
-using System.Text.Json;
 using CodeCompress.Server.Tools;
 using Microsoft.Extensions.Hosting;
 using NSubstitute;
@@ -15,10 +14,8 @@ internal sealed class ServerControlToolsTests
 
         var result = await tools.StopServer().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("message").GetString()).IsNotNull();
+        await Assert.That(result.Success).IsTrue();
+        await Assert.That(result.Message).IsNotNull();
     }
 
     [Test]
@@ -44,8 +41,6 @@ internal sealed class ServerControlToolsTests
 
         var result = await tools.StopServer().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var message = doc.RootElement.GetProperty("message").GetString()!;
-        await Assert.That(message).Contains("restart");
+        await Assert.That(result.Message).Contains("restart");
     }
 }

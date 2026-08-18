@@ -59,6 +59,7 @@ dotnet run --project src/CodeCompress.Cli
 - **GitIgnore Filter** — `IGitIgnoreFilter` / `GitIgnoreFilter` — filters discovered paths against `.gitignore` rules before indexing
 - **Project Root Resolver** — `IProjectRootResolver` / `ProjectRootResolver` — walks up the directory tree to find the `.git` root
 - **MCP Server Host** — `GenericHost` + `ModelContextProtocol` SDK, stdio transport
+- **MCP Tasks** — `index_project` (5–120s on first run) supports `ToolTaskSupport.Optional` via the `ModelContextProtocol.Extensions.Tasks` package, backed by an `InMemoryMcpTaskStore`. `TaskExecutionModeSelector` (in `Server/`) is the per-call routing function passed to `.WithTasks(store, options => options.ExecutionModeSelector = ...)` in `Program.cs` — it is the ONLY per-tool task-support decision point; no `[McpServerTool]` attribute change or move to programmatic registration was needed (`WithToolsFromAssembly()` is untouched). Every other tool is `Synchronous`.
 - **DI Registration** — `ServiceCollectionExtensions.AddCodeCompressCore()` registers all Core services
 
 ### Data Flow
@@ -222,8 +223,9 @@ Enforced via `.editorconfig`:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `ModelContextProtocol` | 1.3.0 | MCP SDK — server hosting, tool/prompt registration |
-| `Microsoft.Data.Sqlite` | 10.0.8 | SQLite access with FTS5 |
+| `ModelContextProtocol` | 2.2.0 | MCP SDK — server hosting, tool/prompt registration (spec revision 2026-07-28; stdio transport negotiates 2025-11-25) |
+| `ModelContextProtocol.Extensions.Tasks` | 2.2.0 | MCP Tasks extension (`io.modelcontextprotocol/tasks`) — `index_project` is `ToolTaskSupport.Optional`; every other tool is synchronous |
+| `Microsoft.Data.Sqlite` | 10.0.11 | SQLite access with FTS5 |
 | `Microsoft.Extensions.FileSystemGlobbing` | 10.0.8 | Glob pattern matching for file discovery |
 | `Microsoft.Extensions.Hosting` | 10.0.8 | Generic host for DI, logging |
 | `TreeSitter.DotNet` | 1.3.0 | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |

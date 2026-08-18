@@ -1,4 +1,3 @@
-using System.Text.Json;
 using CodeCompress.Core.Registry;
 using CodeCompress.Server.Tools;
 using NSubstitute;
@@ -24,9 +23,7 @@ internal sealed class RegistryToolsTests
 
         var result = await _tools.ListRepos().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.ValueKind).IsEqualTo(JsonValueKind.Array);
-        await Assert.That(doc.RootElement.GetArrayLength()).IsEqualTo(0);
+        await Assert.That(result.Repos).Count().IsEqualTo(0);
     }
 
     [Test]
@@ -41,8 +38,7 @@ internal sealed class RegistryToolsTests
 
         var result = await _tools.ListRepos().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetArrayLength()).IsEqualTo(2);
+        await Assert.That(result.Repos).Count().IsEqualTo(2);
     }
 
     [Test]
@@ -57,13 +53,12 @@ internal sealed class RegistryToolsTests
 
         var result = await _tools.ListRepos().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var item = doc.RootElement[0];
-        await Assert.That(item.GetProperty("project_root").GetString()).IsEqualTo("/home/user/my-project");
-        await Assert.That(item.GetProperty("display_name").GetString()).IsEqualTo("my-project");
-        await Assert.That(item.GetProperty("file_count").GetInt32()).IsEqualTo(7);
-        await Assert.That(item.GetProperty("symbol_count").GetInt32()).IsEqualTo(99);
-        await Assert.That(item.GetProperty("status").GetString()).IsEqualTo("healthy");
+        var item = result.Repos[0];
+        await Assert.That(item.ProjectRoot).IsEqualTo("/home/user/my-project");
+        await Assert.That(item.DisplayName).IsEqualTo("my-project");
+        await Assert.That(item.FileCount).IsEqualTo(7);
+        await Assert.That(item.SymbolCount).IsEqualTo(99);
+        await Assert.That(item.Status).IsEqualTo("healthy");
     }
 
     [Test]
@@ -77,8 +72,6 @@ internal sealed class RegistryToolsTests
 
         var result = await _tools.ListRepos().ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var item = doc.RootElement[0];
-        await Assert.That(item.GetProperty("status").GetString()).IsEqualTo("error");
+        await Assert.That(result.Repos[0].Status).IsEqualTo("error");
     }
 }

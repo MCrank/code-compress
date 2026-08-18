@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-08-18
+
+First stable release — full compliance with MCP specification revision 2026-07-28 and a schema-validated tool surface across all 22 tools.
+
+### Added
+- **Tool annotations** — all 22 tools now declare accurate `ReadOnly`/`Destructive`/`Idempotent`/`OpenWorld`/`Title` hints instead of the MCP SDK's `Destructive=true`/`OpenWorld=true` defaults, so hosts no longer prompt for confirmation before harmless read-only queries (#207)
+- **Cache hints (SEP-2549)** — `tools/list` and `prompts/list` advertise a 1-hour `Private`-scope TTL and return both listings in deterministic (alphabetical) order across server processes, so clients can cache them instead of re-fetching on every connection (#208)
+- **Structured content & output schemas** — the 15 tools that return JSON now declare `UseStructuredContent = true` with a typed, schema-validated response (`CodeCompress.Core/Contracts`) instead of a hand-serialized JSON string; the CLI's `--json` output reuses the same record types so it cannot drift from `structuredContent` (#209)
+- **`index_project` as an MCP task** — supports the Tasks extension (`io.modelcontextprotocol/tasks`, SEP-2663) as `ToolTaskSupport.Optional`: a client that declares the extension and invokes it via the task-aware call path gets a task handle back immediately instead of blocking for the 5–120s a first-time index can take, then polls to completion. Clients that don't use the extension are unaffected — an ordinary call still blocks and returns the result directly (#210)
+
+### Changed
+- **BREAKING:** `ModelContextProtocol` bumped from 1.4.0 to 2.2.0, adopting MCP specification revision **2026-07-28**. Client support for protocol revisions prior to 2025-11-25 is dropped. CodeCompress remains stdio-only, so the stateless-HTTP-oriented breaking changes in this spec revision (`Mcp-Session-Id` removal, `subscriptions/listen`, SSE resumability removal, OAuth hardening) do not affect it; no Roots, Sampling, or MCP Logging APIs were in use, so none of the SEP-2577 deprecations apply (#206)
+- **Package bump** — `Microsoft.Data.Sqlite` 10.0.8 → 10.0.11, resolving a high-severity transitive advisory in `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 (GHSA-2m69-gcr7-jv3q) that otherwise fails the `TreatWarningsAsErrors` build (#206)
+- **`find_unused_symbols`/`list_repos`** now return `{results: [...]}`/`{repos: [...]}` instead of a bare JSON array, avoiding an MCP SDK legacy-wire array-wrapping inconsistency across client protocol versions; the CLI's `unused-symbols`/`list`/`find-references` commands match (#209)
+- **CLI `get-symbol --json`** now returns actual `source_code` (previously it only returned the raw internal DB record with no source at all) — matches the MCP `get_symbol` tool; `blast-radius` now reports `NOT_FOUND` instead of silently showing "0 files affected" for a nonexistent file/symbol (#209)
+
 ## [0.15.0] - 2026-06-10
 
 ### Added

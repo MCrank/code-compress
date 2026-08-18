@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using CodeCompress.Cli;
 using CodeCompress.Core;
+using CodeCompress.Core.Contracts;
 using CodeCompress.Core.Indexing;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Registry;
@@ -25,6 +26,7 @@ var jsonSerializerOptions = new JsonSerializerOptions
 {
     PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     WriteIndented = true,
+    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
 };
 
 // ── Global Options ──────────────────────────────────────────
@@ -78,6 +80,12 @@ indexCommand.SetAction(async parseResult =>
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
+        // Progress feedback on stderr only -- stdout stays a single machine-readable document for --json.
+        // MCP's index_project can run as a background task an agent polls; the CLI has no equivalent
+        // polling loop (it calls IndexEngine in-process), so it surfaces an upfront notice instead.
+        await Console.Error.WriteLineAsync(
+            "Indexing... (first run can take up to 2 minutes on large codebases; incremental updates are usually <1s)").ConfigureAwait(false);
+
         var result = await scope.Engine.IndexProjectAsync(
             scope.ProjectRoot,
             language,
@@ -86,7 +94,18 @@ indexCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { result.RepoId, ProjectRoot = scope.ProjectRoot, result.FilesIndexed, result.FilesUnchanged, result.FilesErrored, result.TotalFiles, result.SymbolsFound, result.DurationMs },
+                new IndexProjectResult
+                {
+                    RepoId = result.RepoId,
+                    ProjectRoot = scope.ProjectRoot,
+                    FilesIndexed = result.FilesIndexed,
+                    FilesUnchanged = result.FilesUnchanged,
+                    FilesErrored = result.FilesErrored,
+                    TotalFiles = result.TotalFiles,
+                    SymbolsFound = result.SymbolsFound,
+                    DurationMs = result.DurationMs,
+                    ParseErrors = result.ParseFailures?.Select(f => new ParseFailureContract { FilePath = f.FilePath, Reason = f.Reason }).ToList(),
+                },
                 jsonSerializerOptions));
         }
         else
@@ -214,9 +233,10 @@ getSymbolCommand.SetAction(async parseResult =>
             }
             else if (candidates.Count > 1)
             {
-                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
-                await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                    $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList();
+                await WriteMultiCandidateErrorAsync(
+                    "Multiple symbols match this name", qualifiedNames, json, jsonSerializerOptions,
+                    new GetSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                 return;
             }
             else
@@ -227,15 +247,49 @@ getSymbolCommand.SetAction(async parseResult =>
             }
         }
 
+        var files = await scope.Store.GetFilesByRepoAsync(scope.RepoId).ConfigureAwait(false);
+        var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
+        if (file is null)
+        {
+            await WriteErrorAsync("File not found for symbol", "FILE_NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        var pathValidator = provider.GetRequiredService<IPathValidator>();
+        string resolvedPath;
+        try
+        {
+            resolvedPath = pathValidator.ValidatePath(Path.Combine(path, file.RelativePath), path);
+        }
+        catch (ArgumentException)
+        {
+            await WriteErrorAsync("Path validation failed", "INVALID_PATH", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
+        var sourceCode = await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
+
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(symbol, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new GetSymbolResult
+                {
+                    Name = symbol.Name,
+                    Kind = symbol.Kind,
+                    Parent = symbol.ParentSymbol,
+                    File = file.RelativePath,
+                    LineStart = symbol.LineStart,
+                    LineEnd = symbol.LineEnd,
+                    Signature = symbol.Signature,
+                    SourceCode = sourceCode,
+                },
+                jsonSerializerOptions));
         }
         else
         {
             Console.WriteLine($"// {symbol.Name} ({symbol.Kind}, {symbol.Visibility})");
-            Console.WriteLine($"// Line {symbol.LineStart}-{symbol.LineEnd}");
-            Console.WriteLine(symbol.Signature);
+            Console.WriteLine($"// {file.RelativePath}:{symbol.LineStart}-{symbol.LineEnd}");
+            Console.WriteLine(sourceCode);
         }
     }
 });
@@ -304,7 +358,25 @@ searchCommand.SetAction(async parseResult =>
 
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchSymbolsResult
+                {
+                    Query = query,
+                    TotalMatches = results.Count,
+                    FallbackUsed = fallbackUsed ? true : null,
+                    Results = results.Select((r, index) => new SymbolSearchItemContract
+                    {
+                        Name = r.Symbol.Name,
+                        Kind = r.Symbol.Kind,
+                        Parent = r.Symbol.ParentSymbol,
+                        File = r.FilePath,
+                        Line = r.Symbol.LineStart,
+                        Signature = r.Symbol.Signature,
+                        Snippet = r.Symbol.DocComment ?? string.Empty,
+                        Rank = index + 1,
+                    }).ToList(),
+                },
+                jsonSerializerOptions));
         }
         else
         {
@@ -398,7 +470,19 @@ searchTextCommand.SetAction(async parseResult =>
 
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new SearchTextResult
+                {
+                    Query = sanitizedQuery,
+                    TotalMatches = results.Count,
+                    Results = results.Select((r, index) => new TextSearchItemContract
+                    {
+                        FilePath = r.FilePath,
+                        Snippet = r.Snippet,
+                        Rank = index + 1,
+                    }).ToList(),
+                },
+                jsonSerializerOptions));
         }
         else
         {
@@ -518,6 +602,8 @@ snapshotCommand.SetAction(async parseResult =>
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
+        var repo = await scope.Store.GetRepositoryAsync(scope.RepoId).ConfigureAwait(false);
+
         var snapshotRecord = new IndexSnapshot(
             0, scope.RepoId, label, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), string.Empty);
 
@@ -526,7 +612,13 @@ snapshotCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { SnapshotId = snapshotId, Label = label },
+                new SnapshotCreateResult
+                {
+                    SnapshotId = snapshotId,
+                    Label = label,
+                    FileCount = repo?.FileCount ?? 0,
+                    SymbolCount = repo?.SymbolCount ?? 0,
+                },
                 jsonSerializerOptions));
         }
         else
@@ -659,9 +751,25 @@ blastRadiusCommand.SetAction(async parseResult =>
     {
         var result = await scope.Store.GetBlastRadiusAsync(scope.RepoId, filePath, symbolName, maxDepth).ConfigureAwait(false);
 
+        if (!result.Found)
+        {
+            await WriteErrorAsync(
+                filePath is not null
+                    ? "File not found in index — verify the relative path and run index_project"
+                    : "Symbol not found in index — use search_symbols to find the correct name",
+                "NOT_FOUND", json, jsonSerializerOptions).ConfigureAwait(false);
+            return;
+        }
+
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(result, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new BlastRadiusToolResult
+                {
+                    TotalAffected = result.TotalAffected,
+                    Depths = result.Depths.Select(d => new BlastRadiusDepthContract { Depth = d.Depth, Files = d.Files }).ToList(),
+                },
+                jsonSerializerOptions));
         }
         else
         {
@@ -702,7 +810,12 @@ unusedCommand.SetAction(async parseResult =>
 
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new FindUnusedSymbolsResult
+                {
+                    Results = results.Select(s => new UnusedSymbolContract { Name = s.Name, Kind = s.Kind, Signature = s.Signature }).ToList(),
+                },
+                jsonSerializerOptions));
         }
         else
         {
@@ -747,7 +860,11 @@ invalidateCacheCommand.SetAction(async parseResult =>
     if (json)
     {
         Console.WriteLine(JsonSerializer.Serialize(
-            new { Status = "invalidated", Path = path },
+            new InvalidateCacheResult
+            {
+                Success = true,
+                Message = "Cache invalidated. Next index operation will perform a full reparse.",
+            },
             jsonSerializerOptions));
     }
     else
@@ -774,7 +891,20 @@ listCommand.SetAction(async parseResult =>
 
     if (json)
     {
-        Console.WriteLine(JsonSerializer.Serialize(repos, jsonSerializerOptions));
+        Console.WriteLine(JsonSerializer.Serialize(
+            new ListReposResult
+            {
+                Repos = repos.Select(r => new RepoEntryContract
+                {
+                    ProjectRoot = r.ProjectRoot,
+                    DisplayName = r.DisplayName,
+                    FileCount = r.FileCount,
+                    SymbolCount = r.SymbolCount,
+                    LastIndexed = r.LastIndexed,
+                    Status = r.LastError is null ? "healthy" : "error",
+                }).ToList(),
+            },
+            jsonSerializerOptions));
         return;
     }
 
@@ -845,14 +975,19 @@ getModuleApiCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new
+                new GetModuleApiResult
                 {
                     Module = moduleApi.File.RelativePath,
-                    Symbols = moduleApi.Symbols.Select(s => new
+                    Symbols = moduleApi.Symbols.Select(s => new ModuleSymbolContract
                     {
-                        s.Name, s.Kind, Parent = s.ParentSymbol, s.Signature, Line = s.LineStart, s.DocComment,
-                    }),
-                    Dependencies = moduleApi.Dependencies.Select(d => new { d.RequiresPath, d.Alias }),
+                        Name = s.Name,
+                        Kind = s.Kind,
+                        Parent = s.ParentSymbol,
+                        Signature = s.Signature,
+                        Line = s.LineStart,
+                        DocComment = s.DocComment,
+                    }).ToList(),
+                    Dependencies = moduleApi.Dependencies.Select(d => new ModuleDependencyContract { RequiresPath = d.RequiresPath, Alias = d.Alias }).ToList(),
                 },
                 jsonSerializerOptions));
         }
@@ -929,9 +1064,10 @@ expandSymbolCommand.SetAction(async parseResult =>
                 }
                 else if (prefixCandidates.Count > 1)
                 {
-                    var qualifiedNames = prefixCandidates.Select(c => $"{parent}:{c.Name}");
-                    await WriteErrorAsync("Multiple symbols match this prefix", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                        $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                    var qualifiedNames = prefixCandidates.Select(c => $"{parent}:{c.Name}").ToList();
+                    await WriteMultiCandidateErrorAsync(
+                        "Multiple symbols match this prefix", qualifiedNames, json, jsonSerializerOptions,
+                        new ExpandSymbolResult { Error = "Multiple symbols match this prefix", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                     return;
                 }
             }
@@ -946,9 +1082,10 @@ expandSymbolCommand.SetAction(async parseResult =>
                 }
                 else if (candidates.Count > 1)
                 {
-                    var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name);
-                    await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                        $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+                    var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList();
+                    await WriteMultiCandidateErrorAsync(
+                        "Multiple symbols match this name", qualifiedNames, json, jsonSerializerOptions,
+                        new ExpandSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                     return;
                 }
                 else
@@ -977,11 +1114,17 @@ expandSymbolCommand.SetAction(async parseResult =>
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new
+                new ExpandSymbolResult
                 {
-                    symbol.Name, symbol.Kind, Parent = symbol.ParentSymbol,
-                    File = file.RelativePath, symbol.LineStart, symbol.LineEnd,
-                    symbol.Signature, symbol.DocComment, SourceCode = sourceCode,
+                    Name = symbol.Name,
+                    Kind = symbol.Kind,
+                    Parent = symbol.ParentSymbol,
+                    File = file.RelativePath,
+                    LineStart = symbol.LineStart,
+                    LineEnd = symbol.LineEnd,
+                    Signature = symbol.Signature,
+                    DocComment = symbol.DocComment,
+                    SourceCode = sourceCode,
                 },
                 jsonSerializerOptions));
         }
@@ -1126,7 +1269,19 @@ hotPathCommand.SetAction(async parseResult =>
             var matchObjects = BuildHotPathMatchObjects(rawMatches, rawLines, symbol, scanLineStart, scanLineEnd, contextLines);
             var returnedLines = matchObjects.Sum(m => m.Context.Count);
             Console.WriteLine(JsonSerializer.Serialize(
-                new { Symbol = symbol.Name, File = file.RelativePath, TotalLines = totalLines, ReturnedLines = returnedLines, Matches = matchObjects },
+                new GetHotPathResult
+                {
+                    Symbol = symbol.Name,
+                    File = file.RelativePath,
+                    TotalLines = totalLines,
+                    ReturnedLines = returnedLines,
+                    Matches = matchObjects.Select(m => new HotPathMatchContract
+                    {
+                        Identifier = m.Identifier,
+                        Line = m.Line,
+                        Context = m.Context.Select(c => new HotPathContextLineContract { LineNumber = c.LineNumber, Text = c.Text }).ToList(),
+                    }).ToList(),
+                },
                 jsonSerializerOptions));
         }
         else
@@ -1220,7 +1375,7 @@ getSymbolsCommand.SetAction(async parseResult =>
         }
 
         var pathValidator = provider.GetRequiredService<IPathValidator>();
-        var results = new List<object>();
+        var results = new List<SymbolItemContract>();
 
         foreach (var s in foundSymbols)
         {
@@ -1240,23 +1395,28 @@ getSymbolsCommand.SetAction(async parseResult =>
             }
 
             var sourceCode = await ReadSourceCodeAsync(resolvedPath, s.ByteOffset, s.ByteLength).ConfigureAwait(false);
-            results.Add(new
+            results.Add(new SymbolItemContract
             {
-                s.Name, s.Kind, Parent = s.ParentSymbol,
-                File = file.RelativePath, s.LineStart, s.LineEnd,
-                s.Signature, SourceCode = sourceCode,
+                Name = s.Name,
+                Kind = s.Kind,
+                Parent = s.ParentSymbol,
+                File = file.RelativePath,
+                LineStart = s.LineStart,
+                LineEnd = s.LineEnd,
+                Signature = s.Signature,
+                SourceCode = sourceCode,
             });
         }
 
         var errors = symbolNames
             .Where(n => !foundNames.Contains(n))
-            .Select(n => new { Symbol = n, Error = "Symbol not found" })
+            .Select(n => new SymbolErrorContract { Symbol = SanitizeSymbolName(n), Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false })
             .ToList();
 
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new { Results = results, Errors = errors },
+                new GetSymbolsResult { Results = results, Errors = errors },
                 jsonSerializerOptions));
         }
         else
@@ -1455,7 +1615,20 @@ findRefsCommand.SetAction(async parseResult =>
 
         if (json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(results, jsonSerializerOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new FindReferencesResult
+                {
+                    Symbol = SanitizeSymbolName(symbolName),
+                    TotalMatches = results.Count,
+                    Results = results.Select((r, index) => new ReferenceItemContract
+                    {
+                        File = r.FilePath,
+                        Line = r.Line,
+                        ContextSnippet = r.ContextSnippet,
+                        Rank = index + 1,
+                    }).ToList(),
+                },
+                jsonSerializerOptions));
         }
         else
         {
@@ -1834,13 +2007,27 @@ agentInstructionsCommand.SetAction(_ =>
 
         Add `--json` to any command for machine-readable output (snake_case keys, indented).
 
-        Key response shapes:
-        - index: {repo_id, project_root, files_indexed, files_unchanged, symbols_found, duration_ms}
-        - assemble: {overview, symbols: [{name, kind, source}], token_estimate}
-        - search: [{name, kind, parent, file, line, signature, snippet, rank}]
-        - get-symbol: {id, file_id, name, kind, signature, parent_symbol, line_start, line_end, ...}
-        - search-text: [{file_path, snippet, rank}]
-        - find-references: [{file_path, line, context_snippet, rank}]
+        Key response shapes (identical field names to the MCP server's structuredContent —
+        both surfaces share the same CodeCompress.Core.Contracts record types):
+        - index: {repo_id, project_root, files_indexed, files_unchanged, files_errored, total_files,
+          symbols_found, duration_ms, parse_errors: [{file_path, reason}] | null}
+        - get-symbol / expand-symbol: {name, kind, parent, file, line_start, line_end, signature,
+          source_code} (expand-symbol also includes doc_comment)
+        - get-symbols: {results: [{name, kind, parent, file, line_start, line_end, signature,
+          source_code}], errors: [{symbol, error, code, retryable}]}
+        - search: {query, total_matches, fallback_used, results: [{name, kind, parent, file, line,
+          signature, snippet, rank}]}
+        - search-text: {query, total_matches, results: [{file_path, snippet, rank}]}
+        - find-references: {symbol, total_matches, results: [{file, line, context_snippet, rank}]}
+        - get-module-api: {module, symbols: [{name, kind, parent, signature, line, doc_comment}],
+          dependencies: [{requires_path, alias}]}
+        - get-hot-path: {symbol, file, total_lines, returned_lines,
+          matches: [{identifier, line, context: [{line_number, text}]}]}
+        - blast-radius: {total_affected, depths: [{depth, files}]}
+        - unused-symbols: {results: [{name, kind, signature}]}
+        - list: {repos: [{project_root, display_name, file_count, symbol_count, last_indexed, status}]}
+        - snapshot: {snapshot_id, label, file_count, symbol_count}
+        - invalidate-cache: {success, message}
 
         ## Error Handling
 
@@ -1948,6 +2135,24 @@ static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSe
     }
 }
 
+// Shared by get-symbol/expand-symbol's multi-candidate SYMBOL_NOT_FOUND branches: in --json mode
+// the candidates go into a proper array field on the tool's own typed result; in text mode they're
+// flattened into WriteErrorAsync's guidance string.
+static async Task WriteMultiCandidateErrorAsync<TResult>(
+    string errorMessage, IReadOnlyList<string> qualifiedNames, bool json, JsonSerializerOptions jsonOptions, TResult structuredResult)
+{
+    Environment.ExitCode = 1;
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(structuredResult, jsonOptions));
+    }
+    else
+    {
+        await WriteErrorAsync(errorMessage, "SYMBOL_NOT_FOUND", json, jsonOptions,
+            $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
+    }
+}
+
 static List<(string Identifier, int Line, List<(int LineNumber, string Text)> Context)> BuildHotPathMatchObjects(
     List<(string Identifier, int LineNumber)> rawMatches,
     string[] rawLines,
@@ -2005,6 +2210,24 @@ static List<(string Identifier, int Line, List<(int LineNumber, string Text)> Co
     }
 
     return result;
+}
+
+static string SanitizeSymbolName(string name)
+{
+    if (string.IsNullOrEmpty(name))
+    {
+        return string.Empty;
+    }
+
+    // Allow only alphanumeric, colon, underscore, dot, hyphen
+    var sb = new StringBuilder(name.Length);
+    foreach (var c in name.Where(c => char.IsLetterOrDigit(c) || c is ':' or '_' or '.' or '-'))
+    {
+        sb.Append(c);
+    }
+
+    var result = sb.ToString();
+    return result.Length > 256 ? result[..256] : result;
 }
 
 static async Task<string> ReadSourceCodeAsync(string filePath, int byteOffset, int byteLength)

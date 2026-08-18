@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using CodeCompress.Core.Contracts;
 using CodeCompress.Core.Models;
 using CodeCompress.Core.Storage;
 using CodeCompress.Core.Validation;
@@ -44,7 +44,7 @@ internal sealed class QueryTools
         _scopeFactory = scopeFactory;
     }
 
-    [McpServerTool(Name = "project_outline")]
+    [McpServerTool(Name = "project_outline", Title = "Get Project Outline", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get a compressed overview of the entire indexed codebase — all symbol signatures grouped by file, kind, or directory in a single response. Far more efficient than reading files individually (saves 90%+ tokens). Use pathFilter to scope to a subdirectory — much faster than retrieving the full outline and filtering client-side. Supports pagination via offset/maxSymbols for large codebases. Requires index_project to have been called first. ~50–2,000 tokens depending on codebase size and maxSymbols. Prefer over reading raw files for exploring code structure. Prefer topic_outline when you want results grouped by a topic, and prefer search_symbols when you need to filter by name or kind. Returns Markdown: heading hierarchy with symbol signatures (visibility, kind, signature per line). When truncated, includes a footer with the next offset/maxSymbols values to continue pagination. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_GROUP_BY (use 'file', 'kind', or 'directory'), INVALID_PATH_FILTER. Next: search_symbols to find specific symbols, or get_symbol to retrieve source code.")]
     public async Task<string> ProjectOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
@@ -103,9 +103,9 @@ internal sealed class QueryTools
         }
     }
 
-    [McpServerTool(Name = "get_module_api")]
+    [McpServerTool(Name = "get_module_api", Title = "Get Module API", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Get the full public API surface of a single module file — all exported symbols, signatures, and import dependencies in one call. Use instead of reading the file to see only the public interface without implementation details. Requires index_project to have been called first. ~100–1,000 tokens (varies with symbol count). Prefer over project_outline when focusing on one file, and over get_symbol when you want all exports plus dependencies in one call. Returns JSON: {module, symbols: [{name, kind, parent, signature, line, doc_comment}], dependencies: [{requires_path, alias}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, MODULE_NOT_FOUND (file not in index — verify modulePath and run index_project). Next: get_symbol or expand_symbol with a symbol name to retrieve its full source code.")]
-    public async Task<string> GetModuleApi(
+    public async Task<GetModuleApiResult> GetModuleApi(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Relative path from the project root to the module file (e.g., 'src/services/CombatService.luau'). Forward slashes only, NOT an absolute path.")] string modulePath,
         CancellationToken cancellationToken = default)
@@ -117,7 +117,7 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new GetModuleApiResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         var normalizedModulePath = PathValidator.NormalizeRelativePath(modulePath);
@@ -128,7 +128,7 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new GetModuleApiResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         try
@@ -138,38 +138,36 @@ internal sealed class QueryTools
             {
                 var moduleApi = await scope.Store.GetModuleApiAsync(scope.RepoId, normalizedModulePath).ConfigureAwait(false);
 
-                var response = new
+                return new GetModuleApiResult
                 {
                     Module = moduleApi.File.RelativePath,
-                    Symbols = moduleApi.Symbols.Select(s => new
+                    Symbols = moduleApi.Symbols.Select(s => new ModuleSymbolContract
                     {
-                        s.Name,
-                        s.Kind,
+                        Name = s.Name,
+                        Kind = s.Kind,
                         Parent = s.ParentSymbol,
-                        s.Signature,
+                        Signature = s.Signature,
                         Line = s.LineStart,
-                        s.DocComment,
-                    }),
-                    Dependencies = moduleApi.Dependencies.Select(d => new
+                        DocComment = s.DocComment,
+                    }).ToList(),
+                    Dependencies = moduleApi.Dependencies.Select(d => new ModuleDependencyContract
                     {
-                        d.RequiresPath,
-                        d.Alias,
-                    }),
+                        RequiresPath = d.RequiresPath,
+                        Alias = d.Alias,
+                    }).ToList(),
                     Hint = "Use get_symbol or expand_symbol with a symbol's name to retrieve its full source code.",
                 };
-
-                return JsonSerializer.Serialize(response, SerializerOptions);
             }
         }
         catch (FileNotFoundException)
         {
-            return SerializeError("Module not found", "MODULE_NOT_FOUND");
+            return new GetModuleApiResult { Error = "Module not found", Code = "MODULE_NOT_FOUND", Retryable = false };
         }
     }
 
-    [McpServerTool(Name = "get_symbol")]
+    [McpServerTool(Name = "get_symbol", Title = "Get Symbol Source", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Retrieve the full source code of a specific symbol by qualified name — loads only the exact symbol, not the entire file (saves 80%+ tokens vs file reading). ~50–500 tokens (single symbol body). For multiple symbols, prefer get_symbols (single round-trip). For a single method in a large class, prefer expand_symbol (~60% fewer tokens). For large symbols (>16KB), returns a guided summary with child method signatures and instructions to use expand_symbol for individual methods. Use force=true to bypass the size guard. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, source_code}. For large symbols (>16KB): {name, kind, parent, file, line_start, line_end, signature, truncated: true, source_size_bytes, children: [{name, signature, expand_with}], guidance}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND. Next: find_references to trace all usages, or expand_symbol for individual child methods.")]
-    public async Task<string> GetSymbol(
+    public async Task<GetSymbolResult> GetSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'CombatService:ProcessAttack') or unqualified names (e.g., 'ProcessAttack'). Unqualified names are resolved automatically; if ambiguous, returns a candidates list.")] string symbolName,
         [Description("Include 5 lines of context before and after the symbol")] bool includeContext = false,
@@ -183,7 +181,7 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new GetSymbolResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
@@ -200,22 +198,25 @@ internal sealed class QueryTools
                 }
                 else if (candidates.Count > 1)
                 {
-                    return JsonSerializer.Serialize(
-                        new
-                        {
-                            Error = "Multiple symbols match this name",
-                            Code = "SYMBOL_NOT_FOUND",
-                            Retryable = false,
-                            Symbol = SanitizeSymbolName(symbolName),
-                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
-                        },
-                        SerializerOptions);
+                    return new GetSymbolResult
+                    {
+                        Error = "Multiple symbols match this name",
+                        Code = "SYMBOL_NOT_FOUND",
+                        Retryable = false,
+                        Symbol = SanitizeSymbolName(symbolName),
+                        Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList(),
+                    };
                 }
                 else
                 {
-                    return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
-                        SerializerOptions);
+                    return new GetSymbolResult
+                    {
+                        Error = "Symbol not found",
+                        Code = "SYMBOL_NOT_FOUND",
+                        Retryable = false,
+                        Symbol = SanitizeSymbolName(symbolName),
+                        Guidance = SymbolNotFoundGuidance,
+                    };
                 }
             }
 
@@ -223,7 +224,7 @@ internal sealed class QueryTools
             var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
             if (file is null)
             {
-                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+                return new GetSymbolResult { Error = "File not found for symbol", Code = "FILE_NOT_FOUND", Retryable = false };
             }
 
             string resolvedPath;
@@ -234,7 +235,7 @@ internal sealed class QueryTools
             }
             catch (ArgumentException)
             {
-                return SerializeError("Path validation failed", "INVALID_PATH");
+                return new GetSymbolResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
             }
 
             var sourceCode = includeContext
@@ -250,25 +251,23 @@ internal sealed class QueryTools
                 }
             }
 
-            var response = new
+            return new GetSymbolResult
             {
-                symbol.Name,
-                symbol.Kind,
+                Name = symbol.Name,
+                Kind = symbol.Kind,
                 Parent = symbol.ParentSymbol,
                 File = file.RelativePath,
-                symbol.LineStart,
-                symbol.LineEnd,
-                symbol.Signature,
+                LineStart = symbol.LineStart,
+                LineEnd = symbol.LineEnd,
+                Signature = symbol.Signature,
                 SourceCode = sourceCode,
             };
-
-            return JsonSerializer.Serialize(response, SerializerOptions);
         }
     }
 
-    [McpServerTool(Name = "expand_symbol")]
+    [McpServerTool(Name = "expand_symbol", Title = "Expand Symbol", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Retrieve only the body of a nested symbol (e.g., a single method) without loading the entire parent class — saves ~60% tokens vs get_symbol on the parent. ~50–200 tokens (single method). Prefer over get_symbol when targeting a single method in a large class. Use 'Parent:Child' qualified names to extract exactly the method you need. Ideal for reading individual methods in large classes. Requires index_project to have been called first. Returns JSON: {name, kind, parent, file, line_start, line_end, signature, doc_comment, source_code}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND. Next: find_references to trace usage of this method across the codebase.")]
-    public async Task<string> ExpandSymbol(
+    public async Task<ExpandSymbolResult> ExpandSymbol(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'PlayerService:GetHealth') or unqualified names (e.g., 'GetHealth'). Unqualified names are resolved automatically; if ambiguous, returns a candidates list.")] string symbolName,
         [Description("Include 3 lines of context before and after the symbol")] bool includeContext = false,
@@ -281,7 +280,7 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new ExpandSymbolResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
@@ -305,16 +304,14 @@ internal sealed class QueryTools
                     }
                     else if (prefixCandidates.Count > 1)
                     {
-                        return JsonSerializer.Serialize(
-                            new
-                            {
-                                Error = "Multiple symbols match this prefix",
-                                Code = "SYMBOL_NOT_FOUND",
-                                Retryable = false,
-                                Symbol = SanitizeSymbolName(symbolName),
-                                Candidates = prefixCandidates.Select(c => $"{parent}:{c.Name}"),
-                            },
-                            SerializerOptions);
+                        return new ExpandSymbolResult
+                        {
+                            Error = "Multiple symbols match this prefix",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Candidates = prefixCandidates.Select(c => $"{parent}:{c.Name}").ToList(),
+                        };
                     }
                 }
 
@@ -328,22 +325,25 @@ internal sealed class QueryTools
                     }
                     else if (candidates.Count > 1)
                     {
-                        return JsonSerializer.Serialize(
-                            new
-                            {
-                                Error = "Multiple symbols match this name",
-                                Code = "SYMBOL_NOT_FOUND",
-                                Retryable = false,
-                                Symbol = SanitizeSymbolName(symbolName),
-                                Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
-                            },
-                            SerializerOptions);
+                        return new ExpandSymbolResult
+                        {
+                            Error = "Multiple symbols match this name",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList(),
+                        };
                     }
                     else
                     {
-                        return JsonSerializer.Serialize(
-                            new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
-                            SerializerOptions);
+                        return new ExpandSymbolResult
+                        {
+                            Error = "Symbol not found",
+                            Code = "SYMBOL_NOT_FOUND",
+                            Retryable = false,
+                            Symbol = SanitizeSymbolName(symbolName),
+                            Guidance = SymbolNotFoundGuidance,
+                        };
                     }
                 }
             }
@@ -352,7 +352,7 @@ internal sealed class QueryTools
             var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
             if (file is null)
             {
-                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+                return new ExpandSymbolResult { Error = "File not found for symbol", Code = "FILE_NOT_FOUND", Retryable = false };
             }
 
             string resolvedPath;
@@ -363,33 +363,31 @@ internal sealed class QueryTools
             }
             catch (ArgumentException)
             {
-                return SerializeError("Path validation failed", "INVALID_PATH");
+                return new ExpandSymbolResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
             }
 
             var sourceCode = includeContext
                 ? await ReadSourceCodeWithContextAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength, contextLines: 3).ConfigureAwait(false)
                 : await ReadSourceCodeAsync(resolvedPath, symbol.ByteOffset, symbol.ByteLength).ConfigureAwait(false);
 
-            var response = new
+            return new ExpandSymbolResult
             {
-                symbol.Name,
-                symbol.Kind,
+                Name = symbol.Name,
+                Kind = symbol.Kind,
                 Parent = symbol.ParentSymbol,
                 File = file.RelativePath,
-                symbol.LineStart,
-                symbol.LineEnd,
-                symbol.Signature,
-                symbol.DocComment,
+                LineStart = symbol.LineStart,
+                LineEnd = symbol.LineEnd,
+                Signature = symbol.Signature,
+                DocComment = symbol.DocComment,
                 SourceCode = sourceCode,
             };
-
-            return JsonSerializer.Serialize(response, SerializerOptions);
         }
     }
 
-    [McpServerTool(Name = "get_symbols")]
+    [McpServerTool(Name = "get_symbols", Title = "Get Multiple Symbols", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Batch retrieve source code for multiple symbols in one call — significantly more efficient than calling get_symbol repeatedly (single round-trip vs N). ~50–500 tokens per symbol. Prefer over repeated get_symbol calls when retrieving 2–50 symbols at once. Maximum 50 names per call. Requires index_project to have been called first. Returns JSON: {results: [{name, kind, parent, file, line_start, line_end, signature, source_code}], errors: [{symbol, error, code}]}. Large symbols return truncated format with children array (same as get_symbol). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_SYMBOL_NAMES, SYMBOL_LIMIT_EXCEEDED (max 50). Per-symbol errors in 'errors' array: SYMBOL_NOT_FOUND (includes 'symbol' field).")]
-    public async Task<string> GetSymbols(
+    public async Task<GetSymbolsResult> GetSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Array of fully qualified symbol names (same format as get_symbol). Maximum 50 per call.")] string[] symbolNames,
         CancellationToken cancellationToken = default)
@@ -401,17 +399,17 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new GetSymbolsResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         if (symbolNames is null || symbolNames.Length == 0)
         {
-            return SerializeError("No symbol names provided", "EMPTY_SYMBOL_NAMES");
+            return new GetSymbolsResult { Error = "No symbol names provided", Code = "EMPTY_SYMBOL_NAMES", Retryable = false };
         }
 
         if (symbolNames.Length > 50)
         {
-            return SerializeError("Too many symbols requested. Maximum is 50", "SYMBOL_LIMIT_EXCEEDED");
+            return new GetSymbolsResult { Error = "Too many symbols requested. Maximum is 50", Code = "SYMBOL_LIMIT_EXCEEDED", Retryable = false };
         }
 
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
@@ -436,7 +434,7 @@ internal sealed class QueryTools
                 .GroupBy(s => s.FileId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            var results = new List<object>();
+            var results = new List<SymbolItemContract>();
 
             foreach (var (fileId, fileSymbols) in symbolsByFile)
             {
@@ -466,38 +464,38 @@ internal sealed class QueryTools
                         if (children.Count > 0)
                         {
                             var parentName = symbol.ParentSymbol is not null ? $"{symbol.ParentSymbol}:{symbol.Name}" : symbol.Name;
-                            results.Add(new
+                            results.Add(new SymbolItemContract
                             {
-                                symbol.Name,
-                                symbol.Kind,
+                                Name = symbol.Name,
+                                Kind = symbol.Kind,
                                 Parent = symbol.ParentSymbol,
                                 File = file.RelativePath,
-                                symbol.LineStart,
-                                symbol.LineEnd,
-                                symbol.Signature,
+                                LineStart = symbol.LineStart,
+                                LineEnd = symbol.LineEnd,
+                                Signature = symbol.Signature,
                                 Truncated = true,
                                 SourceSizeBytes = symbol.ByteLength,
-                                Children = children.Select(c => new
+                                Children = children.Select(c => new SymbolChildContract
                                 {
-                                    c.Name,
-                                    c.Signature,
+                                    Name = c.Name,
+                                    Signature = c.Signature,
                                     ExpandWith = $"{parentName}:{c.Name}",
-                                }),
+                                }).ToList(),
                                 Guidance = $"This symbol is large ({symbol.ByteLength:N0} bytes). Use expand_symbol to retrieve individual methods.",
                             });
                             continue;
                         }
                     }
 
-                    results.Add(new
+                    results.Add(new SymbolItemContract
                     {
-                        symbol.Name,
-                        symbol.Kind,
+                        Name = symbol.Name,
+                        Kind = symbol.Kind,
                         Parent = symbol.ParentSymbol,
                         File = file.RelativePath,
-                        symbol.LineStart,
-                        symbol.LineEnd,
-                        symbol.Signature,
+                        LineStart = symbol.LineStart,
+                        LineEnd = symbol.LineEnd,
+                        Signature = symbol.Signature,
                         SourceCode = sourceCode,
                     });
                 }
@@ -506,7 +504,7 @@ internal sealed class QueryTools
             // Determine which requested names were not found
             var errors = symbolNames
                 .Where(name => !foundQualifiedNames.Contains(name))
-                .Select(name => new
+                .Select(name => new SymbolErrorContract
                 {
                     Symbol = SanitizeSymbolName(name),
                     Error = "Symbol not found",
@@ -516,19 +514,17 @@ internal sealed class QueryTools
                 })
                 .ToList();
 
-            var response = new
+            return new GetSymbolsResult
             {
                 Results = results,
                 Errors = errors,
             };
-
-            return JsonSerializer.Serialize(response, SerializerOptions);
         }
     }
 
-    [McpServerTool(Name = "search_symbols")]
+    [McpServerTool(Name = "search_symbols", Title = "Search Symbols", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Search the symbol index for classes, methods, functions, types, interfaces, enums, and other code structure. Use this for navigating to named symbols — NOT for searching file contents, string literals, comments, or configuration values (use search_text for those). ~100–500 tokens (result list). Prefer over search_text for symbol names; prefer search_text for raw content patterns. Prefer topic_outline when you want results grouped by file in outline format. Supports prefix*, *suffix, *contains*, and I*Pattern glob matching. Auto-retries with contains-match (*query*) when a plain term returns zero FTS5 results (e.g., searching 'Validator' automatically finds 'PathValidator', 'IPathValidator'). When this fallback triggers, the response includes fallback_used: true. Symbol names are indexed with camelCase/PascalCase/underscore splitting so 'user profile' matches 'getUserProfile', 'UserProfileService', 'user_profile_handler'. Enable fuzzy=true for typo-tolerant matching (Levenshtein distance ≤ 2) on short whole symbol names (e.g., 'Reopsitory' → 'Repository'); for compound names with a typo, split into tokens instead (e.g., 'levenshtein distance' finds 'ComputeLevenshteinDistance'). Returns symbol names, kinds, signatures, and locations. Use pathFilter to scope results to a specific directory. Requires index_project to have been called first. Returns JSON: {query, total_matches, [fallback_used], results: [{name, kind, parent, file, line, signature, snippet, rank}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, QUERY_TOO_BROAD (add a non-wildcard term or pathFilter), INVALID_KIND (see kind param for valid values), INVALID_PATH_FILTER, MIXED_PATTERN (includes 'suggestions' array with ready-to-use queries — run each one separately). Next: get_symbol or expand_symbol with the result's name (or parent:name for nested symbols).")]
-    public async Task<string> SearchSymbols(
+    public async Task<SearchSymbolsResult> SearchSymbols(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Search query — supports plain text, FTS5 operators (AND, OR, NOT), and glob patterns (prefix*, *suffix, *contains*). Multi-word queries like 'user profile' match camelCase/PascalCase symbols such as 'getUserProfile'.")] string query,
         [Description("Filter by symbol kind (function, method, class, record, enum, type, interface, export, constant, module)")] string? kind = null,
@@ -544,24 +540,24 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new SearchSymbolsResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+            return new SearchSymbolsResult { Error = "Search query cannot be empty", Code = "EMPTY_QUERY", Retryable = false };
         }
 
         if (GlobPattern.IsWildcardOnly(query) && pathFilter is null)
         {
-            return SerializeError("Search query is too broad — provide at least one non-wildcard term", "QUERY_TOO_BROAD");
+            return new SearchSymbolsResult { Error = "Search query is too broad — provide at least one non-wildcard term", Code = "QUERY_TOO_BROAD", Retryable = false };
         }
 
         if (kind is not null)
         {
             if (!ValidSymbolKinds.Contains(kind))
             {
-                return SerializeError("Invalid symbol kind. Must be one of: function, method, type, class, record, interface, export, constant, module", "INVALID_KIND");
+                return new SearchSymbolsResult { Error = "Invalid symbol kind. Must be one of: function, method, type, class, record, interface, export, constant, module", Code = "INVALID_KIND", Retryable = false };
             }
 
             // Normalize to PascalCase to match DB storage (SymbolKind.ToString())
@@ -580,7 +576,7 @@ internal sealed class QueryTools
             }
             catch (ArgumentException)
             {
-                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+                return new SearchSymbolsResult { Error = "Invalid path filter", Code = "INVALID_PATH_FILTER", Retryable = false };
             }
         }
 
@@ -592,16 +588,14 @@ internal sealed class QueryTools
             // Generate concrete ready-to-use query suggestions from the original terms
             var suggestions = GenerateMixedPatternSuggestions(query);
 
-            return JsonSerializer.Serialize(
-                new
-                {
-                    Error = glob.ErrorDetail,
-                    Code = "MIXED_PATTERN",
-                    Retryable = false,
-                    Suggestion = "This query mixes incompatible pattern types. You MUST split it into separate search_symbols calls — one per pattern below.",
-                    Suggestions = suggestions,
-                },
-                SerializerOptions);
+            return new SearchSymbolsResult
+            {
+                Error = glob.ErrorDetail,
+                Code = "MIXED_PATTERN",
+                Retryable = false,
+                Suggestion = "This query mixes incompatible pattern types. You MUST split it into separate search_symbols calls — one per pattern below.",
+                Suggestions = suggestions,
+            };
         }
 
         // Wildcard-only query with pathFilter: browse all symbols under that path
@@ -612,7 +606,7 @@ internal sealed class QueryTools
 
         if (string.IsNullOrWhiteSpace(glob.Fts5Query) && string.IsNullOrWhiteSpace(glob.SqlLikePattern))
         {
-            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+            return new SearchSymbolsResult { Error = "Search query cannot be empty", Code = "EMPTY_QUERY", Retryable = false };
         }
 
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
@@ -648,11 +642,11 @@ internal sealed class QueryTools
                 ? "Use get_symbol with a result's name (or parent:name for nested symbols) to retrieve full source code."
                 : (string?)null;
 
-            return SerializeSearchResults(displayQuery, results, hint, fallbackUsed);
+            return BuildSearchSymbolsResult(displayQuery, results, hint, fallbackUsed);
         }
     }
 
-    [McpServerTool(Name = "topic_outline")]
+    [McpServerTool(Name = "topic_outline", Title = "Get Topic Outline", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Search for symbols related to a topic and return results in a structured outline format grouped by file. Combines search_symbols with project_outline presentation — ideal for exploring a concept across the codebase (e.g., 'show me all authentication-related types'). ~100–2,000 tokens. Prefer over search_symbols when you want results grouped by file in outline format. Prefer search_symbols when you need structured JSON or exact kind/path filtering. Requires index_project to have been called first. Returns Markdown: heading hierarchy with matching symbol signatures grouped by file. When truncated, includes a footer with remaining match count. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER. Next: get_symbol or expand_symbol for individual symbol source code.")]
     public async Task<string> TopicOutline(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
@@ -718,9 +712,9 @@ internal sealed class QueryTools
         }
     }
 
-    [McpServerTool(Name = "search_text")]
+    [McpServerTool(Name = "search_text", Title = "Search Text", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Search raw file contents for string literals, comments, TODOs, configuration values, SQL patterns, or any text that is NOT a symbol name. Use this instead of search_symbols when looking for: content patterns (e.g., 'FromSqlRaw', 'HasQueryFilter'), string literals or magic strings, comments and documentation text, configuration values, audit patterns (e.g., 'TODO', 'HACK', 'password'), or any non-symbol text in source files. Faster than grep — content is pre-indexed via FTS5. ~100–500 tokens (result list with snippets). Prefer over search_symbols for non-symbol content patterns. For navigating to named symbols (classes, methods, types), use search_symbols instead. Use pathFilter to scope results. Requires index_project to have been called first. Returns JSON: {query, total_matches, results: [{file_path, snippet, rank}]}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, EMPTY_QUERY, INVALID_PATH_FILTER. Next: search_symbols for the same file to get structured symbol data, or get_symbol to retrieve a specific symbol.")]
-    public async Task<string> SearchText(
+    public async Task<SearchTextResult> SearchText(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("FTS5 search query (supports AND, OR, NOT, quoted phrases, prefix*)")] string query,
         [Description("File pattern filter (e.g., *.luau, src/services/*.lua)")] string? glob = null,
@@ -735,12 +729,12 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new SearchTextResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+            return new SearchTextResult { Error = "Search query cannot be empty", Code = "EMPTY_QUERY", Retryable = false };
         }
 
         string? validatedPathFilter = null;
@@ -752,7 +746,7 @@ internal sealed class QueryTools
             }
             catch (ArgumentException)
             {
-                return SerializeError("Invalid path filter", "INVALID_PATH_FILTER");
+                return new SearchTextResult { Error = "Invalid path filter", Code = "INVALID_PATH_FILTER", Retryable = false };
             }
         }
 
@@ -762,7 +756,7 @@ internal sealed class QueryTools
 
         if (string.IsNullOrWhiteSpace(sanitizedQuery))
         {
-            return SerializeError("Search query cannot be empty", "EMPTY_QUERY");
+            return new SearchTextResult { Error = "Search query cannot be empty", Code = "EMPTY_QUERY", Retryable = false };
         }
 
         // Use null if glob sanitization produced empty string
@@ -791,26 +785,25 @@ internal sealed class QueryTools
             var hint = results.Count > 0
                 ? "Use search_symbols for structured symbol results, or get_symbol to retrieve source code for a specific symbol."
                 : (string?)null;
-            var response = new
+
+            return new SearchTextResult
             {
                 Query = sanitizedQuery,
                 TotalMatches = results.Count,
-                Results = results.Select((r, index) => new
+                Results = results.Select((r, index) => new TextSearchItemContract
                 {
-                    r.FilePath,
-                    r.Snippet,
+                    FilePath = r.FilePath,
+                    Snippet = r.Snippet,
                     Rank = index + 1,
-                }),
+                }).ToList(),
                 Hint = hint,
             };
-
-            return JsonSerializer.Serialize(response, SerializerOptions);
         }
     }
 
-    [McpServerTool(Name = "get_hot_path")]
+    [McpServerTool(Name = "get_hot_path", Title = "Get Hot Path", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Returns only the lines within a symbol that contain specific identifiers plus surrounding context — use when tracing a variable, assignment, or conditional branch within a large function. Costs ~50–100 tokens vs 500–2,000 for the full body (10–40x fewer tokens). Prefer over get_symbol when tracing a specific variable or condition; prefer expand_symbol for a full method. Identifiers are matched as whole words only (Regex.Escaped \\b boundaries prevent partial-word false positives). Falls back to the full symbol range if body line ranges are not available. Requires index_project to have been called first. Returns JSON: {symbol, file, total_lines, returned_lines, matches: [{identifier, line, context: [{line_number, text}]}]}. No matches returns {symbol, file, total_lines, returned_lines: 0, matches: []}. Overlapping context windows are merged — lines 7–15 are returned once, not duplicated; the first match in a merged window carries the context, subsequent matches in the same window have an empty context array. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SYMBOL_NOT_FOUND (includes 'symbol' field — use search_symbols to find the correct name), FILE_NOT_FOUND, EMPTY_IDENTIFIERS (supply at least one non-empty identifier string). Next: get_symbol with force=true for the full symbol body if the hot path is insufficient.")]
-    public async Task<string> GetHotPath(
+    public async Task<GetHotPathResult> GetHotPath(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Symbol name — accepts 'Parent:Child' qualified names (e.g., 'OrderService:ProcessPayment') or unqualified names (e.g., 'ProcessPayment'). Unqualified names are resolved automatically.")] string symbolName,
         [Description("Identifiers to search for within the symbol body using whole-word matching. Each value is Regex.Escaped before use — agent-supplied metacharacters cannot cause injection.")] string[] identifiers,
@@ -824,7 +817,7 @@ internal sealed class QueryTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new GetHotPathResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         contextLines = Math.Clamp(contextLines, 0, 10);
@@ -832,7 +825,7 @@ internal sealed class QueryTools
         var validIdentifiers = identifiers?.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray() ?? [];
         if (validIdentifiers.Length == 0)
         {
-            return SerializeError("Identifiers array must contain at least one non-empty value", "EMPTY_IDENTIFIERS");
+            return new GetHotPathResult { Error = "Identifiers array must contain at least one non-empty value", Code = "EMPTY_IDENTIFIERS", Retryable = false };
         }
 
         var scope = await _scopeFactory.CreateAsync(validatedPath, cancellationToken).ConfigureAwait(false);
@@ -848,22 +841,25 @@ internal sealed class QueryTools
                 }
                 else if (candidates.Count > 1)
                 {
-                    return JsonSerializer.Serialize(
-                        new
-                        {
-                            Error = "Multiple symbols match this name",
-                            Code = "SYMBOL_NOT_FOUND",
-                            Retryable = false,
-                            Symbol = SanitizeSymbolName(symbolName),
-                            Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name),
-                        },
-                        SerializerOptions);
+                    return new GetHotPathResult
+                    {
+                        Error = "Multiple symbols match this name",
+                        Code = "SYMBOL_NOT_FOUND",
+                        Retryable = false,
+                        Symbol = SanitizeSymbolName(symbolName),
+                        Candidates = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList(),
+                    };
                 }
                 else
                 {
-                    return JsonSerializer.Serialize(
-                        new { Error = "Symbol not found", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(symbolName), Guidance = SymbolNotFoundGuidance },
-                        SerializerOptions);
+                    return new GetHotPathResult
+                    {
+                        Error = "Symbol not found",
+                        Code = "SYMBOL_NOT_FOUND",
+                        Retryable = false,
+                        Symbol = SanitizeSymbolName(symbolName),
+                        Guidance = SymbolNotFoundGuidance,
+                    };
                 }
             }
 
@@ -871,7 +867,7 @@ internal sealed class QueryTools
             var file = files.FirstOrDefault(f => f.Id == symbol.FileId);
             if (file is null)
             {
-                return SerializeError("File not found for symbol", "FILE_NOT_FOUND");
+                return new GetHotPathResult { Error = "File not found for symbol", Code = "FILE_NOT_FOUND", Retryable = false };
             }
 
             string resolvedPath;
@@ -882,21 +878,28 @@ internal sealed class QueryTools
             }
             catch (ArgumentException)
             {
-                return SerializeError("Path validation failed", "INVALID_PATH");
+                return new GetHotPathResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
             }
 
             var hotPath = await ExtractHotPathAsync(resolvedPath, symbol, file.RelativePath, validIdentifiers, contextLines).ConfigureAwait(false);
 
-            return JsonSerializer.Serialize(
-                new
+            return new GetHotPathResult
+            {
+                Symbol = hotPath.Symbol,
+                File = hotPath.File,
+                TotalLines = hotPath.TotalLines,
+                ReturnedLines = hotPath.ReturnedLines,
+                Matches = hotPath.Matches.Select(m => new HotPathMatchContract
                 {
-                    hotPath.Symbol,
-                    hotPath.File,
-                    hotPath.TotalLines,
-                    hotPath.ReturnedLines,
-                    hotPath.Matches,
-                },
-                SerializerOptions);
+                    Identifier = m.Identifier,
+                    Line = m.Line,
+                    Context = m.Context.Select(c => new HotPathContextLineContract
+                    {
+                        LineNumber = c.LineNumber,
+                        Text = c.Text,
+                    }).ToList(),
+                }).ToList(),
+            };
         }
     }
 
@@ -929,9 +932,9 @@ internal sealed class QueryTools
 
         // Build whole-word patterns — Regex.Escape prevents agent-supplied metacharacters from injecting patterns
         var patterns = identifiers
-            .Select(id => (Id: id, Pattern: new Regex(
-                $@"\b{Regex.Escape(id)}\b",
-                RegexOptions.None,
+            .Select(id => (Id: id, Pattern: new System.Text.RegularExpressions.Regex(
+                $@"\b{System.Text.RegularExpressions.Regex.Escape(id)}\b",
+                System.Text.RegularExpressions.RegexOptions.None,
                 TimeSpan.FromMilliseconds(100))))
             .ToList();
 
@@ -1293,60 +1296,57 @@ internal sealed class QueryTools
         return suggestions;
     }
 
-    private static string FormatGuidedSummary(Symbol symbol, string filePath, IReadOnlyList<Symbol> children)
+    private static GetSymbolResult FormatGuidedSummary(Symbol symbol, string filePath, IReadOnlyList<Symbol> children)
     {
         var parentName = symbol.ParentSymbol is not null ? $"{symbol.ParentSymbol}:{symbol.Name}" : symbol.Name;
-        var response = new
+
+        return new GetSymbolResult
         {
-            symbol.Name,
-            symbol.Kind,
+            Name = symbol.Name,
+            Kind = symbol.Kind,
             Parent = symbol.ParentSymbol,
             File = filePath,
-            symbol.LineStart,
-            symbol.LineEnd,
-            symbol.Signature,
+            LineStart = symbol.LineStart,
+            LineEnd = symbol.LineEnd,
+            Signature = symbol.Signature,
             Truncated = true,
             SourceSizeBytes = symbol.ByteLength,
-            Children = children.Select(c => new
+            Children = children.Select(c => new SymbolChildContract
             {
-                c.Name,
-                c.Signature,
+                Name = c.Name,
+                Signature = c.Signature,
                 ExpandWith = $"{parentName}:{c.Name}",
-            }),
+            }).ToList(),
             Guidance = $"This symbol is large ({symbol.ByteLength:N0} bytes). Use expand_symbol with '{parentName}:<method_name>' to retrieve individual methods. Use force=true to bypass this guard.",
         };
-
-        return JsonSerializer.Serialize(response, SerializerOptions);
     }
 
-    private static string SerializeSearchResults(
+    private static SearchSymbolsResult BuildSearchSymbolsResult(
         string displayQuery,
         IReadOnlyList<Core.Models.SymbolSearchResult> results,
         string? hint,
         bool fallbackUsed)
     {
-        var resultItems = results.Select((r, index) => new
+        var resultItems = results.Select((r, index) => new SymbolSearchItemContract
         {
-            r.Symbol.Name,
-            r.Symbol.Kind,
+            Name = r.Symbol.Name,
+            Kind = r.Symbol.Kind,
             Parent = r.Symbol.ParentSymbol,
             File = r.FilePath,
             Line = r.Symbol.LineStart,
-            r.Symbol.Signature,
+            Signature = r.Symbol.Signature,
             Snippet = r.Symbol.DocComment ?? string.Empty,
             Rank = index + 1,
-        });
+        }).ToList();
 
-        if (fallbackUsed)
+        return new SearchSymbolsResult
         {
-            return JsonSerializer.Serialize(
-                new { Query = displayQuery, TotalMatches = results.Count, FallbackUsed = true, Results = resultItems, Hint = hint },
-                SerializerOptions);
-        }
-
-        return JsonSerializer.Serialize(
-            new { Query = displayQuery, TotalMatches = results.Count, Results = resultItems, Hint = hint },
-            SerializerOptions);
+            Query = displayQuery,
+            TotalMatches = results.Count,
+            FallbackUsed = fallbackUsed ? true : null,
+            Results = resultItems,
+            Hint = hint,
+        };
     }
 
     private static string SerializeError(string error, string code, string? guidance = null) =>

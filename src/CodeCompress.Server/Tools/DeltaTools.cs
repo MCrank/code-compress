@@ -35,7 +35,7 @@ internal sealed partial class DeltaTools
         _scopeFactory = scopeFactory;
     }
 
-    [McpServerTool(Name = "changes_since")]
+    [McpServerTool(Name = "changes_since", Title = "Get Changes Since Snapshot", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Show what changed since a named snapshot: new, modified, and deleted files with symbol-level diffs. Use snapshot_create to set a baseline before making changes, then call this to see exactly what was added, modified, or removed. Requires index_project to have been called first. ~100–2,000 tokens (varies with change count). Prefer over git diff when you need symbol-granularity change tracking (+added/~modified/-removed signatures per file). Returns Markdown: sections for new files (with symbol counts), modified files (with +added/~changed/-removed symbol diffs), deleted files, and a summary line with total counts. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, SNAPSHOT_NOT_FOUND (includes 'available_snapshots' array — check available labels or create a new snapshot with snapshot_create). Next: get_symbol to view the current source of any changed symbol.")]
     public async Task<string> ChangesSince(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
@@ -194,7 +194,7 @@ internal sealed partial class DeltaTools
         }
     }
 
-    [McpServerTool(Name = "file_tree")]
+    [McpServerTool(Name = "file_tree", Title = "Get File Tree", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get an annotated directory tree with file counts and line counts per directory. Does NOT require index_project — reads the filesystem directly. Use to quickly understand project structure before indexing. ~50–500 tokens. Prefer over project_outline when you only need directory structure without symbol details. Returns plain text: indented tree with 'dirname/ (N files, N lines)' per directory and 'filename (N lines)' per file. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, DIRECTORY_NOT_FOUND. Next: index_project to build the symbol index for query tools.")]
     public async Task<string> FileTree(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,

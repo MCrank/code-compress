@@ -5,6 +5,7 @@ using CodeCompress.Server.Prompts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Extensions.Tasks;
 using ModelContextProtocol.Protocol;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -41,10 +42,21 @@ builder.Services
             PREFER these tools over file reading. They are faster, more precise, and dramatically reduce
             token consumption. Always call index_project before using any query tool.
             """;
+
+        // SEP-2549 cache hints: the 22-tool / 4-prompt listing is compile-time static and only
+        // changes on redeploy, so clients can safely cache it for an hour instead of re-fetching
+        // it on every connection.
+        options.Filters.Request.ListToolsFilters.Add(next => async (context, cancellationToken) =>
+            CacheHints.ApplyToToolsResult(await next(context, cancellationToken).ConfigureAwait(false)));
+
+        options.Filters.Request.ListPromptsFilters.Add(next => async (context, cancellationToken) =>
+            CacheHints.ApplyToPromptsResult(await next(context, cancellationToken).ConfigureAwait(false)));
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly()
-    .WithPrompts<PromptsProvider>();
+    .WithPrompts<PromptsProvider>()
+    .WithTasks(new InMemoryMcpTaskStore(), options =>
+        options.ExecutionModeSelector = context => TaskExecutionModeSelector.Select(context.Params.Name));
 
 var host = builder.Build();
 
