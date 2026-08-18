@@ -47,15 +47,12 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("/valid/path", "ProcessAttack").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(3);
-        var results = root.GetProperty("results");
-        await Assert.That(results.GetArrayLength()).IsEqualTo(3);
-        await Assert.That(results[0].GetProperty("file").GetString()).IsEqualTo("src/services/CombatService.luau");
-        await Assert.That(results[0].GetProperty("line").GetInt32()).IsEqualTo(10);
-        await Assert.That(results[0].GetProperty("context_snippet").GetString()).Contains("ProcessAttack");
-        await Assert.That(results[0].GetProperty("rank").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.TotalMatches).IsEqualTo(3);
+        await Assert.That(result.Results).Count().IsEqualTo(3);
+        await Assert.That(result.Results![0].File).IsEqualTo("src/services/CombatService.luau");
+        await Assert.That(result.Results![0].Line).IsEqualTo(10);
+        await Assert.That(result.Results![0].ContextSnippet).Contains("ProcessAttack");
+        await Assert.That(result.Results![0].Rank).IsEqualTo(1);
     }
 
     [Test]
@@ -74,9 +71,7 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("/valid/path", "ISymbolStore").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(5);
+        await Assert.That(result.TotalMatches).IsEqualTo(5);
     }
 
     [Test]
@@ -93,8 +88,7 @@ internal sealed class ReferenceToolsTests
         await _store.Received(1).FindReferencesAsync(
             "test-repo-id", "Logger", "/valid/path", 20, "src").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
     }
 
     [Test]
@@ -141,10 +135,8 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("/valid/path", "UnusedHelper").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
-        await Assert.That(root.GetProperty("results").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(result.TotalMatches).IsEqualTo(0);
+        await Assert.That(result.Results).Count().IsEqualTo(0);
     }
 
     [Test]
@@ -155,8 +147,7 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("../../../etc/passwd", "Foo").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -164,8 +155,7 @@ internal sealed class ReferenceToolsTests
     {
         var result = await _tools.FindReferences("/valid/path", "").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("EMPTY_SYMBOL_NAME");
+        await Assert.That(result.Code).IsEqualTo("EMPTY_SYMBOL_NAME");
     }
 
     [Test]
@@ -173,8 +163,7 @@ internal sealed class ReferenceToolsTests
     {
         var result = await _tools.FindReferences("/valid/path", "   ").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("EMPTY_SYMBOL_NAME");
+        await Assert.That(result.Code).IsEqualTo("EMPTY_SYMBOL_NAME");
     }
 
     [Test]
@@ -182,8 +171,7 @@ internal sealed class ReferenceToolsTests
     {
         var result = await _tools.FindReferences("/valid/path", "Foo", pathFilter: "../../../etc").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH_FILTER");
     }
 
     [Test]
@@ -194,8 +182,7 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("/valid/path", "bad\"query").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        await Assert.That(doc.RootElement.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
+        await Assert.That(result.TotalMatches).IsEqualTo(0);
     }
 
     [Test]
@@ -206,9 +193,8 @@ internal sealed class ReferenceToolsTests
 
         var result = await _tools.FindReferences("/valid/path", "Process<script>Attack").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
         // Script tags should be stripped from the response
-        await Assert.That(doc.RootElement.GetProperty("symbol").GetString()).IsEqualTo("ProcessscriptAttack");
+        await Assert.That(result.Symbol).IsEqualTo("ProcessscriptAttack");
     }
 
     [Test]
@@ -220,8 +206,8 @@ internal sealed class ReferenceToolsTests
         var maliciousPath = "/tmp/<script>alert(1)</script>";
         var result = await _tools.FindReferences(maliciousPath, "Foo").ConfigureAwait(false);
 
-        await Assert.That(result).DoesNotContain("<script>");
-        await Assert.That(result).DoesNotContain("alert(1)");
+        var serialized = JsonSerializer.Serialize(result);
+        await Assert.That(serialized).DoesNotContain("<script>");
+        await Assert.That(serialized).DoesNotContain("alert(1)");
     }
-
 }

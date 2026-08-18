@@ -52,14 +52,12 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.IndexProject("/valid/path").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("repo_id").GetString()).IsEqualTo("repo1");
-        await Assert.That(root.GetProperty("files_indexed").GetInt32()).IsEqualTo(42);
-        await Assert.That(root.GetProperty("files_unchanged").GetInt32()).IsEqualTo(3);
-        await Assert.That(root.GetProperty("total_files").GetInt32()).IsEqualTo(45);
-        await Assert.That(root.GetProperty("symbols_found").GetInt32()).IsEqualTo(187);
-        await Assert.That(root.GetProperty("duration_ms").GetInt64()).IsEqualTo(1250);
+        await Assert.That(result.RepoId).IsEqualTo("repo1");
+        await Assert.That(result.FilesIndexed).IsEqualTo(42);
+        await Assert.That(result.FilesUnchanged).IsEqualTo(3);
+        await Assert.That(result.TotalFiles).IsEqualTo(45);
+        await Assert.That(result.SymbolsFound).IsEqualTo(187);
+        await Assert.That(result.DurationMs).IsEqualTo(1250);
     }
 
     [Test]
@@ -70,10 +68,8 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.IndexProject("/../../../etc/passwd").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -86,10 +82,8 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.IndexProject("/outside/the/boundary").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -104,10 +98,8 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.IndexProject("/nonexistent/path").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Directory not found");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("DIRECTORY_NOT_FOUND");
+        await Assert.That(result.Error).IsEqualTo("Directory not found");
+        await Assert.That(result.Code).IsEqualTo("DIRECTORY_NOT_FOUND");
     }
 
     [Test]
@@ -163,12 +155,10 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.SnapshotCreate("/valid/path", "pre-refactor").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("snapshot_id").GetInt64()).IsEqualTo(1L);
-        await Assert.That(root.GetProperty("label").GetString()).IsEqualTo("pre-refactor");
-        await Assert.That(root.GetProperty("file_count").GetInt32()).IsEqualTo(42);
-        await Assert.That(root.GetProperty("symbol_count").GetInt32()).IsEqualTo(187);
+        await Assert.That(result.SnapshotId).IsEqualTo(1L);
+        await Assert.That(result.Label).IsEqualTo("pre-refactor");
+        await Assert.That(result.FileCount).IsEqualTo(42);
+        await Assert.That(result.SymbolCount).IsEqualTo(187);
     }
 
     [Test]
@@ -180,9 +170,7 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.SnapshotCreate("/valid/path", "pre-<script>alert('xss')</script>refactor").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var label = doc.RootElement.GetProperty("label").GetString();
-        await Assert.That(label).IsEqualTo("pre-scriptalertxssscriptrefactor");
+        await Assert.That(result.Label).IsEqualTo("pre-scriptalertxssscriptrefactor");
     }
 
     [Test]
@@ -195,9 +183,7 @@ internal sealed class IndexingToolsTests
         var longLabel = new string('a', 200);
         var result = await _tools.SnapshotCreate("/valid/path", longLabel).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var label = doc.RootElement.GetProperty("label").GetString();
-        await Assert.That(label!.Length).IsLessThanOrEqualTo(128);
+        await Assert.That(result.Label!.Length).IsLessThanOrEqualTo(128);
     }
 
     [Test]
@@ -208,10 +194,8 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.SnapshotCreate("/../invalid", "test-label").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -219,10 +203,8 @@ internal sealed class IndexingToolsTests
     {
         var result = await _tools.InvalidateCache("/valid/path").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("message").GetString())
+        await Assert.That(result.Success).IsTrue();
+        await Assert.That(result.Message)
             .IsEqualTo("Cache invalidated. Next index operation will perform a full reparse.");
 
         await _registryService.Received(1).DeregisterAsync("/valid/path").ConfigureAwait(false);
@@ -236,10 +218,8 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.InvalidateCache("/../invalid").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -271,6 +251,6 @@ internal sealed class IndexingToolsTests
 
         var result = await _tools.IndexProject(distinctivePath).ConfigureAwait(false);
 
-        await Assert.That(result).DoesNotContain(distinctivePath);
+        await Assert.That(JsonSerializer.Serialize(result)).DoesNotContain(distinctivePath);
     }
 }

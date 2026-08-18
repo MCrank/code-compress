@@ -1,6 +1,6 @@
 using System.ComponentModel;
-using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeCompress.Core.Contracts;
 using CodeCompress.Core.Registry;
 using CodeCompress.Core.Validation;
 using CodeCompress.Server.Scoping;
@@ -11,11 +11,6 @@ namespace CodeCompress.Server.Tools;
 [McpServerToolType]
 internal sealed partial class IndexingTools
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
-
     private readonly IPathValidator _pathValidator;
     private readonly IProjectScopeFactory _scopeFactory;
     private readonly IRegistryService _registryService;
@@ -31,9 +26,9 @@ internal sealed partial class IndexingTools
         _registryService = registryService;
     }
 
-    [McpServerTool(Name = "index_project", Title = "Index Project", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "index_project", Title = "Index Project", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Index a codebase to build a searchable symbol database — MUST be called before any query tools. Scans source files, extracts symbols (classes, methods, functions, types), and stores them in a SQLite index. Re-running performs an incremental update (only changed files are re-parsed), so it's fast after the initial index. This enables all other CodeCompress tools to provide compressed, symbol-level code access. First run: 5–120s depending on codebase size; incremental updates: <1s for unchanged files. Response is ~10–200 tokens. Returns JSON: {repo_id, project_root, files_indexed, files_unchanged, files_errored, total_files, symbols_found, duration_ms, parse_errors: [{file_path, reason}] or null}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH (path outside project root — fix the path), DIRECTORY_NOT_FOUND (directory does not exist — verify the path). Next: project_outline to explore the indexed codebase, or search_symbols to find specific symbols.")]
-    public async Task<string> IndexProject(
+    public async Task<IndexProjectResult> IndexProject(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Filter to a specific language (e.g., 'luau')")] string? language = null,
         [Description("Microsoft glob patterns for files to include (e.g., 'src/**/*.cs', '**/*.py', 'tests/**'). Omit to index all supported file types.")] string[]? includePatterns = null,
@@ -47,7 +42,7 @@ internal sealed partial class IndexingTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return ErrorResult("Path validation failed", "INVALID_PATH");
         }
 
         try
@@ -62,32 +57,30 @@ internal sealed partial class IndexingTools
                     excludePatterns,
                     cancellationToken).ConfigureAwait(false);
 
-                var response = new
+                return new IndexProjectResult
                 {
-                    result.RepoId,
+                    RepoId = result.RepoId,
                     ProjectRoot = scope.ProjectRoot,
-                    result.FilesIndexed,
-                    result.FilesUnchanged,
-                    result.FilesErrored,
-                    result.TotalFiles,
-                    result.SymbolsFound,
-                    result.DurationMs,
-                    ParseErrors = result.ParseFailures?.Select(f => new { f.FilePath, f.Reason }),
+                    FilesIndexed = result.FilesIndexed,
+                    FilesUnchanged = result.FilesUnchanged,
+                    FilesErrored = result.FilesErrored,
+                    TotalFiles = result.TotalFiles,
+                    SymbolsFound = result.SymbolsFound,
+                    DurationMs = result.DurationMs,
+                    ParseErrors = result.ParseFailures?.Select(f => new ParseFailureContract { FilePath = f.FilePath, Reason = f.Reason }).ToList(),
                     Hint = "Run project_outline to explore the indexed codebase, or search_symbols to find specific symbols.",
                 };
-
-                return JsonSerializer.Serialize(response, SerializerOptions);
             }
         }
         catch (DirectoryNotFoundException)
         {
-            return SerializeError("Directory not found", "DIRECTORY_NOT_FOUND");
+            return ErrorResult("Directory not found", "DIRECTORY_NOT_FOUND");
         }
     }
 
-    [McpServerTool(Name = "snapshot_create", Title = "Create Snapshot", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
+    [McpServerTool(Name = "snapshot_create", Title = "Create Snapshot", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Create a named snapshot of the current index state. Use before making code changes, then call changes_since with the snapshot label to see a precise symbol-level diff of what changed. Requires index_project to have been called first. ~10 tokens. Returns JSON: {snapshot_id, label, file_count, symbol_count}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH. Next: after making changes, run index_project then changes_since with this label to see a symbol-level diff.")]
-    public async Task<string> SnapshotCreate(
+    public async Task<SnapshotCreateResult> SnapshotCreate(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         [Description("Human-readable snapshot label")] string label,
         CancellationToken cancellationToken = default)
@@ -99,7 +92,7 @@ internal sealed partial class IndexingTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new SnapshotCreateResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         var sanitizedLabel = SanitizeLabel(label);
@@ -120,22 +113,20 @@ internal sealed partial class IndexingTools
 
             var snapshotId = await scope.Store.CreateSnapshotAsync(snapshot).ConfigureAwait(false);
 
-            return JsonSerializer.Serialize(
-                new
-                {
-                    SnapshotId = snapshotId,
-                    Label = sanitizedLabel,
-                    FileCount = fileCount,
-                    SymbolCount = symbolCount,
-                    Hint = $"After making changes, run changes_since with label '{sanitizedLabel}' to see symbol-level diffs.",
-                },
-                SerializerOptions);
+            return new SnapshotCreateResult
+            {
+                SnapshotId = snapshotId,
+                Label = sanitizedLabel,
+                FileCount = fileCount,
+                SymbolCount = symbolCount,
+                Hint = $"After making changes, run changes_since with label '{sanitizedLabel}' to see symbol-level diffs.",
+            };
         }
     }
 
-    [McpServerTool(Name = "invalidate_cache", Title = "Invalidate Cache", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "invalidate_cache", Title = "Invalidate Cache", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Delete ALL indexed data for a project — removes every symbol, dependency, file record, and repository metadata from the database. The next index_project call will perform a full re-index from scratch, which can be slow for large codebases. Only use when the index appears corrupted or out of sync. For normal updates, prefer index_project which performs fast incremental re-indexing of only changed files. ~10 tokens. Returns JSON: {success: true, message}. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH. Next: call index_project immediately after to rebuild the index from scratch.")]
-    public async Task<string> InvalidateCache(
+    public async Task<InvalidateCacheResult> InvalidateCache(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
         CancellationToken cancellationToken = default)
     {
@@ -146,18 +137,16 @@ internal sealed partial class IndexingTools
         }
         catch (ArgumentException)
         {
-            return SerializeError("Path validation failed", "INVALID_PATH");
+            return new InvalidateCacheResult { Error = "Path validation failed", Code = "INVALID_PATH", Retryable = false };
         }
 
         await _registryService.DeregisterAsync(validatedPath).ConfigureAwait(false);
 
-        return JsonSerializer.Serialize(
-            new
-            {
-                Success = true,
-                Message = "Cache invalidated. Next index operation will perform a full reparse.",
-            },
-            SerializerOptions);
+        return new InvalidateCacheResult
+        {
+            Success = true,
+            Message = "Cache invalidated. Next index operation will perform a full reparse.",
+        };
     }
 
     internal static string SanitizeLabel(string? label)
@@ -177,10 +166,8 @@ internal sealed partial class IndexingTools
         return sanitized.Trim();
     }
 
-    private static string SerializeError(string error, string code, string? guidance = null) =>
-        guidance is null
-            ? JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false }, SerializerOptions)
-            : JsonSerializer.Serialize(new { Error = error, Code = code, Retryable = false, Guidance = guidance }, SerializerOptions);
+    private static IndexProjectResult ErrorResult(string error, string code) =>
+        new() { Error = error, Code = code, Retryable = false };
 
     [GeneratedRegex(@"[^a-zA-Z0-9 _.\-]")]
     private static partial Regex SafeLabelPattern();
