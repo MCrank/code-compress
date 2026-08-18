@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-08-18
+
+First stable release — full compliance with MCP specification revision 2026-07-28 and a schema-validated tool surface across all 22 tools.
 
 ### Added
 - **Tool annotations** — all 22 tools now declare accurate `ReadOnly`/`Destructive`/`Idempotent`/`OpenWorld`/`Title` hints instead of the MCP SDK's `Destructive=true`/`OpenWorld=true` defaults, so hosts no longer prompt for confirmation before harmless read-only queries (#207)
