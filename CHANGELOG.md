@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **BREAKING:** `ModelContextProtocol` bumped from 1.4.0 to 2.2.0, adopting MCP specification revision **2026-07-28**. Client support for protocol revisions prior to 2025-11-25 is dropped. CodeCompress remains stdio-only, so the stateless-HTTP-oriented breaking changes in this spec revision (`Mcp-Session-Id` removal, `subscriptions/listen`, SSE resumability removal, OAuth hardening) do not affect it; no Roots, Sampling, or MCP Logging APIs were in use, so none of the SEP-2577 deprecations apply (#206)
+- **Package bump** — `Microsoft.Data.Sqlite` 10.0.8 → 10.0.11, resolving a high-severity transitive advisory in `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 (GHSA-2m69-gcr7-jv3q) that otherwise fails the `TreatWarningsAsErrors` build (#206)
+
 ## [0.15.0] - 2026-06-10
 
 ### Added
