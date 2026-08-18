@@ -80,6 +80,12 @@ indexCommand.SetAction(async parseResult =>
     var scope = await CreateProjectScopeAsync(path, provider).ConfigureAwait(false);
     await using (scope.ConfigureAwait(false))
     {
+        // Progress feedback on stderr only -- stdout stays a single machine-readable document for --json.
+        // MCP's index_project can run as a background task an agent polls; the CLI has no equivalent
+        // polling loop (it calls IndexEngine in-process), so it surfaces an upfront notice instead.
+        await Console.Error.WriteLineAsync(
+            "Indexing... (first run can take up to 2 minutes on large codebases; incremental updates are usually <1s)").ConfigureAwait(false);
+
         var result = await scope.Engine.IndexProjectAsync(
             scope.ProjectRoot,
             language,

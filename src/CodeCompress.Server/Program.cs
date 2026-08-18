@@ -5,6 +5,7 @@ using CodeCompress.Server.Prompts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Extensions.Tasks;
 using ModelContextProtocol.Protocol;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -53,7 +54,9 @@ builder.Services
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly()
-    .WithPrompts<PromptsProvider>();
+    .WithPrompts<PromptsProvider>()
+    .WithTasks(new InMemoryMcpTaskStore(), options =>
+        options.ExecutionModeSelector = context => TaskExecutionModeSelector.Select(context.Params.Name));
 
 var host = builder.Build();
 
