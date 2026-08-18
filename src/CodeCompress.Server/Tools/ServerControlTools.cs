@@ -22,7 +22,7 @@ internal sealed class ServerControlTools
         _lifetime = lifetime;
     }
 
-    [McpServerTool(Name = "stop_server")]
+    [McpServerTool(Name = "stop_server", Title = "Stop Server", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Gracefully shut down the CodeCompress MCP server. Claude Code will automatically restart it on the next tool call. Use this to release DLL locks during development or free resources. Returns JSON: {success: true, message}.")]
     public async Task<string> StopServer()
     {

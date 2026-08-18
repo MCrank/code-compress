@@ -39,7 +39,7 @@ internal sealed class DependencyTools
         _scopeFactory = scopeFactory;
     }
 
-    [McpServerTool(Name = "dependency_graph")]
+    [McpServerTool(Name = "dependency_graph", Title = "Get Dependency Graph", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get the import/require dependency graph for a project or specific file — shows which files depend on which others. Use to understand code relationships before making changes. Requires index_project to have been called first. ~100–2,000 tokens (varies with project size). Prefer blast_radius over this tool when you need a direct 'what depends on X' answer (~50–500 tokens vs 100–2,000). Use this tool for broader structural understanding of the full import network. Returns plain text: each file node followed by 'requires -> file1, file2' and 'required by -> file3' edges, with a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, INVALID_DIRECTION (see direction param for valid values), INVALID_EDGE_KIND (see edgeKind param), FILE_NOT_FOUND (rootFile not in index — verify path and run index_project). Next: blast_radius for targeted impact analysis, or find_references for specific symbol call sites.")]
     public async Task<string> DependencyGraph(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MyGame' or '/home/user/my-project'). Must NOT be a subdirectory or relative path.")] string path,
@@ -105,7 +105,7 @@ internal sealed class DependencyTools
         }
     }
 
-    [McpServerTool(Name = "blast_radius")]
+    [McpServerTool(Name = "blast_radius", Title = "Get Blast Radius", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Perform a reverse BFS to find all files affected if a given file or symbol changes — answers 'what breaks if I change X?' Requires index_project to have been called first. ~50–500 tokens. Prefer over dependency_graph for a direct impact answer (dependency_graph is ~100–2,000 tokens for structural overview). Prefer find_references when you need exact line numbers, not just affected file counts. Returns JSON with total_affected count and depths array (each entry: depth, files). Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, NOT_FOUND (file or symbol not in index). Next: find_references on the same symbol to pinpoint exact call sites before refactoring.")]
     public async Task<string> BlastRadius(
         [Description("ABSOLUTE path to the project root directory.")] string path,
@@ -170,7 +170,7 @@ internal sealed class DependencyTools
         }
     }
 
-    [McpServerTool(Name = "find_unused_symbols")]
+    [McpServerTool(Name = "find_unused_symbols", Title = "Find Unused Symbols", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Find public symbols with no incoming dependency edges — best-effort dead code detection. Excludes test files, Main entry point, HTTP controller action attributes. Requires index_project to have been called first. ~50–500 tokens. Use before cleanup or refactoring to identify candidates for removal. Returns JSON array of {name, kind, signature}. Errors return JSON {error, code, retryable}. Code: INVALID_PATH. Next: find_references on each result to confirm no dynamic usage before deleting.")]
     public async Task<string> FindUnusedSymbols(
         [Description("ABSOLUTE path to the project root directory.")] string path,
@@ -288,7 +288,7 @@ internal sealed class DependencyTools
         return sb.ToString();
     }
 
-    [McpServerTool(Name = "project_dependencies")]
+    [McpServerTool(Name = "project_dependencies", Title = "Get Project Dependencies", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Show inter-project dependency relationships in a .NET solution — parses ProjectReference entries from indexed .csproj files to build a project-level dependency graph with shared public types. Use to understand solution architecture. Requires index_project to have been called first. ~50–500 tokens. Prefer over dependency_graph for .NET solution-level architecture (project layer, not file layer). Returns plain text: each project node with 'references -> project1, project2' (with shared types) and 'referenced by -> project3', plus a total summary line. Errors return JSON {error, code, retryable}. Codes: INVALID_PATH, NO_PROJECTS (no .csproj/.fsproj/.vbproj files in index — run index_project first). Next: dependency_graph for file-level dependency detail within a project.")]
     public async Task<string> ProjectDependencies(
         [Description("ABSOLUTE path to the project root directory — the same root used with index_project (e.g., 'C:\\Projects\\MySolution' or '/home/user/my-solution'). Must NOT be a subdirectory or relative path.")] string path,

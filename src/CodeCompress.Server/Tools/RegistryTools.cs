@@ -21,7 +21,7 @@ internal sealed class RegistryTools
         _registryService = registryService;
     }
 
-    [McpServerTool(Name = "list_repos")]
+    [McpServerTool(Name = "list_repos", Title = "List Indexed Repositories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description(
         "List all projects that have been indexed in the global CodeCompress database. " +
         "Returns an empty array when no projects have been indexed. " +
