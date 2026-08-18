@@ -222,8 +222,8 @@ Enforced via `.editorconfig`:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `ModelContextProtocol` | 1.3.0 | MCP SDK — server hosting, tool/prompt registration |
-| `Microsoft.Data.Sqlite` | 10.0.8 | SQLite access with FTS5 |
+| `ModelContextProtocol` | 2.2.0 | MCP SDK — server hosting, tool/prompt registration (spec revision 2026-07-28; stdio transport negotiates 2025-11-25) |
+| `Microsoft.Data.Sqlite` | 10.0.11 | SQLite access with FTS5 |
 | `Microsoft.Extensions.FileSystemGlobbing` | 10.0.8 | Glob pattern matching for file discovery |
 | `Microsoft.Extensions.Hosting` | 10.0.8 | Generic host for DI, logging |
 | `TreeSitter.DotNet` | 1.3.0 | Tree-sitter bindings — AST parsing for C#, Java, Go, TypeScript/JavaScript, Rust, Python |
