@@ -177,6 +177,8 @@ index_project(path: "/path/to/your/project")
 
 First run does a **full index** — parses every source file and stores symbols in SQLite. Subsequent runs are **incremental** — only files whose SHA-256 hash changed get re-parsed.
 
+`index_project` supports the [MCP Tasks extension](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2663-tasks-extension.md) (`io.modelcontextprotocol/tasks`) as optional, non-blocking work: a client that declares the extension and calls it via the task-aware path (e.g. the C# SDK's `CallToolAsTaskAsync`) gets a task handle back immediately instead of blocking for the full 5–120s a first-time index can take, then polls `tasks/get` until it completes. Clients that don't use the tasks extension are unaffected — an ordinary `tools/call` still blocks and returns the result directly, exactly as before, so a sub-second incremental re-index never gets routed through a polling loop. No other tool declares task support; every other tool already returns in well under a second.
+
 ### 3. Start coding
 
 That's it. Your agent now has instant access to your codebase structure. It will automatically use tools like `project_outline`, `get_symbol`, and `search_symbols` instead of reading raw files.
