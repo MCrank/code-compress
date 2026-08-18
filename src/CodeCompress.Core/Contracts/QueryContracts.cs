@@ -68,7 +68,11 @@ public sealed record GetModuleApiResult
     public bool? Retryable { get; init; }
 }
 
-public sealed record GetSymbolResult
+/// <summary>
+/// Shared name/kind/location fields for a resolved symbol. Base for the result shapes that
+/// resolve a single symbol by name (get_symbol, expand_symbol) or list one in a batch (get_symbols).
+/// </summary>
+public abstract record SymbolLocationContract
 {
     [property: JsonPropertyName("name")]
     public string? Name { get; init; }
@@ -90,7 +94,14 @@ public sealed record GetSymbolResult
 
     [property: JsonPropertyName("signature")]
     public string? Signature { get; init; }
+}
 
+/// <summary>
+/// A resolved symbol's source, plus the large-symbol guided-summary fields (truncated/children/guidance)
+/// shared by get_symbol's own large-symbol path and each item in get_symbols' batch results.
+/// </summary>
+public record SymbolItemContract : SymbolLocationContract
+{
     [property: JsonPropertyName("source_code")]
     public string? SourceCode { get; init; }
 
@@ -105,7 +116,10 @@ public sealed record GetSymbolResult
 
     [property: JsonPropertyName("guidance")]
     public string? Guidance { get; init; }
+}
 
+public sealed record GetSymbolResult : SymbolItemContract
+{
     [property: JsonPropertyName("error")]
     public string? Error { get; init; }
 
@@ -122,29 +136,8 @@ public sealed record GetSymbolResult
     public IReadOnlyList<string>? Candidates { get; init; }
 }
 
-public sealed record ExpandSymbolResult
+public sealed record ExpandSymbolResult : SymbolLocationContract
 {
-    [property: JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [property: JsonPropertyName("kind")]
-    public string? Kind { get; init; }
-
-    [property: JsonPropertyName("parent")]
-    public string? Parent { get; init; }
-
-    [property: JsonPropertyName("file")]
-    public string? File { get; init; }
-
-    [property: JsonPropertyName("line_start")]
-    public int? LineStart { get; init; }
-
-    [property: JsonPropertyName("line_end")]
-    public int? LineEnd { get; init; }
-
-    [property: JsonPropertyName("signature")]
-    public string? Signature { get; init; }
-
     [property: JsonPropertyName("doc_comment")]
     public string? DocComment { get; init; }
 
@@ -165,45 +158,6 @@ public sealed record ExpandSymbolResult
 
     [property: JsonPropertyName("candidates")]
     public IReadOnlyList<string>? Candidates { get; init; }
-
-    [property: JsonPropertyName("guidance")]
-    public string? Guidance { get; init; }
-}
-
-public sealed record SymbolItemContract
-{
-    [property: JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [property: JsonPropertyName("kind")]
-    public string? Kind { get; init; }
-
-    [property: JsonPropertyName("parent")]
-    public string? Parent { get; init; }
-
-    [property: JsonPropertyName("file")]
-    public string? File { get; init; }
-
-    [property: JsonPropertyName("line_start")]
-    public int? LineStart { get; init; }
-
-    [property: JsonPropertyName("line_end")]
-    public int? LineEnd { get; init; }
-
-    [property: JsonPropertyName("signature")]
-    public string? Signature { get; init; }
-
-    [property: JsonPropertyName("source_code")]
-    public string? SourceCode { get; init; }
-
-    [property: JsonPropertyName("truncated")]
-    public bool? Truncated { get; init; }
-
-    [property: JsonPropertyName("source_size_bytes")]
-    public int? SourceSizeBytes { get; init; }
-
-    [property: JsonPropertyName("children")]
-    public IReadOnlyList<SymbolChildContract>? Children { get; init; }
 
     [property: JsonPropertyName("guidance")]
     public string? Guidance { get; init; }

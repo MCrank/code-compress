@@ -234,19 +234,9 @@ getSymbolCommand.SetAction(async parseResult =>
             else if (candidates.Count > 1)
             {
                 var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList();
-                if (json)
-                {
-                    Environment.ExitCode = 1;
-                    Console.WriteLine(JsonSerializer.Serialize(
-                        new GetSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames },
-                        jsonSerializerOptions));
-                }
-                else
-                {
-                    await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                        $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
-                }
-
+                await WriteMultiCandidateErrorAsync(
+                    "Multiple symbols match this name", qualifiedNames, json, jsonSerializerOptions,
+                    new GetSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                 return;
             }
             else
@@ -1075,19 +1065,9 @@ expandSymbolCommand.SetAction(async parseResult =>
                 else if (prefixCandidates.Count > 1)
                 {
                     var qualifiedNames = prefixCandidates.Select(c => $"{parent}:{c.Name}").ToList();
-                    if (json)
-                    {
-                        Environment.ExitCode = 1;
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            new ExpandSymbolResult { Error = "Multiple symbols match this prefix", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames },
-                            jsonSerializerOptions));
-                    }
-                    else
-                    {
-                        await WriteErrorAsync("Multiple symbols match this prefix", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                            $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
-                    }
-
+                    await WriteMultiCandidateErrorAsync(
+                        "Multiple symbols match this prefix", qualifiedNames, json, jsonSerializerOptions,
+                        new ExpandSymbolResult { Error = "Multiple symbols match this prefix", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                     return;
                 }
             }
@@ -1103,19 +1083,9 @@ expandSymbolCommand.SetAction(async parseResult =>
                 else if (candidates.Count > 1)
                 {
                     var qualifiedNames = candidates.Select(c => c.ParentSymbol is not null ? $"{c.ParentSymbol}:{c.Name}" : c.Name).ToList();
-                    if (json)
-                    {
-                        Environment.ExitCode = 1;
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            new ExpandSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames },
-                            jsonSerializerOptions));
-                    }
-                    else
-                    {
-                        await WriteErrorAsync("Multiple symbols match this name", "SYMBOL_NOT_FOUND", json, jsonSerializerOptions,
-                            $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
-                    }
-
+                    await WriteMultiCandidateErrorAsync(
+                        "Multiple symbols match this name", qualifiedNames, json, jsonSerializerOptions,
+                        new ExpandSymbolResult { Error = "Multiple symbols match this name", Code = "SYMBOL_NOT_FOUND", Retryable = false, Symbol = SanitizeSymbolName(name), Candidates = qualifiedNames }).ConfigureAwait(false);
                     return;
                 }
                 else
@@ -2162,6 +2132,24 @@ static async Task WriteErrorAsync(string error, string code, bool isJson, JsonSe
         {
             await Console.Error.WriteLineAsync($"  Hint: {guidance}").ConfigureAwait(false);
         }
+    }
+}
+
+// Shared by get-symbol/expand-symbol's multi-candidate SYMBOL_NOT_FOUND branches: in --json mode
+// the candidates go into a proper array field on the tool's own typed result; in text mode they're
+// flattened into WriteErrorAsync's guidance string.
+static async Task WriteMultiCandidateErrorAsync<TResult>(
+    string errorMessage, IReadOnlyList<string> qualifiedNames, bool json, JsonSerializerOptions jsonOptions, TResult structuredResult)
+{
+    Environment.ExitCode = 1;
+    if (json)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(structuredResult, jsonOptions));
+    }
+    else
+    {
+        await WriteErrorAsync(errorMessage, "SYMBOL_NOT_FOUND", json, jsonOptions,
+            $"Candidates: {string.Join(", ", qualifiedNames)}").ConfigureAwait(false);
     }
 }
 
