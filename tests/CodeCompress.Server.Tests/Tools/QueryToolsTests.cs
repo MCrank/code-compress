@@ -35,6 +35,8 @@ internal sealed class QueryToolsTests
         _tools = new QueryTools(_pathValidator, _scopeFactory);
     }
 
+    // ── ProjectOutline (unchanged: still returns Markdown, not structured content) ──
+
     [Test]
     public async Task ProjectOutlineValidPathReturnsStructuredOutline()
     {
@@ -406,6 +408,8 @@ internal sealed class QueryToolsTests
         await Assert.That(result).Contains("149 symbols remaining");
     }
 
+    // ── GetModuleApi ─────────────────────────────────────────────────
+
     [Test]
     public async Task GetModuleApiValidModuleReturnsFullApi()
     {
@@ -425,26 +429,21 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetModuleApi("/valid/path", "src/services/CombatService.luau").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("module").GetString()).IsEqualTo("src/services/CombatService.luau");
+        await Assert.That(result.Module).IsEqualTo("src/services/CombatService.luau");
+        await Assert.That(result.Symbols).Count().IsEqualTo(2);
 
-        var symbolsArray = root.GetProperty("symbols");
-        await Assert.That(symbolsArray.GetArrayLength()).IsEqualTo(2);
+        var firstSymbol = result.Symbols![0];
+        await Assert.That(firstSymbol.Name).IsEqualTo("CombatService");
+        await Assert.That(firstSymbol.Kind).IsEqualTo("Class");
+        await Assert.That(firstSymbol.Signature).IsEqualTo("local CombatService = {} :: CombatService");
+        await Assert.That(firstSymbol.Line).IsEqualTo(1);
+        await Assert.That(firstSymbol.DocComment).IsEqualTo("Combat service module");
 
-        var firstSymbol = symbolsArray[0];
-        await Assert.That(firstSymbol.GetProperty("name").GetString()).IsEqualTo("CombatService");
-        await Assert.That(firstSymbol.GetProperty("kind").GetString()).IsEqualTo("Class");
-        await Assert.That(firstSymbol.GetProperty("signature").GetString()).IsEqualTo("local CombatService = {} :: CombatService");
-        await Assert.That(firstSymbol.GetProperty("line").GetInt32()).IsEqualTo(1);
-        await Assert.That(firstSymbol.GetProperty("doc_comment").GetString()).IsEqualTo("Combat service module");
+        var secondSymbol = result.Symbols![1];
+        await Assert.That(secondSymbol.Name).IsEqualTo("ProcessAttack");
+        await Assert.That(secondSymbol.Kind).IsEqualTo("Method");
 
-        var secondSymbol = symbolsArray[1];
-        await Assert.That(secondSymbol.GetProperty("name").GetString()).IsEqualTo("ProcessAttack");
-        await Assert.That(secondSymbol.GetProperty("kind").GetString()).IsEqualTo("Method");
-
-        var depsArray = root.GetProperty("dependencies");
-        await Assert.That(depsArray.GetArrayLength()).IsEqualTo(1);
+        await Assert.That(result.Dependencies).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -455,10 +454,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetModuleApi("/valid/path", "src/nonexistent.luau").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Module not found");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("MODULE_NOT_FOUND");
+        await Assert.That(result.Error).IsEqualTo("Module not found");
+        await Assert.That(result.Code).IsEqualTo("MODULE_NOT_FOUND");
     }
 
     [Test]
@@ -469,10 +466,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetModuleApi("/valid/path", "../../etc/passwd").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -483,10 +478,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetModuleApi("/../invalid", "src/module.luau").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -508,15 +501,13 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetModuleApi("/valid/path", "src/services/CombatService.luau").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        var depsArray = root.GetProperty("dependencies");
-        await Assert.That(depsArray.GetArrayLength()).IsEqualTo(2);
-
-        await Assert.That(depsArray[0].GetProperty("requires_path").GetString()).IsEqualTo("src/utils/MathUtils");
-        await Assert.That(depsArray[1].GetProperty("requires_path").GetString()).IsEqualTo("src/utils/DamageCalc");
-        await Assert.That(depsArray[1].GetProperty("alias").GetString()).IsEqualTo("Damage");
+        await Assert.That(result.Dependencies).Count().IsEqualTo(2);
+        await Assert.That(result.Dependencies![0].RequiresPath).IsEqualTo("src/utils/MathUtils");
+        await Assert.That(result.Dependencies![1].RequiresPath).IsEqualTo("src/utils/DamageCalc");
+        await Assert.That(result.Dependencies![1].Alias).IsEqualTo("Damage");
     }
+
+    // ── GetSymbol ────────────────────────────────────────────────────
 
     [Test]
     public async Task GetSymbolExistingSymbolReturnsSourceCode()
@@ -545,17 +536,15 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "CombatService:ProcessAttack").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("ProcessAttack");
-            await Assert.That(root.GetProperty("kind").GetString()).IsEqualTo("Method");
-            await Assert.That(root.GetProperty("parent").GetString()).IsEqualTo("CombatService");
-            await Assert.That(root.GetProperty("file").GetString()).IsEqualTo(fileName);
-            await Assert.That(root.GetProperty("line_start").GetInt32()).IsEqualTo(3);
-            await Assert.That(root.GetProperty("line_end").GetInt32()).IsEqualTo(8);
-            await Assert.That(root.GetProperty("signature").GetString())
+            await Assert.That(result.Name).IsEqualTo("ProcessAttack");
+            await Assert.That(result.Kind).IsEqualTo("Method");
+            await Assert.That(result.Parent).IsEqualTo("CombatService");
+            await Assert.That(result.File).IsEqualTo(fileName);
+            await Assert.That(result.LineStart).IsEqualTo(3);
+            await Assert.That(result.LineEnd).IsEqualTo(8);
+            await Assert.That(result.Signature)
                 .IsEqualTo("function CombatService:ProcessAttack()");
-            await Assert.That(root.GetProperty("source_code").GetString())
+            await Assert.That(result.SourceCode)
                 .IsEqualTo("function ProcessAttack()\n  body\nend");
         }
         finally
@@ -597,9 +586,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "MyFunc", includeContext: true).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var sourceCode = root.GetProperty("source_code").GetString()!;
+            var sourceCode = result.SourceCode!;
 
             // With 5 lines context, should include lines 1-13 (5 before line 6, lines 6-8, 5 after line 8)
             await Assert.That(sourceCode).Contains("line1");
@@ -640,9 +627,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "Start", includeContext: true).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var sourceCode = root.GetProperty("source_code").GetString()!;
+            var sourceCode = result.SourceCode!;
             await Assert.That(sourceCode).Contains("function Start()");
             await Assert.That(sourceCode).Contains("body");
             await Assert.That(sourceCode).Contains("end");
@@ -680,9 +665,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "End", includeContext: true).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var sourceCode = root.GetProperty("source_code").GetString()!;
+            var sourceCode = result.SourceCode!;
             await Assert.That(sourceCode).Contains("function End()");
             await Assert.That(sourceCode).Contains("body");
             await Assert.That(sourceCode).Contains("end");
@@ -701,11 +684,9 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetSymbol("/valid/path", "NonExistent").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
-        await Assert.That(root.GetProperty("guidance").GetString())
+        await Assert.That(result.Error).IsEqualTo("Symbol not found");
+        await Assert.That(result.Code).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(result.Guidance)
             .Contains("search_symbols").And.Contains("index_project");
     }
 
@@ -717,10 +698,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetSymbol("/../../../etc/passwd", "SomeSymbol").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -754,9 +733,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "Exact").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(expectedSource);
+            await Assert.That(result.SourceCode).IsEqualTo(expectedSource);
         }
         finally
         {
@@ -797,14 +774,12 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.ExpandSymbol(dir, "PlayerService:GetHealth").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("GetHealth");
-            await Assert.That(root.GetProperty("kind").GetString()).IsEqualTo("Method");
-            await Assert.That(root.GetProperty("parent").GetString()).IsEqualTo("PlayerService");
-            await Assert.That(root.GetProperty("signature").GetString()).IsEqualTo("public int GetHealth()");
-            await Assert.That(root.GetProperty("doc_comment").GetString()).IsEqualTo("Gets player health");
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(methodSource);
+            await Assert.That(result.Name).IsEqualTo("GetHealth");
+            await Assert.That(result.Kind).IsEqualTo("Method");
+            await Assert.That(result.Parent).IsEqualTo("PlayerService");
+            await Assert.That(result.Signature).IsEqualTo("public int GetHealth()");
+            await Assert.That(result.DocComment).IsEqualTo("Gets player health");
+            await Assert.That(result.SourceCode).IsEqualTo(methodSource);
         }
         finally
         {
@@ -841,11 +816,9 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.ExpandSymbol(dir, "Initialize").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("Initialize");
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(expectedSource);
-            await Assert.That(root.TryGetProperty("parent", out var parentProp) && parentProp.ValueKind == JsonValueKind.Null).IsTrue();
+            await Assert.That(result.Name).IsEqualTo("Initialize");
+            await Assert.That(result.SourceCode).IsEqualTo(expectedSource);
+            await Assert.That(result.Parent).IsNull();
         }
         finally
         {
@@ -861,11 +834,9 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.ExpandSymbol("/valid/path", "NonExistent:Method").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Symbol not found");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
-        await Assert.That(root.GetProperty("guidance").GetString())
+        await Assert.That(result.Error).IsEqualTo("Symbol not found");
+        await Assert.That(result.Code).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(result.Guidance)
             .Contains("search_symbols").And.Contains("index_project");
     }
 
@@ -887,13 +858,10 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.ExpandSymbol("/valid/path", "ProjectEndpoints:MapMaestroProject").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
-        var candidateArray = root.GetProperty("candidates");
-        await Assert.That(candidateArray.GetArrayLength()).IsEqualTo(2);
-        await Assert.That(candidateArray[0].GetString()).IsEqualTo("ProjectEndpoints:MapMaestroProjectCrudEndpoints");
-        await Assert.That(candidateArray[1].GetString()).IsEqualTo("ProjectEndpoints:MapMaestroProjectMemberEndpoints");
+        await Assert.That(result.Code).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(result.Candidates).Count().IsEqualTo(2);
+        await Assert.That(result.Candidates![0]).IsEqualTo("ProjectEndpoints:MapMaestroProjectCrudEndpoints");
+        await Assert.That(result.Candidates![1]).IsEqualTo("ProjectEndpoints:MapMaestroProjectMemberEndpoints");
     }
 
     [Test]
@@ -930,9 +898,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.ExpandSymbol(dir, "ProjectEndpoints:MapMaestroProjectMember").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("MapMaestroProjectMemberEndpoints");
+            await Assert.That(result.Name).IsEqualTo("MapMaestroProjectMemberEndpoints");
         }
         finally
         {
@@ -948,10 +914,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.ExpandSymbol("/../../../etc/passwd", "SomeSymbol").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -987,8 +951,7 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.ExpandSymbol(dir, "Target", includeContext: true).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var sourceCode = doc.RootElement.GetProperty("source_code").GetString()!;
+            var sourceCode = result.SourceCode!;
 
             // Context algorithm counts the boundary newline as one of the 3,
             // so we get 2 visible context lines before and after
@@ -1009,6 +972,8 @@ internal sealed class QueryToolsTests
             File.Delete(tempFile);
         }
     }
+
+    // ── GetSymbols (batch) ───────────────────────────────────────────
 
     [Test]
     public async Task GetSymbolsAllFoundReturnsAllResults()
@@ -1042,13 +1007,8 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbols(dir, ["A", "B", "C"]).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var results = root.GetProperty("results");
-            await Assert.That(results.GetArrayLength()).IsEqualTo(3);
-
-            var errors = root.GetProperty("errors");
-            await Assert.That(errors.GetArrayLength()).IsEqualTo(0);
+            await Assert.That(result.Results).Count().IsEqualTo(3);
+            await Assert.That(result.Errors).Count().IsEqualTo(0);
         }
         finally
         {
@@ -1086,17 +1046,12 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbols(dir, ["A", "B", "Missing"]).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var results = root.GetProperty("results");
-            await Assert.That(results.GetArrayLength()).IsEqualTo(2);
-
-            var errors = root.GetProperty("errors");
-            await Assert.That(errors.GetArrayLength()).IsEqualTo(1);
-            await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing");
-            await Assert.That(errors[0].GetProperty("error").GetString()).IsEqualTo("Symbol not found");
-            await Assert.That(errors[0].GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
-            await Assert.That(errors[0].GetProperty("guidance").GetString())
+            await Assert.That(result.Results).Count().IsEqualTo(2);
+            await Assert.That(result.Errors).Count().IsEqualTo(1);
+            await Assert.That(result.Errors![0].Symbol).IsEqualTo("Missing");
+            await Assert.That(result.Errors![0].Error).IsEqualTo("Symbol not found");
+            await Assert.That(result.Errors![0].Code).IsEqualTo("SYMBOL_NOT_FOUND");
+            await Assert.That(result.Errors![0].Guidance)
                 .Contains("search_symbols").And.Contains("index_project");
         }
         finally
@@ -1113,15 +1068,10 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetSymbols("/valid/path", ["Missing1", "Missing2"]).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        var results = root.GetProperty("results");
-        await Assert.That(results.GetArrayLength()).IsEqualTo(0);
-
-        var errors = root.GetProperty("errors");
-        await Assert.That(errors.GetArrayLength()).IsEqualTo(2);
-        await Assert.That(errors[0].GetProperty("symbol").GetString()).IsEqualTo("Missing1");
-        await Assert.That(errors[1].GetProperty("symbol").GetString()).IsEqualTo("Missing2");
+        await Assert.That(result.Results).Count().IsEqualTo(0);
+        await Assert.That(result.Errors).Count().IsEqualTo(2);
+        await Assert.That(result.Errors![0].Symbol).IsEqualTo("Missing1");
+        await Assert.That(result.Errors![1].Symbol).IsEqualTo("Missing2");
     }
 
     [Test]
@@ -1154,17 +1104,11 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbols(dir, ["A", "B"]).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var results = root.GetProperty("results");
-            await Assert.That(results.GetArrayLength()).IsEqualTo(2);
+            await Assert.That(result.Results).Count().IsEqualTo(2);
 
-            await Assert.That(results[0].GetProperty("name").GetString()).IsEqualTo("A");
-            await Assert.That(results[0].GetProperty("source_code").GetString())
-                .IsEqualTo("function A()\nend");
-            await Assert.That(results[1].GetProperty("name").GetString()).IsEqualTo("B");
-            await Assert.That(results[1].GetProperty("source_code").GetString())
-                .IsEqualTo("function B()\nend");
+            var byName = result.Results!.ToDictionary(r => r.Name!);
+            await Assert.That(byName["A"].SourceCode).IsEqualTo("function A()\nend");
+            await Assert.That(byName["B"].SourceCode).IsEqualTo("function B()\nend");
         }
         finally
         {
@@ -1179,11 +1123,9 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetSymbols("/valid/path", names).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString())
+        await Assert.That(result.Error)
             .IsEqualTo("Too many symbols requested. Maximum is 50");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_LIMIT_EXCEEDED");
+        await Assert.That(result.Code).IsEqualTo("SYMBOL_LIMIT_EXCEEDED");
     }
 
     [Test]
@@ -1191,11 +1133,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.GetSymbols("/valid/path", []).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString())
-            .IsEqualTo("No symbol names provided");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_SYMBOL_NAMES");
+        await Assert.That(result.Error).IsEqualTo("No symbol names provided");
+        await Assert.That(result.Code).IsEqualTo("EMPTY_SYMBOL_NAMES");
     }
 
     [Test]
@@ -1206,11 +1145,11 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetSymbols("/../../../etc/passwd", ["SomeSymbol"]).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
+
+    // ── SearchSymbols ────────────────────────────────────────────────
 
     [Test]
     public async Task SearchSymbolsSimpleQueryReturnsRankedResults()
@@ -1224,13 +1163,10 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "damage").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(2);
-        var results = root.GetProperty("results");
-        await Assert.That(results.GetArrayLength()).IsEqualTo(2);
-        await Assert.That(results[0].GetProperty("name").GetString()).IsEqualTo("ProcessAttack");
-        await Assert.That(results[0].GetProperty("rank").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.TotalMatches).IsEqualTo(2);
+        await Assert.That(result.Results).Count().IsEqualTo(2);
+        await Assert.That(result.Results![0].Name).IsEqualTo("ProcessAttack");
+        await Assert.That(result.Results![0].Rank).IsEqualTo(1);
     }
 
     [Test]
@@ -1244,9 +1180,7 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "attack", kind: "method").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
 
         await _store.Received(1).SearchSymbolsAsync(
             "test-repo-id", Arg.Any<string>(), "Method", Arg.Any<int>()).ConfigureAwait(false);
@@ -1293,11 +1227,9 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchSymbols("/valid/path", "damage", kind: "invalid").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString())
+        await Assert.That(result.Error)
             .IsEqualTo("Invalid symbol kind. Must be one of: function, method, type, class, record, interface, export, constant, module");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_KIND");
+        await Assert.That(result.Code).IsEqualTo("INVALID_KIND");
 
         await _store.DidNotReceive().SearchSymbolsAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>()).ConfigureAwait(false);
@@ -1332,10 +1264,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchSymbols("/valid/path", "").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query cannot be empty");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+        await Assert.That(result.Error).IsEqualTo("Search query cannot be empty");
+        await Assert.That(result.Code).IsEqualTo("EMPTY_QUERY");
     }
 
     [Test]
@@ -1346,10 +1276,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/../../../etc/passwd", "damage").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -1364,6 +1292,8 @@ internal sealed class QueryToolsTests
             "test-repo-id", "foo bar", Arg.Any<string?>(), Arg.Any<int>()).ConfigureAwait(false);
     }
 
+    // ── SearchText ───────────────────────────────────────────────────
+
     [Test]
     public async Task SearchTextSimpleQueryReturnsFileMatches()
     {
@@ -1375,12 +1305,9 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchText("/valid/path", "multiplier").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
-        var results = root.GetProperty("results");
-        await Assert.That(results[0].GetProperty("file_path").GetString()).IsEqualTo("src/services/CombatService.luau");
-        await Assert.That(results[0].GetProperty("snippet").GetString()).Contains("multiplier");
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
+        await Assert.That(result.Results![0].FilePath).IsEqualTo("src/services/CombatService.luau");
+        await Assert.That(result.Results![0].Snippet).Contains("multiplier");
     }
 
     [Test]
@@ -1424,10 +1351,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchText("/valid/path", "  ").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query cannot be empty");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("EMPTY_QUERY");
+        await Assert.That(result.Error).IsEqualTo("Search query cannot be empty");
+        await Assert.That(result.Code).IsEqualTo("EMPTY_QUERY");
     }
 
     [Test]
@@ -1438,10 +1363,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchText("/../../../etc/passwd", "damage").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Path validation failed");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -1449,10 +1372,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchSymbols("/valid/path", "*").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Search query is too broad — provide at least one non-wildcard term");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("QUERY_TOO_BROAD");
+        await Assert.That(result.Error).IsEqualTo("Search query is too broad — provide at least one non-wildcard term");
+        await Assert.That(result.Code).IsEqualTo("QUERY_TOO_BROAD");
     }
 
     [Test]
@@ -1463,9 +1384,7 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "*", pathFilter: "src/Core").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
+        await Assert.That(result.Error).IsNull();
         await _store.Received(1).SearchSymbolsAsync(
             "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Core", "%").ConfigureAwait(false);
     }
@@ -1536,10 +1455,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchSymbols("/valid/path", "Order", pathFilter: "../../etc/").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Invalid path filter");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+        await Assert.That(result.Error).IsEqualTo("Invalid path filter");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH_FILTER");
     }
 
     [Test]
@@ -1559,10 +1476,8 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchText("/valid/path", "damage", pathFilter: "../../etc/").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("error").GetString()).IsEqualTo("Invalid path filter");
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH_FILTER");
+        await Assert.That(result.Error).IsEqualTo("Invalid path filter");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH_FILTER");
     }
 
     [Test]
@@ -1577,9 +1492,7 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "OrderService").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
     }
 
     [Test]
@@ -1596,12 +1509,10 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "Parser", pathFilter: "src/").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
-        var firstResult = root.GetProperty("results").EnumerateArray().First();
-        await Assert.That(firstResult.GetProperty("file").GetString()).IsEqualTo("src/Core/Parsers/ParserBase.cs");
-        await Assert.That(firstResult.GetProperty("name").GetString()).IsEqualTo("ParserBase");
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
+        var firstResult = result.Results![0];
+        await Assert.That(firstResult.File).IsEqualTo("src/Core/Parsers/ParserBase.cs");
+        await Assert.That(firstResult.Name).IsEqualTo("ParserBase");
 
         await _store.Received(1).SearchSymbolsAsync(
             "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src", Arg.Any<string?>()).ConfigureAwait(false);
@@ -1622,17 +1533,15 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchText("/valid/path", "connectionString", pathFilter: "src/Config/").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
-        var firstResult = root.GetProperty("results").EnumerateArray().First();
-        await Assert.That(firstResult.GetProperty("file_path").GetString()).IsEqualTo("src/Config/Settings.cs");
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
+        var firstResult = result.Results![0];
+        await Assert.That(firstResult.FilePath).IsEqualTo("src/Config/Settings.cs");
 
         await _store.Received(1).SearchTextAsync(
             "test-repo-id", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), "src/Config").ConfigureAwait(false);
     }
 
-    // ── TopicOutline Tests ────────────────────────────────────────────────
+    // ── TopicOutline Tests (unchanged: still returns Markdown) ────────
 
     [Test]
     public async Task TopicOutlineValidTopicReturnsStructuredOutline()
@@ -1818,21 +1727,17 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetHotPath(dir, "ProcessPayment", ["userId"], contextLines: 2).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("symbol").GetString()).IsEqualTo("ProcessPayment");
-            await Assert.That(root.GetProperty("total_lines").GetInt32()).IsEqualTo(10);
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(5); // lines 3-7
+            await Assert.That(result.Symbol).IsEqualTo("ProcessPayment");
+            await Assert.That(result.TotalLines).IsEqualTo(10);
+            await Assert.That(result.ReturnedLines).IsEqualTo(5); // lines 3-7
 
-            var matches = root.GetProperty("matches");
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
-            var match = matches[0];
-            await Assert.That(match.GetProperty("identifier").GetString()).IsEqualTo("userId");
-            await Assert.That(match.GetProperty("line").GetInt32()).IsEqualTo(5);
-            var context = match.GetProperty("context");
-            await Assert.That(context.GetArrayLength()).IsEqualTo(5);
-            await Assert.That(context[0].GetProperty("line_number").GetInt32()).IsEqualTo(3);
-            await Assert.That(context[4].GetProperty("line_number").GetInt32()).IsEqualTo(7);
+            await Assert.That(result.Matches).Count().IsEqualTo(1);
+            var match = result.Matches![0];
+            await Assert.That(match.Identifier).IsEqualTo("userId");
+            await Assert.That(match.Line).IsEqualTo(5);
+            await Assert.That(match.Context).Count().IsEqualTo(5);
+            await Assert.That(match.Context![0].LineNumber).IsEqualTo(3);
+            await Assert.That(match.Context![4].LineNumber).IsEqualTo(7);
         }
         finally
         {
@@ -1860,22 +1765,18 @@ internal sealed class QueryToolsTests
             // userId at line 2 → window [1,3]; status at line 5 → window [4,6]; no overlap
             var result = await _tools.GetHotPath(dir, "Process", ["userId", "status"], contextLines: 1).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(6);
+            await Assert.That(result.ReturnedLines).IsEqualTo(6);
+            await Assert.That(result.Matches).Count().IsEqualTo(2);
 
-            var matches = root.GetProperty("matches");
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(2);
+            var match0 = result.Matches![0];
+            await Assert.That(match0.Identifier).IsEqualTo("userId");
+            await Assert.That(match0.Line).IsEqualTo(2);
+            await Assert.That(match0.Context).Count().IsEqualTo(3);
 
-            var match0 = matches[0];
-            await Assert.That(match0.GetProperty("identifier").GetString()).IsEqualTo("userId");
-            await Assert.That(match0.GetProperty("line").GetInt32()).IsEqualTo(2);
-            await Assert.That(match0.GetProperty("context").GetArrayLength()).IsEqualTo(3);
-
-            var match1 = matches[1];
-            await Assert.That(match1.GetProperty("identifier").GetString()).IsEqualTo("status");
-            await Assert.That(match1.GetProperty("line").GetInt32()).IsEqualTo(5);
-            await Assert.That(match1.GetProperty("context").GetArrayLength()).IsEqualTo(3);
+            var match1 = result.Matches![1];
+            await Assert.That(match1.Identifier).IsEqualTo("status");
+            await Assert.That(match1.Line).IsEqualTo(5);
+            await Assert.That(match1.Context).Count().IsEqualTo(3);
         }
         finally
         {
@@ -1903,22 +1804,18 @@ internal sealed class QueryToolsTests
             // userId at line 5 → window [2,8]; status at line 7 → window [4,10]; merged [2,10] = 9 lines
             var result = await _tools.GetHotPath(dir, "Process", ["userId", "status"], contextLines: 3).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(9);
-
-            var matches = root.GetProperty("matches");
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(2);
+            await Assert.That(result.ReturnedLines).IsEqualTo(9);
+            await Assert.That(result.Matches).Count().IsEqualTo(2);
 
             // First match (userId at line 5) gets the full merged context [2-10]
-            var firstMatch = matches[0];
-            await Assert.That(firstMatch.GetProperty("identifier").GetString()).IsEqualTo("userId");
-            await Assert.That(firstMatch.GetProperty("context").GetArrayLength()).IsEqualTo(9);
+            var firstMatch = result.Matches![0];
+            await Assert.That(firstMatch.Identifier).IsEqualTo("userId");
+            await Assert.That(firstMatch.Context).Count().IsEqualTo(9);
 
             // Second match (status at line 7) gets empty context — already covered by merged window
-            var secondMatch = matches[1];
-            await Assert.That(secondMatch.GetProperty("identifier").GetString()).IsEqualTo("status");
-            await Assert.That(secondMatch.GetProperty("context").GetArrayLength()).IsEqualTo(0);
+            var secondMatch = result.Matches![1];
+            await Assert.That(secondMatch.Identifier).IsEqualTo("status");
+            await Assert.That(secondMatch.Context).Count().IsEqualTo(0);
         }
         finally
         {
@@ -1945,12 +1842,9 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 0).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var matches = root.GetProperty("matches");
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(1); // line 1 (userIdHash) NOT matched
-            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(2);
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(1);
+            await Assert.That(result.Matches).Count().IsEqualTo(1); // line 1 (userIdHash) NOT matched
+            await Assert.That(result.Matches![0].Line).IsEqualTo(2);
+            await Assert.That(result.ReturnedLines).IsEqualTo(1);
         }
         finally
         {
@@ -1976,10 +1870,8 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 3).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("matches").GetArrayLength()).IsEqualTo(0);
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(0);
+            await Assert.That(result.Matches).Count().IsEqualTo(0);
+            await Assert.That(result.ReturnedLines).IsEqualTo(0);
         }
         finally
         {
@@ -2007,13 +1899,11 @@ internal sealed class QueryToolsTests
             // Default contextLines=3 → window [max(1,5-3), min(10,5+3)] = [2,8] = 7 lines
             var result = await _tools.GetHotPath(dir, "Process", ["userId"]).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(7);
-            var context = root.GetProperty("matches")[0].GetProperty("context");
-            await Assert.That(context.GetArrayLength()).IsEqualTo(7);
-            await Assert.That(context[0].GetProperty("line_number").GetInt32()).IsEqualTo(2);
-            await Assert.That(context[6].GetProperty("line_number").GetInt32()).IsEqualTo(8);
+            await Assert.That(result.ReturnedLines).IsEqualTo(7);
+            var context = result.Matches![0].Context;
+            await Assert.That(context).Count().IsEqualTo(7);
+            await Assert.That(context![0].LineNumber).IsEqualTo(2);
+            await Assert.That(context[6].LineNumber).IsEqualTo(8);
         }
         finally
         {
@@ -2040,9 +1930,7 @@ internal sealed class QueryToolsTests
             // contextLines=15 → clamped to 10 → window [max(1,2-10), min(3,2+10)] = [1,3] = 3 lines
             var result = await _tools.GetHotPath(dir, "Process", ["userId"], contextLines: 15).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("returned_lines").GetInt32()).IsEqualTo(3);
+            await Assert.That(result.ReturnedLines).IsEqualTo(3);
         }
         finally
         {
@@ -2059,9 +1947,7 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetHotPath("/valid/path", "NonExistentMethod", ["userId"]).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("SYMBOL_NOT_FOUND");
+        await Assert.That(result.Code).IsEqualTo("SYMBOL_NOT_FOUND");
     }
 
     [Test]
@@ -2072,9 +1958,7 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.GetHotPath("../../etc/passwd", "Method", ["userId"]).ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("INVALID_PATH");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
     }
 
     [Test]
@@ -2098,13 +1982,10 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetHotPath(dir, "Process", ["user.id"], contextLines: 0).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            var matches = root.GetProperty("matches");
             // Without Regex.Escape, "user.id" as regex (. = any char) would match "user_id" too
             // With Regex.Escape, only the literal "user.id" on line 2 matches
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
-            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(2);
+            await Assert.That(result.Matches).Count().IsEqualTo(1);
+            await Assert.That(result.Matches![0].Line).IsEqualTo(2);
         }
         finally
         {
@@ -2133,12 +2014,9 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetHotPath(dir, "UserId", ["userId"], contextLines: 0).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("total_lines").GetInt32()).IsEqualTo(4); // body is lines 2-5
-            var matches = root.GetProperty("matches");
-            await Assert.That(matches.GetArrayLength()).IsEqualTo(1);
-            await Assert.That(matches[0].GetProperty("line").GetInt32()).IsEqualTo(4); // body match only
+            await Assert.That(result.TotalLines).IsEqualTo(4); // body is lines 2-5
+            await Assert.That(result.Matches).Count().IsEqualTo(1);
+            await Assert.That(result.Matches![0].Line).IsEqualTo(4); // body match only
         }
         finally
         {
@@ -2153,16 +2031,13 @@ internal sealed class QueryToolsTests
     {
         var result = await _tools.SearchSymbols("/valid/path", "Claude* OR *Service").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("code").GetString()).IsEqualTo("MIXED_PATTERN");
-        await Assert.That(root.GetProperty("suggestion").GetString()).Contains("MUST split");
+        await Assert.That(result.Code).IsEqualTo("MIXED_PATTERN");
+        await Assert.That(result.Suggestion).Contains("MUST split");
 
         // Should include ready-to-use query suggestions
-        var suggestions = root.GetProperty("suggestions");
-        await Assert.That(suggestions.GetArrayLength()).IsGreaterThanOrEqualTo(2);
-        await Assert.That(suggestions[0].GetString()).IsEqualTo("Claude*");
-        await Assert.That(suggestions[1].GetString()).IsEqualTo("*Service");
+        await Assert.That(result.Suggestions).Count().IsGreaterThanOrEqualTo(2);
+        await Assert.That(result.Suggestions![0]).IsEqualTo("Claude*");
+        await Assert.That(result.Suggestions![1]).IsEqualTo("*Service");
     }
 
     [Test]
@@ -2196,10 +2071,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "Validator").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(2);
-        await Assert.That(root.GetProperty("fallback_used").GetBoolean()).IsTrue();
+        await Assert.That(result.TotalMatches).IsEqualTo(2);
+        await Assert.That(result.FallbackUsed).IsTrue();
     }
 
     [Test]
@@ -2215,10 +2088,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "PathValidator").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
-        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
+        await Assert.That(result.FallbackUsed).IsNull();
     }
 
     [Test]
@@ -2234,10 +2105,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "Validator", kind: "class", pathFilter: "src/").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(1);
-        await Assert.That(root.GetProperty("fallback_used").GetBoolean()).IsTrue();
+        await Assert.That(result.TotalMatches).IsEqualTo(1);
+        await Assert.That(result.FallbackUsed).IsTrue();
     }
 
     [Test]
@@ -2250,10 +2119,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "NonExistent").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
-        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+        await Assert.That(result.TotalMatches).IsEqualTo(0);
+        await Assert.That(result.FallbackUsed).IsNull();
     }
 
     [Test]
@@ -2265,10 +2132,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "*Handler").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
-        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+        await Assert.That(result.TotalMatches).IsEqualTo(0);
+        await Assert.That(result.FallbackUsed).IsNull();
     }
 
     [Test]
@@ -2279,10 +2144,8 @@ internal sealed class QueryToolsTests
 
         var result = await _tools.SearchSymbols("/valid/path", "damage OR health").ConfigureAwait(false);
 
-        using var doc = JsonDocument.Parse(result);
-        var root = doc.RootElement;
-        await Assert.That(root.GetProperty("total_matches").GetInt32()).IsEqualTo(0);
-        await Assert.That(root.TryGetProperty("fallback_used", out _)).IsFalse();
+        await Assert.That(result.TotalMatches).IsEqualTo(0);
+        await Assert.That(result.FallbackUsed).IsNull();
     }
 
     // ── Size guard tests ────────────────────────────────────────────────
@@ -2315,12 +2178,10 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "BigClass").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.GetProperty("truncated").GetBoolean()).IsTrue();
-            await Assert.That(root.GetProperty("name").GetString()).IsEqualTo("BigClass");
-            await Assert.That(root.GetProperty("guidance").GetString()).Contains("expand_symbol");
-            await Assert.That(root.GetProperty("children").GetArrayLength()).IsEqualTo(2);
+            await Assert.That(result.Truncated).IsTrue();
+            await Assert.That(result.Name).IsEqualTo("BigClass");
+            await Assert.That(result.Guidance).Contains("expand_symbol");
+            await Assert.That(result.Children).Count().IsEqualTo(2);
         }
         finally
         {
@@ -2349,10 +2210,8 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "BigClass", force: true).ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(largeContent);
+            await Assert.That(result.Truncated).IsNull();
+            await Assert.That(result.SourceCode).IsEqualTo(largeContent);
         }
         finally
         {
@@ -2383,10 +2242,8 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "BigFunction").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(largeContent);
+            await Assert.That(result.Truncated).IsNull();
+            await Assert.That(result.SourceCode).IsEqualTo(largeContent);
         }
         finally
         {
@@ -2416,10 +2273,8 @@ internal sealed class QueryToolsTests
 
             var result = await _tools.GetSymbol(dir, "SmallClass").ConfigureAwait(false);
 
-            using var doc = JsonDocument.Parse(result);
-            var root = doc.RootElement;
-            await Assert.That(root.TryGetProperty("truncated", out _)).IsFalse();
-            await Assert.That(root.GetProperty("source_code").GetString()).IsEqualTo(smallContent);
+            await Assert.That(result.Truncated).IsNull();
+            await Assert.That(result.SourceCode).IsEqualTo(smallContent);
         }
         finally
         {

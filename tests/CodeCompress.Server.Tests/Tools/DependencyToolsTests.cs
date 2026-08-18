@@ -288,4 +288,139 @@ internal sealed class DependencyToolsTests
         await Assert.That(result).Contains("C.luau");
         await Assert.That(result).Contains("D.luau");
     }
+
+    // ── BlastRadius ──────────────────────────────────────────────────
+
+    [Test]
+    public async Task BlastRadiusFoundReturnsDepthsAndTotalAffected()
+    {
+        var blastResult = new BlastRadiusResult(
+            true,
+            3,
+            [
+                new BlastRadiusDepth(1, ["A.luau", "B.luau"]),
+                new BlastRadiusDepth(2, ["C.luau"]),
+            ]);
+
+        _store.GetBlastRadiusAsync("test-repo-id", "Root.luau", null, Arg.Any<int>())
+            .Returns(blastResult);
+
+        var result = await _tools.BlastRadius("/valid/path", filePath: "Root.luau").ConfigureAwait(false);
+
+        await Assert.That(result.TotalAffected).IsEqualTo(3);
+        await Assert.That(result.Depths).Count().IsEqualTo(2);
+        await Assert.That(result.Depths![0].Depth).IsEqualTo(1);
+        await Assert.That(result.Depths![0].Files).Count().IsEqualTo(2);
+        await Assert.That(result.Depths![1].Depth).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task BlastRadiusBySymbolNameReturnsDepths()
+    {
+        var blastResult = new BlastRadiusResult(true, 1, [new BlastRadiusDepth(1, ["Caller.luau"])]);
+
+        _store.GetBlastRadiusAsync("test-repo-id", null, "ProcessPayment", Arg.Any<int>())
+            .Returns(blastResult);
+
+        var result = await _tools.BlastRadius("/valid/path", symbolName: "ProcessPayment").ConfigureAwait(false);
+
+        await Assert.That(result.TotalAffected).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task BlastRadiusNotFoundReturnsError()
+    {
+        var blastResult = new BlastRadiusResult(false, 0, []);
+
+        _store.GetBlastRadiusAsync("test-repo-id", "Missing.luau", null, Arg.Any<int>())
+            .Returns(blastResult);
+
+        var result = await _tools.BlastRadius("/valid/path", filePath: "Missing.luau").ConfigureAwait(false);
+
+        await Assert.That(result.Error).IsNotNull();
+        await Assert.That(result.Code).IsEqualTo("NOT_FOUND");
+    }
+
+    [Test]
+    public async Task BlastRadiusNeitherFilePathNorSymbolNameReturnsError()
+    {
+        var result = await _tools.BlastRadius("/valid/path").ConfigureAwait(false);
+
+        await Assert.That(result.Code).IsEqualTo("INVALID_INPUT");
+    }
+
+    [Test]
+    public async Task BlastRadiusInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.BlastRadius("/../../../etc/passwd", filePath: "A.luau").ConfigureAwait(false);
+
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task BlastRadiusMaxDepthClampedToUpperBound()
+    {
+        var blastResult = new BlastRadiusResult(true, 0, []);
+        _store.GetBlastRadiusAsync("test-repo-id", "A.luau", null, 20).Returns(blastResult);
+
+        await _tools.BlastRadius("/valid/path", filePath: "A.luau", maxDepth: 999).ConfigureAwait(false);
+
+        await _store.Received(1).GetBlastRadiusAsync("test-repo-id", "A.luau", null, 20).ConfigureAwait(false);
+    }
+
+    // ── FindUnusedSymbols ────────────────────────────────────────────
+
+    [Test]
+    public async Task FindUnusedSymbolsReturnsResultsWrappedInObject()
+    {
+        var symbols = new List<SymbolSummary>
+        {
+            new("UnusedHelper", "Function", "function UnusedHelper()"),
+            new("DeadClass", "Class", "class DeadClass"),
+        };
+        _store.FindUnusedSymbolsAsync("test-repo-id", Arg.Any<int>()).Returns(symbols);
+
+        var result = await _tools.FindUnusedSymbols("/valid/path").ConfigureAwait(false);
+
+        await Assert.That(result.Results).Count().IsEqualTo(2);
+        await Assert.That(result.Results![0].Name).IsEqualTo("UnusedHelper");
+        await Assert.That(result.Results![0].Kind).IsEqualTo("Function");
+        await Assert.That(result.Results![1].Name).IsEqualTo("DeadClass");
+    }
+
+    [Test]
+    public async Task FindUnusedSymbolsEmptyReturnsEmptyResults()
+    {
+        _store.FindUnusedSymbolsAsync("test-repo-id", Arg.Any<int>()).Returns(new List<SymbolSummary>());
+
+        var result = await _tools.FindUnusedSymbols("/valid/path").ConfigureAwait(false);
+
+        await Assert.That(result.Results).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FindUnusedSymbolsInvalidPathReturnsError()
+    {
+        _pathValidator.ValidatePath(Arg.Any<string>(), Arg.Any<string>())
+            .Throws(new ArgumentException("Path traversal detected"));
+
+        var result = await _tools.FindUnusedSymbols("/../../../etc/passwd").ConfigureAwait(false);
+
+        await Assert.That(result.Error).IsEqualTo("Path validation failed");
+        await Assert.That(result.Code).IsEqualTo("INVALID_PATH");
+    }
+
+    [Test]
+    public async Task FindUnusedSymbolsLimitClampedToUpperBound()
+    {
+        _store.FindUnusedSymbolsAsync("test-repo-id", 500).Returns(new List<SymbolSummary>());
+
+        await _tools.FindUnusedSymbols("/valid/path", limit: 9999).ConfigureAwait(false);
+
+        await _store.Received(1).FindUnusedSymbolsAsync("test-repo-id", 500).ConfigureAwait(false);
+    }
 }
